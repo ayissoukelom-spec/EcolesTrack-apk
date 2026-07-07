@@ -1,0 +1,136 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "API ÉcoleTrack Mobile Parent",
+    "description": "Spécification technique complète des endpoints de l'application mobile parent ÉcoleTrack.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://api.ecoletrack.fr",
+      "description": "Serveur de Production API"
+    }
+  ],
+  "paths": {
+    "/api/mobile/parent/login": {
+      "post": {
+        "summary": "Authentifier un parent d'élève",
+        "description": "Permet de se connecter pour obtenir un couple Jeton d'Accès + Jeton de Rafraîchissement (RTR).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["email", "password"],
+                "properties": {
+                  "email": { "type": "string", "format": "email", "example": "jean.dupont@email.com" },
+                  "password": { "type": "string", "example": "parent123" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Connexion réussie",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "token": { "type": "string", "example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ... " },
+                    "refreshToken": { "type": "string", "example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ..." },
+                    "parent": {
+                      "type": "object",
+                      "properties": {
+                        "id": { "type": "string", "example": "parent-jean-dupont" },
+                        "name": { "type": "string", "example": "Jean Dupont" },
+                        "email": { "type": "string", "example": "jean.dupont@email.com" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "Identifiants invalides" },
+          "403": { "description": "Accès refusé pour rôle non parent" }
+        }
+      }
+    },
+    "/api/mobile/parent/refresh-token": {
+      "post": {
+        "summary": "Rafraîchir les jetons de session (RTR)",
+        "description": "Effectue une rotation sécurisée du refresh token pour émettre un nouveau couple de jetons.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["refreshToken"],
+                "properties": {
+                  "refreshToken": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Nouveaux jetons générés" },
+          "401": { "description": "Refresh Token expiré, invalide ou déjà réutilisé (tentative d'intrusion)" }
+        }
+      }
+    },
+    "/api/mobile/parent/children": {
+      "get": {
+        "summary": "Lister les enfants rattachés",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Liste d'enfants",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": { "type": "string" },
+                      "firstName": { "type": "string" },
+                      "lastName": { "type": "string" },
+                      "className": { "type": "string" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/mobile/parent/children/{childId}/absences": {
+      "get": {
+        "summary": "Obtenir les absences d'un enfant rattaché",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "childId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Liste des absences" },
+          "403": { "description": "Violation de rattachement de l'enfant (Data Leak Protection)" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    }
+  }
+}

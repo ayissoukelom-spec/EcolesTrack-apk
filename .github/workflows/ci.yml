@@ -1,0 +1,37 @@
+name: ÉcoleTrack Continuous Integration
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build-and-lint:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [ 18.x, 20.x ]
+
+    steps:
+    - name: Checkout Code Repository
+      uses: actions/checkout@v4
+
+    - name: Set up Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+        cache: 'npm'
+
+    - name: Install Project Dependencies
+      run: npm ci
+
+    - name: Run Code Linter & Type-Checking
+      run: npm run lint
+
+    - name: Compile Full-Stack Application
+      run: npm run build
+
+    - name: Package Android APK Release (Placeholder Step)
+      run: echo "Gradle build triggers would package APK here."

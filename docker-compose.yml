@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  ecoletrack-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ecoletrack-container
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - REDIS_HOST=ecoletrack-redis
+      - REDIS_PORT=6379
+      - JWT_SECRET=ecoletrack-super-secret-key-2026
+    depends_on:
+      - ecoletrack-redis
+    restart: always
+
+  ecoletrack-redis:
+    image: redis:7-alpine
+    container_name: ecoletrack-redis-container
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: always
+
+volumes:
+  redis-data:

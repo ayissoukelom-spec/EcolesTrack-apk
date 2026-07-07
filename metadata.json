@@ -1,0 +1,6 @@
+{
+  "name": "ÉcoleTrack",
+  "description": "Portail mobile parental complet de suivi scolaire, absences, notes et préférences de notifications multi-canaux.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

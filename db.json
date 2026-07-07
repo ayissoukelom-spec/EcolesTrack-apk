@@ -1,0 +1,329 @@
+{
+  "parents": [
+    {
+      "id": "parent-jean-dupont",
+      "name": "Jean Dupont",
+      "email": "jean.dupont@email.com",
+      "phoneNumber": "+33612345678",
+      "activeSchoolId": "school-pasteur",
+      "schools": [
+        {
+          "id": "school-pasteur",
+          "name": "Collège Louis Pasteur"
+        },
+        {
+          "id": "school-moliere",
+          "name": "Lycée Molière"
+        }
+      ],
+      "passwordHash": "parent123",
+      "role": "parent"
+    },
+    {
+      "id": "parent-marie-martin",
+      "name": "Marie Martin",
+      "email": "marie.martin@email.com",
+      "phoneNumber": "+33698765432",
+      "activeSchoolId": "school-pasteur",
+      "schools": [
+        {
+          "id": "school-pasteur",
+          "name": "Collège Louis Pasteur"
+        }
+      ],
+      "passwordHash": "parent123",
+      "role": "parent"
+    },
+    {
+      "id": "user-admin",
+      "name": "Directeur Académique",
+      "email": "admin@ecoletrack.fr",
+      "phoneNumber": "+33600000001",
+      "activeSchoolId": "school-pasteur",
+      "schools": [],
+      "passwordHash": "admin123",
+      "role": "school_admin"
+    },
+    {
+      "id": "user-teacher",
+      "name": "M. Legendre (Prof de Maths)",
+      "email": "teacher@ecoletrack.fr",
+      "phoneNumber": "+33600000002",
+      "activeSchoolId": "school-pasteur",
+      "schools": [],
+      "passwordHash": "teacher123",
+      "role": "teacher"
+    }
+  ],
+  "schools": [
+    {
+      "id": "school-pasteur",
+      "name": "Collège Louis Pasteur",
+      "address": "12 Rue des Écoles, Paris"
+    },
+    {
+      "id": "school-moliere",
+      "name": "Lycée Molière",
+      "address": "45 Avenue Molière, Paris"
+    }
+  ],
+  "parentSchools": [
+    {
+      "parentId": "parent-jean-dupont",
+      "schoolId": "school-pasteur"
+    },
+    {
+      "parentId": "parent-jean-dupont",
+      "schoolId": "school-moliere"
+    },
+    {
+      "parentId": "parent-marie-martin",
+      "schoolId": "school-pasteur"
+    }
+  ],
+  "children": [
+    {
+      "id": "child-lucas",
+      "parentId": "parent-jean-dupont",
+      "firstName": "Lucas",
+      "lastName": "Dupont",
+      "className": "4ème B",
+      "avatarUrl": "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&q=80&w=120"
+    },
+    {
+      "id": "child-chloe",
+      "parentId": "parent-jean-dupont",
+      "firstName": "Chloé",
+      "lastName": "Dupont",
+      "className": "6ème A",
+      "avatarUrl": "https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&q=80&w=120"
+    },
+    {
+      "id": "child-theo",
+      "parentId": "parent-marie-martin",
+      "firstName": "Théo",
+      "lastName": "Martin",
+      "className": "3ème C",
+      "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=120"
+    }
+  ],
+  "absences": [
+    {
+      "id": "abs-1",
+      "childId": "child-lucas",
+      "date": "2026-06-15T08:30:00Z",
+      "reason": "Gastro-entérite aiguë",
+      "justified": true,
+      "justificationText": "Certificat médical envoyé le 16/06."
+    },
+    {
+      "id": "abs-2",
+      "childId": "child-lucas",
+      "date": "2026-07-02T10:00:00Z",
+      "reason": "Retard injustifié cours d'Histoire",
+      "justified": false
+    },
+    {
+      "id": "abs-3",
+      "childId": "child-chloe",
+      "date": "2026-06-20T14:00:00Z",
+      "reason": "Rendez-vous orthodontiste",
+      "justified": true,
+      "justificationText": "Mot de passe signé des parents fourni en amont."
+    },
+    {
+      "id": "abs-4",
+      "childId": "child-theo",
+      "date": "2026-06-28T09:00:00Z",
+      "reason": "Panne de réveil",
+      "justified": false
+    }
+  ],
+  "grades": [
+    {
+      "id": "grade-1",
+      "childId": "child-lucas",
+      "subject": "Mathématiques",
+      "grade": 15.5,
+      "coefficient": 2,
+      "examName": "Contrôle Algèbre & Fonctions",
+      "date": "2026-06-10"
+    },
+    {
+      "id": "grade-2",
+      "childId": "child-lucas",
+      "subject": "Français",
+      "grade": 12,
+      "coefficient": 1,
+      "examName": "Expression écrite - Commentaire de texte",
+      "date": "2026-06-14"
+    },
+    {
+      "id": "grade-3",
+      "childId": "child-lucas",
+      "subject": "Histoire-Géographie",
+      "grade": 14,
+      "coefficient": 1.5,
+      "examName": "Évaluation - La Première Guerre Mondiale",
+      "date": "2026-06-25"
+    },
+    {
+      "id": "grade-4",
+      "childId": "child-chloe",
+      "subject": "Mathématiques",
+      "grade": 18,
+      "coefficient": 1,
+      "examName": "Calcul mental - Tables et fractions",
+      "date": "2026-06-12"
+    },
+    {
+      "id": "grade-5",
+      "childId": "child-chloe",
+      "subject": "Anglais",
+      "grade": 16.5,
+      "coefficient": 1.5,
+      "examName": "Vocabulaire & Verbes irréguliers",
+      "date": "2026-06-18"
+    },
+    {
+      "id": "grade-6",
+      "childId": "child-chloe",
+      "subject": "SVT",
+      "grade": 9.5,
+      "coefficient": 1,
+      "examName": "Contrôle - Le système solaire",
+      "date": "2026-06-27"
+    },
+    {
+      "id": "grade-7",
+      "childId": "child-theo",
+      "subject": "Mathématiques",
+      "grade": 11,
+      "coefficient": 2,
+      "examName": "Devoir commun - Géométrie",
+      "date": "2026-06-20"
+    },
+    {
+      "id": "grade-8",
+      "childId": "child-lucas",
+      "subject": "Mathématiques",
+      "grade": 17,
+      "coefficient": 2,
+      "examName": "Interrogation - Équations du 1er degré",
+      "date": "2026-07-06"
+    },
+    {
+      "id": "grade-9",
+      "childId": "child-lucas",
+      "subject": "Mathématiques",
+      "grade": 13.5,
+      "coefficient": 1,
+      "examName": "Quiz - Proportionnalité",
+      "date": "2026-07-03"
+    },
+    {
+      "id": "grade-10",
+      "childId": "child-lucas",
+      "subject": "Physique-Chimie",
+      "grade": 16,
+      "coefficient": 1.5,
+      "examName": "TP noté - Circuits électriques",
+      "date": "2026-06-29"
+    },
+    {
+      "id": "grade-11",
+      "childId": "child-lucas",
+      "subject": "Français",
+      "grade": 10.5,
+      "coefficient": 1,
+      "examName": "Dictée bilan",
+      "date": "2026-05-15"
+    },
+    {
+      "id": "grade-12",
+      "childId": "child-lucas",
+      "subject": "Mathématiques",
+      "grade": 14.5,
+      "coefficient": 2,
+      "examName": "Contrôle - Probabilités",
+      "date": "2026-04-05"
+    },
+    {
+      "id": "grade-13",
+      "childId": "child-lucas",
+      "subject": "SVT",
+      "grade": 12.5,
+      "coefficient": 1,
+      "examName": "Évaluation - Nutrition et santé",
+      "date": "2026-01-20"
+    }
+  ],
+  "appNotifications": [
+    {
+      "id": "not-1",
+      "parentId": "parent-jean-dupont",
+      "title": "Nouvelle absence signalée",
+      "message": "Votre enfant Lucas Dupont a été signalé absent aujourd'hui à 10:00. Veuillez fournir un justificatif.",
+      "read": false,
+      "createdAt": "2026-07-02T10:15:00Z",
+      "deepLink": "ecoletrack://absences?childId=child-lucas"
+    },
+    {
+      "id": "not-2",
+      "parentId": "parent-jean-dupont",
+      "title": "Nouvelle note disponible",
+      "message": "Lucas Dupont a reçu un 14/20 en Histoire-Géographie (Coeff 1.5).",
+      "read": true,
+      "createdAt": "2026-06-25T16:00:00Z",
+      "deepLink": "ecoletrack://grades?childId=child-lucas"
+    }
+  ],
+  "parentDevices": [],
+  "notificationPreferences": [
+    {
+      "parentId": "parent-jean-dupont",
+      "pushEnabled": true,
+      "whatsappEnabled": true,
+      "smsEnabled": false,
+      "quietHoursStart": "22:00",
+      "quietHoursEnd": "07:00"
+    },
+    {
+      "parentId": "parent-marie-martin",
+      "pushEnabled": true,
+      "whatsappEnabled": false,
+      "smsEnabled": true,
+      "quietHoursStart": "21:30",
+      "quietHoursEnd": "07:30"
+    }
+  ],
+  "parentConsents": [
+    {
+      "id": "c-1",
+      "parentId": "parent-jean-dupont",
+      "channel": "whatsapp",
+      "consentGranted": true,
+      "consentTextVersion": "v1.0-fr",
+      "consentedAt": "2026-05-01T10:00:00Z"
+    },
+    {
+      "id": "c-2",
+      "parentId": "parent-jean-dupont",
+      "channel": "sms",
+      "consentGranted": false,
+      "consentTextVersion": "v1.0-fr",
+      "consentedAt": "2026-05-01T10:00:00Z",
+      "revokedAt": "2026-06-01T15:30:00Z"
+    },
+    {
+      "id": "c-3",
+      "parentId": "parent-marie-martin",
+      "channel": "sms",
+      "consentGranted": true,
+      "consentTextVersion": "v1.0-fr",
+      "consentedAt": "2026-05-15T11:00:00Z"
+    }
+  ],
+  "notificationEvents": [],
+  "notificationDeliveries": []
+}
