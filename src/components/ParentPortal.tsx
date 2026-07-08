@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { Parent, Child, Absence, Grade, AppNotification, NotificationPreferences, ParentConsent } from "../types";
-import { getApiErrorMessage, parseJsonSafe } from "../utils/http";
+import { getApiErrorMessage, parseJsonSafe, withApiBase } from "../utils/http";
 
 interface ParentPortalProps {
   token: string | null;
@@ -125,7 +125,7 @@ export default function ParentPortal({
     const loginPass = customPass || password;
 
     try {
-      const response = await fetch("/api/mobile/parent/login", {
+      const response = await fetch(withApiBase("/api/mobile/parent/login"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: loginEmail, password: loginPass })
@@ -156,12 +156,21 @@ export default function ParentPortal({
   const fetchChildren = async () => {
     setChildrenLoadError(null);
     try {
-      const response = await fetch("/api/mobile/parent/children", {
+      const response = await fetch(withApiBase("/api/mobile/parent/children"), {
         headers: { "Authorization": `Bearer ${token}` }
       });
       const data = await parseJsonSafe<Child[] | { error?: string }>(response);
       if (response.ok) {
-        setChildren(Array.isArray(data) ? data : []);
+        const nextChildren = Array.isArray(data) ? data : [];
+        setChildren(nextChildren);
+        if (nextChildren.length > 0) {
+          const stillVisibleChild = selectedChildId
+            ? nextChildren.find((child) => child.id === selectedChildId)
+            : null;
+          setSelectedChild(stillVisibleChild || nextChildren[0]);
+        } else {
+          setSelectedChild(null);
+        }
       } else {
         const details = data && !Array.isArray(data) && data.error ? ` ${data.error}` : "";
         setChildrenLoadError(`Chargement des enfants impossible (${response.status}).${details}`);
@@ -174,7 +183,7 @@ export default function ParentPortal({
 
   const handleSimulateChild = async () => {
     try {
-      const response = await fetch("/api/mobile/parent/children/simulate", {
+      const response = await fetch(withApiBase("/api/mobile/parent/children/simulate"), {
         method: "POST",
         headers: { "Authorization": `Bearer ${token}` }
       });
@@ -189,7 +198,7 @@ export default function ParentPortal({
   // API Call: Fetch Child Absences
   const fetchChildAbsences = async (childId: string) => {
     try {
-      const response = await fetch(`/api/mobile/parent/children/${childId}/absences`, {
+      const response = await fetch(withApiBase(`/api/mobile/parent/children/${childId}/absences`), {
         headers: { "Authorization": `Bearer ${token}` }
       });
       if (response.ok) {
@@ -204,7 +213,7 @@ export default function ParentPortal({
   // API Call: Fetch Child Grades
   const fetchChildGrades = async (childId: string) => {
     try {
-      const response = await fetch(`/api/mobile/parent/children/${childId}/grades`, {
+      const response = await fetch(withApiBase(`/api/mobile/parent/children/${childId}/grades`), {
         headers: { "Authorization": `Bearer ${token}` }
       });
       if (response.ok) {
@@ -219,7 +228,7 @@ export default function ParentPortal({
   // API Call: Fetch Notification Preferences & Consents
   const fetchPreferences = async () => {
     try {
-      const response = await fetch("/api/mobile/parent/notification-preferences", {
+      const response = await fetch(withApiBase("/api/mobile/parent/notification-preferences"), {
         headers: { "Authorization": `Bearer ${token}` }
       });
       if (response.ok) {
@@ -242,7 +251,7 @@ export default function ParentPortal({
     if (channel === "sms") updates.smsEnabled = !currentVal;
 
     try {
-      const response = await fetch("/api/mobile/parent/notification-preferences", {
+      const response = await fetch(withApiBase("/api/mobile/parent/notification-preferences"), {
         method: "PUT",
         headers: {
           "Authorization": `Bearer ${token}`,
@@ -268,7 +277,7 @@ export default function ParentPortal({
   // API Call: Consent Toggle explicitly
   const handleToggleConsent = async (channel: "whatsapp" | "sms", currentGranted: boolean) => {
     try {
-      const response = await fetch("/api/mobile/parent/notification-preferences", {
+      const response = await fetch(withApiBase("/api/mobile/parent/notification-preferences"), {
         method: "PUT",
         headers: {
           "Authorization": `Bearer ${token}`,
@@ -291,7 +300,7 @@ export default function ParentPortal({
   // Helper API Call: Register FCM token
   const registerMockToken = async () => {
     try {
-      await fetch("/api/mobile/parent/devices/register-push-token", {
+      await fetch(withApiBase("/api/mobile/parent/devices/register-push-token"), {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${token}`,
@@ -329,14 +338,74 @@ export default function ParentPortal({
     return (totalScore / totalCoeff).toFixed(2);
   };
 
+  const trimesterStart = useMemo(() => {
+    const date = new Date();
+    date.setDate(date.getDate() - 90);
+    return date;
+  }, []);
+
+  const currentTrimesterGrades = useMemo(
+    () => grades.filter((grade) => new Date(grade.date).getTime() >= trimesterStart.getTime()),
+    [grades, trimesterStart]
+  );
+
+  const currentTrimesterAbsences = useMemo(
+    () => absences.filter((absence) => new Date(absence.date).getTime() >= trimesterStart.getTime()),
+    [absences, trimesterStart]
+  );
+
+  const currentChild = selectedChild || children[0] || null;
+
+  const formatBirthDate = (dateString: string) => {
+    try {
+      return new Date(dateString).toLocaleDateString("fr-FR");
+    } catch {
+      return dateString;
+    }
+  };
+
+  const countWeekdays = (startDate: Date, endDate: Date) => {
+    const cursor = new Date(startDate);
+    cursor.setHours(0, 0, 0, 0);
+    const end = new Date(endDate);
+    end.setHours(0, 0, 0, 0);
+
+    let weekdays = 0;
+    while (cursor <= end) {
+      const day = cursor.getDay();
+      if (day !== 0 && day !== 6) weekdays += 1;
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    return weekdays;
+  };
+
+  const currentTrimesterAverage = calculateAverage(currentTrimesterGrades);
+  const uniqueCurrentAbsenceDates = new Set(
+    currentTrimesterAbsences.map((absence) => new Date(absence.date).toDateString())
+  ).size;
+  const schoolDaysThisTrimester = countWeekdays(trimesterStart, new Date());
+  const attendanceRate = schoolDaysThisTrimester > 0
+    ? Math.max(0, Math.min(100, Math.round(((schoolDaysThisTrimester - uniqueCurrentAbsenceDates) / schoolDaysThisTrimester) * 100)))
+    : 100;
+
   // Sync state helpers
   const handleSchoolChange = (schoolId: string) => {
     setActiveSchoolId(schoolId);
   };
 
+  const handleNavigateTab = (tab: string) => {
+    setSelectedChild(null);
+    setActiveTab(tab);
+  };
+
+  const handleSelectChild = (child: Child) => {
+    setSelectedChild(child);
+    setChildDetailTab("grades");
+  };
+
   const handleReadAllNotifications = async () => {
     try {
-      const response = await fetch("/api/mobile/parent/notifications/read-all", {
+      const response = await fetch(withApiBase("/api/mobile/parent/notifications/read-all"), {
         method: "PUT",
         headers: { "Authorization": `Bearer ${token}` }
       });
@@ -726,11 +795,69 @@ export default function ParentPortal({
                   <div className="absolute -right-6 -bottom-6 h-24 w-24 bg-white/10 rounded-full blur-xl" />
                   <span className="text-[9px] font-bold tracking-wider uppercase bg-white/20 px-2 py-0.5 rounded-md">Portail Parent</span>
                   <h3 className="text-sm font-black mt-1">Bonjour, {parent.name} !</h3>
-                  <p className="text-[11px] text-indigo-100 font-medium leading-snug mt-0.5">Retrouvez le relevé scolaire en temps réel de vos enfants ci-dessous.</p>
+                  <p className="text-[11px] text-indigo-100 font-medium leading-snug mt-0.5">Retrouvez le relevé scolaire en temps réel de votre élève actif ci-dessous.</p>
                 </div>
 
+                {currentChild && (
+                  <div className="bg-white rounded-2xl border border-slate-100 p-4 shadow-sm space-y-4">
+                    <div className="flex items-center gap-3">
+                      <img
+                        src={currentChild.avatarUrl}
+                        alt={currentChild.firstName}
+                        className="h-14 w-14 rounded-full object-cover border border-slate-100 shrink-0"
+                      />
+                      <div className="min-w-0">
+                        <div className="text-[10px] font-bold uppercase tracking-wider text-indigo-600">Actif</div>
+                        <h4 className="text-sm font-black text-slate-900 truncate">{currentChild.firstName} {currentChild.lastName}</h4>
+                        <p className="text-[11px] text-slate-500 font-medium">Classe : {currentChild.className}</p>
+                        <p className="text-[11px] text-slate-500 font-medium">Date de naissance : {formatBirthDate(currentChild.birthDate)}</p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="rounded-xl border border-indigo-100 bg-indigo-50 p-3">
+                        <p className="text-[9px] font-bold uppercase tracking-wider text-indigo-500">Note du trimestre</p>
+                        <p className="text-xl font-black text-indigo-900 mt-1">
+                          {currentTrimesterAverage ? `${currentTrimesterAverage} / 20` : "-- / 20"}
+                        </p>
+                        <p className="text-[10px] text-indigo-700/80 font-medium mt-0.5">{currentTrimesterGrades.length} évaluation(s)</p>
+                      </div>
+                      <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-3">
+                        <p className="text-[9px] font-bold uppercase tracking-wider text-emerald-600">Assiduité</p>
+                        <p className="text-xl font-black text-emerald-900 mt-1">{attendanceRate} %</p>
+                        <p className="text-[10px] text-emerald-700/80 font-medium mt-0.5">{uniqueCurrentAbsenceDates} absence(s) sur la période</p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedChild(currentChild);
+                          setChildDetailTab("grades");
+                        }}
+                        className="rounded-xl border border-indigo-100 bg-white px-3 py-2 text-left hover:bg-indigo-50 transition-colors"
+                      >
+                        <div className="text-[9px] font-bold uppercase tracking-wider text-indigo-600">Raccourci</div>
+                        <div className="mt-0.5 text-xs font-bold text-slate-900">Notes</div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedChild(currentChild);
+                          setChildDetailTab("absences");
+                        }}
+                        className="rounded-xl border border-emerald-100 bg-white px-3 py-2 text-left hover:bg-emerald-50 transition-colors"
+                      >
+                        <div className="text-[9px] font-bold uppercase tracking-wider text-emerald-600">Raccourci</div>
+                        <div className="mt-0.5 text-xs font-bold text-slate-900">Registre d&apos;absence</div>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {/* Children List */}
-                <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Vos enfants rattachés</h3>
+                <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Sélection de l&apos;élève</h3>
                 {childrenLoadError && (
                   <div className="bg-rose-50 border border-rose-100 rounded-xl p-2.5 text-[11px] text-rose-700 font-semibold">
                     {childrenLoadError}
@@ -755,30 +882,40 @@ export default function ParentPortal({
                     </div>
                   </div>
                 ) : (
-                  <div className="space-y-3">
-                    {children.map((child) => (
-                      <div 
-                        key={child.id}
-                        onClick={() => setSelectedChild(child)}
-                        className="bg-white rounded-2xl border border-slate-100 p-3 shadow-sm hover:border-indigo-200 cursor-pointer transition-all flex items-center justify-between"
-                      >
-                        <div className="flex items-center gap-3">
-                          <img 
-                            src={child.avatarUrl} 
-                            alt={child.firstName} 
-                            className="h-11 w-11 rounded-full object-cover border border-slate-100 shrink-0"
-                          />
-                          <div>
-                            <h4 className="text-xs font-bold text-slate-800">{child.firstName} {child.lastName}</h4>
-                            <span className="text-[10px] bg-slate-100 text-slate-600 font-semibold px-2 py-0.5 rounded-md">{child.className}</span>
+                  <div className="bg-white rounded-2xl border border-slate-100 p-2 shadow-sm space-y-1.5">
+                    {children.length > 1 && (
+                      <p className="px-2 pt-1 text-[10px] font-semibold text-slate-500">
+                        Choisissez un seul élève à afficher.
+                      </p>
+                    )}
+                    {children.map((child) => {
+                      const isActiveChild = selectedChild?.id === child.id;
+
+                      return (
+                        <button
+                          key={child.id}
+                          type="button"
+                          onClick={() => handleSelectChild(child)}
+                          className={`w-full flex items-center justify-between rounded-xl border px-3 py-2 text-left transition-colors ${
+                            isActiveChild
+                              ? "border-indigo-200 bg-indigo-50 text-indigo-900"
+                              : "border-slate-100 bg-slate-50 text-slate-700 hover:border-indigo-200 hover:bg-indigo-50/60"
+                          }`}
+                        >
+                          <div className="min-w-0">
+                            <div className="text-xs font-bold truncate">{child.firstName} {child.lastName}</div>
                           </div>
-                        </div>
-                        <div className="flex items-center gap-1.5 text-slate-400 hover:text-indigo-600">
-                          <span className="text-[10px] font-bold text-indigo-600 uppercase">Dossier</span>
-                          <ChevronRight className="h-4 w-4 shrink-0" />
-                        </div>
-                      </div>
-                    ))}
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {isActiveChild && (
+                              <span className="text-[9px] font-bold uppercase tracking-wider text-indigo-600 bg-white px-2 py-0.5 rounded-md border border-indigo-100">
+                                Actif
+                              </span>
+                            )}
+                            <ChevronRight className={`h-4 w-4 ${isActiveChild ? "text-indigo-600" : "text-slate-400"}`} />
+                          </div>
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
               </motion.div>
@@ -1149,65 +1286,63 @@ export default function ParentPortal({
       </div>
 
       {/* Persistent Bottom Bar Navigation - Parent Portal */}
-      {!selectedChild && (
-        <div className="absolute bottom-0 inset-x-0 h-16 bg-white border-t border-slate-100 flex items-center justify-around px-2 py-1 shadow-md z-20 shrink-0">
-          <button
-            onClick={() => setActiveTab("children")}
-            className={`flex-1 flex flex-col items-center gap-1 py-1 text-[9px] font-bold ${
-              activeTab === "children" ? "text-indigo-600" : "text-slate-400 hover:text-slate-600"
-            }`}
-          >
-            <School className="h-4.5 w-4.5" />
-            <span>Enfants</span>
-          </button>
+      <div className="absolute bottom-0 inset-x-0 h-16 bg-white border-t border-slate-100 flex items-center justify-around px-2 py-1 shadow-md z-20 shrink-0">
+        <button
+          onClick={() => handleNavigateTab("children")}
+          className={`flex-1 flex flex-col items-center gap-1 py-1 text-[9px] font-bold ${
+            activeTab === "children" ? "text-indigo-600" : "text-slate-400 hover:text-slate-600"
+          }`}
+        >
+          <School className="h-4.5 w-4.5" />
+          <span>Accueil</span>
+        </button>
 
-          <button
-            onClick={() => setActiveTab("alerts")}
-            className={`flex-1 flex flex-col items-center gap-1 py-1 text-[9px] font-bold relative ${
-              activeTab === "alerts" ? "text-rose-600" : "text-slate-400 hover:text-slate-600"
-            }`}
-          >
-            {activeAlertsCount > 0 && (
-              <span className="absolute top-1 right-8 h-2 w-2 rounded-full bg-rose-600 animate-pulse" />
-            )}
-            <AlertTriangle className="h-4.5 w-4.5" />
-            <span>Alertes</span>
-          </button>
+        <button
+          onClick={() => handleNavigateTab("alerts")}
+          className={`flex-1 flex flex-col items-center gap-1 py-1 text-[9px] font-bold relative ${
+            activeTab === "alerts" ? "text-rose-600" : "text-slate-400 hover:text-slate-600"
+          }`}
+        >
+          {activeAlertsCount > 0 && (
+            <span className="absolute top-1 right-8 h-2 w-2 rounded-full bg-rose-600 animate-pulse" />
+          )}
+          <AlertTriangle className="h-4.5 w-4.5" />
+          <span>Alertes</span>
+        </button>
 
-          <button
-            onClick={() => setActiveTab("notifications")}
-            className={`flex-1 flex flex-col items-center gap-1 py-1 text-[9px] font-bold relative ${
-              activeTab === "notifications" ? "text-indigo-600" : "text-slate-400 hover:text-slate-600"
-            }`}
-          >
-            {unreadNotificationsCount > 0 && (
-              <span className="absolute top-1 right-8 h-2 w-2 rounded-full bg-indigo-600 animate-pulse" />
-            )}
-            <Bell className="h-4.5 w-4.5" />
-            <span>Absence</span>
-          </button>
+        <button
+          onClick={() => handleNavigateTab("notifications")}
+          className={`flex-1 flex flex-col items-center gap-1 py-1 text-[9px] font-bold relative ${
+            activeTab === "notifications" ? "text-indigo-600" : "text-slate-400 hover:text-slate-600"
+          }`}
+        >
+          {unreadNotificationsCount > 0 && (
+            <span className="absolute top-1 right-8 h-2 w-2 rounded-full bg-indigo-600 animate-pulse" />
+          )}
+          <Bell className="h-4.5 w-4.5" />
+          <span>Absence</span>
+        </button>
 
-          <button
-            onClick={() => setActiveTab("preferences")}
-            className={`flex-1 flex flex-col items-center gap-1 py-1 text-[9px] font-bold ${
-              activeTab === "preferences" ? "text-indigo-600" : "text-slate-400 hover:text-slate-600"
-            }`}
-          >
-            <RefreshCw className="h-4.5 w-4.5" />
-            <span>Canaux</span>
-          </button>
+        <button
+          onClick={() => handleNavigateTab("preferences")}
+          className={`flex-1 flex flex-col items-center gap-1 py-1 text-[9px] font-bold ${
+            activeTab === "preferences" ? "text-indigo-600" : "text-slate-400 hover:text-slate-600"
+          }`}
+        >
+          <RefreshCw className="h-4.5 w-4.5" />
+          <span>Canaux</span>
+        </button>
 
-          <button
-            onClick={() => setActiveTab("consent")}
-            className={`flex-1 flex flex-col items-center gap-1 py-1 text-[9px] font-bold ${
-              activeTab === "consent" ? "text-indigo-600" : "text-slate-400 hover:text-slate-600"
-            }`}
-          >
-            <Shield className="h-4.5 w-4.5" />
-            <span>Consentement</span>
-          </button>
-        </div>
-      )}
+        <button
+          onClick={() => handleNavigateTab("consent")}
+          className={`flex-1 flex flex-col items-center gap-1 py-1 text-[9px] font-bold ${
+            activeTab === "consent" ? "text-indigo-600" : "text-slate-400 hover:text-slate-600"
+          }`}
+        >
+          <Shield className="h-4.5 w-4.5" />
+          <span>Consentement</span>
+        </button>
+      </div>
     </div>
   );
 }

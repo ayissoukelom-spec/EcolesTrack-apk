@@ -12,9 +12,14 @@ import AndroidEmulator from "./components/AndroidEmulator";
 import ParentPortal from "./components/ParentPortal";
 import DeveloperConsole from "./components/DeveloperConsole";
 import { Parent, Child, AppNotification, CompleteDeliveryLog } from "./types";
-import { parseJsonSafe } from "./utils/http";
+import { parseJsonSafe, withApiBase } from "./utils/http";
 
 export default function App() {
+  const isMobileProductionMode = (() => {
+    const envFlag = (import.meta as any)?.env?.VITE_MOBILE_PRODUCTION === "true";
+    const isAndroidWebViewHost = typeof window !== "undefined" && window.location.host === "appassets.androidplatform.net";
+    return envFlag || isAndroidWebViewHost;
+  })();
   
   // Persistent parent session state
   const [token, setToken] = useState<string | null>(() => localStorage.getItem("ecoletrack_token"));
@@ -35,7 +40,7 @@ export default function App() {
   const fetchNotifications = async () => {
     if (!token) return;
     try {
-      const response = await fetch("/api/mobile/parent/notifications", {
+      const response = await fetch(withApiBase("/api/mobile/parent/notifications"), {
         headers: { "Authorization": `Bearer ${token}` }
       });
       if (response.ok) {
@@ -50,7 +55,7 @@ export default function App() {
   // Fetch complete delivery audit logs from Dev endpoints
   const fetchDeliveryLogs = async () => {
     try {
-      const response = await fetch("/api/dev/delivery-logs");
+      const response = await fetch(withApiBase("/api/dev/delivery-logs"));
       if (response.ok) {
         const data = await parseJsonSafe<CompleteDeliveryLog[]>(response);
         setDeliveryLogs(Array.isArray(data) ? data : []);
@@ -63,7 +68,7 @@ export default function App() {
   // Clear delivery logs
   const handleClearLogs = async () => {
     try {
-      const response = await fetch("/api/dev/clear-logs", { method: "POST" });
+      const response = await fetch(withApiBase("/api/dev/clear-logs"), { method: "POST" });
       if (response.ok) {
         setDeliveryLogs([]);
         setNotifications([]);
@@ -105,7 +110,7 @@ export default function App() {
   const handleLogout = async () => {
     if (token) {
       try {
-        await fetch("/api/mobile/parent/logout", {
+        await fetch(withApiBase("/api/mobile/parent/logout"), {
           method: "POST",
           headers: { "Authorization": `Bearer ${token}` }
         });
@@ -135,6 +140,25 @@ export default function App() {
   };
 
   const unreadPushCount = notifications.filter(n => !n.read).length;
+
+  if (isMobileProductionMode) {
+    return (
+      <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col" id="ecoletrack-mobile-production">
+        <ParentPortal
+          token={token}
+          parent={parent}
+          onLoginSuccess={handleLoginSuccess}
+          onLogout={handleLogout}
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          selectedChild={selectedChild}
+          setSelectedChild={setSelectedChild}
+          notifications={notifications}
+          fetchNotifications={fetchNotifications}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans" id="ecoletrack-workspace">

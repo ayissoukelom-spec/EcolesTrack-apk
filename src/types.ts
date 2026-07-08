@@ -25,6 +25,7 @@ export interface Child {
   firstName: string;
   lastName: string;
   className: string;
+  birthDate: string;
   avatarUrl: string;
 }
 

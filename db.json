@@ -88,6 +88,7 @@
       "firstName": "Lucas",
       "lastName": "Dupont",
       "className": "4ème B",
+      "birthDate": "2012-03-18",
       "avatarUrl": "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&q=80&w=120"
     },
     {
@@ -96,6 +97,7 @@
       "firstName": "Chloé",
       "lastName": "Dupont",
       "className": "6ème A",
+      "birthDate": "2014-11-07",
       "avatarUrl": "https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&q=80&w=120"
     },
     {
@@ -104,6 +106,7 @@
       "firstName": "Théo",
       "lastName": "Martin",
       "className": "3ème C",
+      "birthDate": "2011-05-22",
       "avatarUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=120"
     }
   ],
@@ -264,7 +267,7 @@
       "parentId": "parent-jean-dupont",
       "title": "Nouvelle absence signalée",
       "message": "Votre enfant Lucas Dupont a été signalé absent aujourd'hui à 10:00. Veuillez fournir un justificatif.",
-      "read": false,
+      "read": true,
       "createdAt": "2026-07-02T10:15:00Z",
       "deepLink": "ecoletrack://absences?childId=child-lucas"
     },

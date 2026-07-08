@@ -16,6 +16,8 @@ import androidx.webkit.WebViewAssetLoader;
 public class MainActivity extends AppCompatActivity {
 
     private static final String APP_INDEX_URL = "https://appassets.androidplatform.net/index.html";
+    // Adresse IP du serveur Express sur le réseau local (à mettre à jour si l'IP change)
+    private static final String API_SERVER_URL = "http://10.108.239.124:3001";
     private WebView webView;
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -39,6 +41,13 @@ public class MainActivity extends AppCompatActivity {
                 .build();
 
         webView.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                // Injecte l'URL du serveur API dans localStorage pour que withApiBase() l'utilise
+                String js = "localStorage.setItem('ecoletrack_api_base_url', '" + API_SERVER_URL + "');";
+                view.evaluateJavascript(js, null);
+            }
+
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                 return assetLoader.shouldInterceptRequest(request.getUrl());

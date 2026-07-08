@@ -347,6 +347,7 @@ export class JSONStore {
       firstName: "Enfant",
       lastName: "Simule",
       className: "Classe de demonstration",
+      birthDate: "2014-09-01",
       avatarUrl: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=120"
     };
 
@@ -367,6 +368,7 @@ export class JSONStore {
       firstName: "Eleve",
       lastName: "Demo",
       className: "5eme Demo",
+      birthDate: "2013-09-01",
       avatarUrl: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=120"
     };
 
