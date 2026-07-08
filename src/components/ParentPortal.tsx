@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { Parent, Child, Absence, Grade, AppNotification, NotificationPreferences, ParentConsent } from "../types";
+import { getApiErrorMessage, parseJsonSafe } from "../utils/http";
 
 interface ParentPortalProps {
   token: string | null;
@@ -130,10 +131,14 @@ export default function ParentPortal({
         body: JSON.stringify({ email: loginEmail, password: loginPass })
       });
 
-      const data = await response.json();
+      const data = await parseJsonSafe<{ token?: string; parent?: Parent; error?: string }>(response);
 
       if (!response.ok) {
-        throw new Error(data.error || "Une erreur est survenue lors de la connexion.");
+        throw new Error(getApiErrorMessage(data, "Une erreur est survenue lors de la connexion."));
+      }
+
+      if (!data?.token || !data?.parent) {
+        throw new Error("Le serveur a renvoye une reponse incomplete. Verifiez la connexion API.");
       }
 
       // Success
@@ -154,15 +159,11 @@ export default function ParentPortal({
       const response = await fetch("/api/mobile/parent/children", {
         headers: { "Authorization": `Bearer ${token}` }
       });
+      const data = await parseJsonSafe<Child[] | { error?: string }>(response);
       if (response.ok) {
-        const data = await response.json();
-        setChildren(data);
+        setChildren(Array.isArray(data) ? data : []);
       } else {
-        let details = "";
-        try {
-          const errData = await response.json();
-          details = errData?.error ? ` ${errData.error}` : "";
-        } catch (e) {}
+        const details = data && !Array.isArray(data) && data.error ? ` ${data.error}` : "";
         setChildrenLoadError(`Chargement des enfants impossible (${response.status}).${details}`);
       }
     } catch (e) {
@@ -192,8 +193,8 @@ export default function ParentPortal({
         headers: { "Authorization": `Bearer ${token}` }
       });
       if (response.ok) {
-        const data = await response.json();
-        setAbsences(data);
+        const data = await parseJsonSafe<Absence[]>(response);
+        setAbsences(Array.isArray(data) ? data : []);
       }
     } catch (e) {
       console.error("Failed to fetch absences", e);
@@ -207,8 +208,8 @@ export default function ParentPortal({
         headers: { "Authorization": `Bearer ${token}` }
       });
       if (response.ok) {
-        const data = await response.json();
-        setGrades(data);
+        const data = await parseJsonSafe<Grade[]>(response);
+        setGrades(Array.isArray(data) ? data : []);
       }
     } catch (e) {
       console.error("Failed to fetch grades", e);
@@ -222,9 +223,9 @@ export default function ParentPortal({
         headers: { "Authorization": `Bearer ${token}` }
       });
       if (response.ok) {
-        const data = await response.json();
-        setPreferences(data.preferences);
-        setConsents(data.consents);
+        const data = await parseJsonSafe<{ preferences?: NotificationPreferences; consents?: ParentConsent[] }>(response);
+        setPreferences(data?.preferences ?? null);
+        setConsents(Array.isArray(data?.consents) ? data!.consents : []);
       }
     } catch (e) {
       console.error("Failed to fetch preferences", e);
@@ -250,9 +251,9 @@ export default function ParentPortal({
         body: JSON.stringify(updates)
       });
       if (response.ok) {
-        const data = await response.json();
-        setPreferences(data.preferences);
-        setConsents(data.consents);
+        const data = await parseJsonSafe<{ preferences?: NotificationPreferences; consents?: ParentConsent[] }>(response);
+        setPreferences(data?.preferences ?? null);
+        setConsents(Array.isArray(data?.consents) ? data!.consents : []);
         
         // Also trigger register token in background if user enabled push
         if (channel === "push" && !currentVal) {
@@ -278,9 +279,9 @@ export default function ParentPortal({
         })
       });
       if (response.ok) {
-        const data = await response.json();
-        setPreferences(data.preferences);
-        setConsents(data.consents);
+        const data = await parseJsonSafe<{ preferences?: NotificationPreferences; consents?: ParentConsent[] }>(response);
+        setPreferences(data?.preferences ?? null);
+        setConsents(Array.isArray(data?.consents) ? data!.consents : []);
       }
     } catch (e) {
       console.error("Failed to update consent", e);

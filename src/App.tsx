@@ -12,6 +12,7 @@ import AndroidEmulator from "./components/AndroidEmulator";
 import ParentPortal from "./components/ParentPortal";
 import DeveloperConsole from "./components/DeveloperConsole";
 import { Parent, Child, AppNotification, CompleteDeliveryLog } from "./types";
+import { parseJsonSafe } from "./utils/http";
 
 export default function App() {
   
@@ -38,8 +39,8 @@ export default function App() {
         headers: { "Authorization": `Bearer ${token}` }
       });
       if (response.ok) {
-        const data = await response.json();
-        setNotifications(data);
+        const data = await parseJsonSafe<AppNotification[]>(response);
+        setNotifications(Array.isArray(data) ? data : []);
       }
     } catch (e) {
       console.error("Failed to fetch notifications", e);
@@ -51,8 +52,8 @@ export default function App() {
     try {
       const response = await fetch("/api/dev/delivery-logs");
       if (response.ok) {
-        const data = await response.json();
-        setDeliveryLogs(data);
+        const data = await parseJsonSafe<CompleteDeliveryLog[]>(response);
+        setDeliveryLogs(Array.isArray(data) ? data : []);
       }
     } catch (e) {
       console.error("Failed to fetch delivery logs", e);
