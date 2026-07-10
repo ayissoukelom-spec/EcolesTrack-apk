@@ -3,6 +3,7 @@ package com.ecoletrack.webview;
 import android.annotation.SuppressLint;
 import android.graphics.Color;
 import android.os.Bundle;
+import android.view.ViewGroup;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebView;
@@ -17,7 +18,7 @@ public class MainActivity extends AppCompatActivity {
 
     private static final String APP_INDEX_URL = "https://appassets.androidplatform.net/index.html";
     // Adresse IP du serveur Express sur le réseau local (à mettre à jour si l'IP change)
-    private static final String API_SERVER_URL = "http://10.108.239.124:3001";
+    private static final String API_SERVER_URL = "http://10.187.128.124:3001";
     private WebView webView;
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -26,6 +27,10 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
 
         webView = new WebView(this);
+        webView.setLayoutParams(new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
+
         setContentView(webView);
 
         WebSettings webSettings = webView.getSettings();

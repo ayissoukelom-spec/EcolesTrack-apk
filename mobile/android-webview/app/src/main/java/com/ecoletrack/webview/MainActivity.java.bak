@@ -1,0 +1,103 @@
+package com.ecoletrack.webview;
+
+import android.annotation.SuppressLint;
+import android.graphics.Bitmap;
+import android.graphics.Color;
+import android.os.Bundle;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebView;
+import android.webkit.WebChromeClient;
+import android.webkit.WebSettings;
+import android.webkit.WebViewClient;
+
+import androidx.appcompat.app.AppCompatActivity;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.BufferedReader;
+import java.nio.charset.StandardCharsets;
+
+public class MainActivity extends AppCompatActivity {
+
+    // Charge la page statique embarquée dans l'application Android.
+    private static final String APP_INDEX_URL = "file:///android_asset/index.html";
+    // Adresse du backend accessible depuis l'émulateur Android sans modifier l'IP à la main.
+    private static final String API_SERVER_URL = "http://10.0.2.2:3001";
+    private WebView webView;
+
+    @SuppressLint("SetJavaScriptEnabled")
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        webView = new WebView(this);
+        setContentView(webView);
+
+        WebSettings webSettings = webView.getSettings();
+        webSettings.setJavaScriptEnabled(true);
+        webSettings.setDomStorageEnabled(true);
+        webSettings.setAllowFileAccess(true);
+        webSettings.setAllowContentAccess(true);
+        webSettings.setAllowUniversalAccessFromFileURLs(true);
+        webSettings.setMediaPlaybackRequiresUserGesture(false);
+        webSettings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+
+        webView.setWebViewClient(new WebViewClient() {
+            private void injectApiBaseUrl(WebView view) {
+                String js = "(function(){window.ECOLETRACK_API_BASE_URL='" + API_SERVER_URL + "';localStorage.setItem('ecoletrack_api_base_url','" + API_SERVER_URL + "');})();";
+                view.evaluateJavascript(js, null);
+            }
+
+            @Override
+            public void onPageStarted(WebView view, String url, Bitmap favicon) {
+                injectApiBaseUrl(view);
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                injectApiBaseUrl(view);
+                view.evaluateJavascript("document.body.innerHTML='<h1 style=\"color:#0f172a\">Chargement OK</h1>'", null);
+            }
+
+            @Override
+            public void onReceivedError(WebView view, WebResourceRequest request, android.webkit.WebResourceError error) {
+                if (request != null && request.isForMainFrame()) {
+                    String message = error != null ? String.valueOf(error.getDescription()) : "Unknown error";
+                    String html = "<html><body style='font-family:sans-serif;background:#0f172a;color:#e2e8f0;padding:24px'>"
+                            + "<h2>EcoleTrack - Erreur de chargement</h2>"
+                            + "<p>Impossible de charger l'interface locale.</p>"
+                            + "<p><b>Détail:</b> " + message + "</p>"
+                            + "</body></html>";
+                    view.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null);
+                }
+            }
+        });
+        webView.setWebChromeClient(new WebChromeClient());
+        webView.setBackgroundColor(Color.WHITE);
+
+        String simpleHtml = "<html><head><meta charset='utf-8'><style>body{font-family:sans-serif;background:#fff;color:#111;padding:24px}</style></head><body><h1>Test WebView</h1><p>Chargement OK</p></body></html>";
+        webView.loadDataWithBaseURL(null, simpleHtml, "text/html", "UTF-8", null);
+    }
+
+    private String loadAssetText(String fileName) throws IOException {
+        StringBuilder content = new StringBuilder();
+        try (InputStream inputStream = getAssets().open(fileName);
+             BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                content.append(line).append('\n');
+            }
+        }
+        return content.toString();
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (webView != null && webView.canGoBack()) {
+            webView.goBack();
+        } else {
+            super.onBackPressed();
+        }
+    }
+}
