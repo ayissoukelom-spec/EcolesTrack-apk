@@ -25,7 +25,7 @@ export function resolveApiBaseUrl(): string {
   }
 
   if (window.location.host === "appassets.androidplatform.net") {
-    return "http://10.187.128.124:3000";
+    return "http://10.187.128.124:3001";
   }
 
   return "";

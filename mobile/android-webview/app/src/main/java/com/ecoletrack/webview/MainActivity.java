@@ -18,7 +18,7 @@ public class MainActivity extends AppCompatActivity {
 
     private static final String APP_INDEX_URL = "https://appassets.androidplatform.net/index.html";
     // Adresse IP du serveur Express sur le réseau local (à mettre à jour si l'IP change)
-    private static final String API_SERVER_URL = "http://10.187.128.124:3000";
+    private static final String API_SERVER_URL = "http://10.187.128.124:3001";
     private WebView webView;
 
     @SuppressLint("SetJavaScriptEnabled")
