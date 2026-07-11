@@ -394,7 +394,6 @@ export default function ParentPortal({
   };
 
   const handleNavigateTab = (tab: string) => {
-    setSelectedChild(null);
     setActiveTab(tab);
   };
 
@@ -596,7 +595,7 @@ export default function ParentPortal({
       <div className="flex-1 overflow-y-auto p-4 pb-20">
         
         {/* Child Details Overlay View (Fiche Enfant) */}
-        {selectedChild ? (
+        {activeTab === "children" && selectedChild ? (
           <motion.div 
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
@@ -1206,7 +1205,7 @@ export default function ParentPortal({
                     <Award className="h-5 w-5 text-indigo-600 shrink-0" />
                   </div>
 
-                  {selectedChild ? (
+                  {currentChild ? (
                     grades.length === 0 ? (
                       <div className="py-8 text-center text-slate-400 text-xs font-medium">Aucune note disponible pour l'élève sélectionné.</div>
                     ) : (

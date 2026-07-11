@@ -40,6 +40,9 @@ public class MainActivity extends AppCompatActivity {
         webSettings.setAllowContentAccess(true);
         webSettings.setMediaPlaybackRequiresUserGesture(false);
         webSettings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        webSettings.setCacheMode(WebSettings.LOAD_NO_CACHE);
+        webView.clearCache(true);
+        webView.clearHistory();
 
         WebViewAssetLoader assetLoader = new WebViewAssetLoader.Builder()
             .addPathHandler("/", new WebViewAssetLoader.AssetsPathHandler(this))
