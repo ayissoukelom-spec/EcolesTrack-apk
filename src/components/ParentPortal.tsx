@@ -552,7 +552,7 @@ export default function ParentPortal({
 
   // Screen B: LOGGED IN PORTAL VIEWPORT
   return (
-    <div className="flex-1 flex flex-col bg-slate-50 text-slate-800 overflow-hidden" id="portal-logged-in">
+    <div className="h-screen flex flex-col bg-slate-50 text-slate-800 overflow-hidden" id="portal-logged-in">
       
       {/* Dynamic Header */}
       <div className="bg-white border-b border-slate-100 px-4 py-3 flex items-center justify-between shadow-sm shrink-0">
@@ -1286,7 +1286,7 @@ export default function ParentPortal({
       </div>
 
       {/* Persistent Bottom Bar Navigation - Parent Portal */}
-      <div className="absolute bottom-0 inset-x-0 h-16 bg-white border-t border-slate-100 flex items-center justify-around px-2 py-1 shadow-md z-20 shrink-0">
+      <div className="fixed bottom-0 left-0 right-0 h-16 bg-white border-t border-slate-100 flex items-center justify-around px-2 py-1 shadow-md z-50">
         <button
           onClick={() => handleNavigateTab("children")}
           className={`flex-1 flex flex-col items-center gap-1 py-1 text-[9px] font-bold ${

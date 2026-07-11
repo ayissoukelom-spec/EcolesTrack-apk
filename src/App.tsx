@@ -143,7 +143,7 @@ export default function App() {
 
   if (isMobileProductionMode) {
     return (
-      <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col" id="ecoletrack-mobile-production">
+      <div className="h-screen overflow-hidden bg-slate-50 text-slate-900 flex flex-col" id="ecoletrack-mobile-production">
         <ParentPortal
           token={token}
           parent={parent}
