@@ -1189,93 +1189,47 @@ export default function ParentPortal({
               </motion.div>
             )}
 
-            {activeTab === "consent" && (
+            {activeTab === "notes" && (
               <motion.div 
-                key="consent"
+                key="notes"
                 initial={{ opacity: 0, y: 5 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0 }}
                 className="space-y-4"
               >
-                <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Centre de consentement légal</h3>
-                
-                <div className="bg-white rounded-2xl border border-slate-100 p-4 shadow-sm space-y-4">
-                  <div className="text-[11px] text-slate-600 font-semibold leading-relaxed border-b border-slate-50 pb-3 flex items-start gap-2.5">
-                    <Shield className="h-5 w-5 text-indigo-600 shrink-0" />
-                    <span>Conformément aux réglementations RGPD et WhatsApp Business Policy, nous requérons votre accord explicite pour l&apos;envoi de relevés académiques.</span>
+                <div className="bg-white rounded-2xl border border-slate-100 p-4 shadow-sm">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Notes</h3>
+                      <p className="text-[11px] text-slate-500 mt-1">Dernières notes publiées pour l'enfant sélectionné.</p>
+                    </div>
+                    <Award className="h-5 w-5 text-indigo-600 shrink-0" />
                   </div>
 
-                  {/* WhatsApp explicit consent */}
-                  <div className="flex items-start gap-3">
-                    <input 
-                      type="checkbox" 
-                      id="opt-in-wa"
-                      checked={!!consents.find(c => c.channel === "whatsapp" && c.consentGranted && !c.revokedAt)}
-                      onChange={() => {
-                        const active = consents.find(c => c.channel === "whatsapp" && c.consentGranted && !c.revokedAt);
-                        handleToggleConsent("whatsapp", !!active);
-                      }}
-                      className="mt-1 shrink-0 h-4 w-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"
-                    />
-                    <label htmlFor="opt-in-wa" className="text-xs text-slate-700 leading-normal font-medium">
-                      <strong className="block text-slate-900">Opt-in WhatsApp Académique</strong>
-                      J&apos;autorise l&apos;établissement à m&apos;envoyer des notifications d&apos;absence et de notes par WhatsApp. <span className="text-slate-400 font-mono text-[9px]">(Version v1.0-fr)</span>
-                    </label>
-                  </div>
-
-                  {/* SMS explicit consent */}
-                  <div className="flex items-start gap-3 border-t border-slate-50 pt-4">
-                    <input 
-                      type="checkbox" 
-                      id="opt-in-sms"
-                      checked={!!consents.find(c => c.channel === "sms" && c.consentGranted && !c.revokedAt)}
-                      onChange={() => {
-                        const active = consents.find(c => c.channel === "sms" && c.consentGranted && !c.revokedAt);
-                        handleToggleConsent("sms", !!active);
-                      }}
-                      className="mt-1 shrink-0 h-4 w-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"
-                    />
-                    <label htmlFor="opt-in-sms" className="text-xs text-slate-700 leading-normal font-medium">
-                      <strong className="block text-slate-900">Opt-in SMS d&apos;Urgence</strong>
-                      J&apos;autorise l&apos;établissement à m&apos;envoyer des SMS d&apos;absence prioritaires. <span className="text-slate-400 font-mono text-[9px]">(Version v1.0-fr)</span>
-                    </label>
-                  </div>
-                </div>
-
-                {/* Horodating consent history table */}
-                <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Historique de consentement légal</h3>
-                <div className="bg-white rounded-2xl border border-slate-100 overflow-hidden shadow-sm">
-                  {consents.length === 0 ? (
-                    <div className="p-4 text-center text-slate-400 text-xs font-medium">Aucun historique de consentement.</div>
-                  ) : (
-                    <table className="w-full text-left border-collapse">
-                      <thead>
-                        <tr className="bg-slate-50 text-slate-500 text-[9px] font-bold tracking-wider border-b border-slate-100 uppercase">
-                          <th className="p-2.5">Canal</th>
-                          <th className="p-2.5">Action</th>
-                          <th className="p-2.5">Version</th>
-                          <th className="p-2.5">Date & Heure</th>
-                        </tr>
-                      </thead>
-                      <tbody className="text-[10px] font-medium text-slate-700 divide-y divide-slate-50">
-                        {consents.map((c) => (
-                          <tr key={c.id}>
-                            <td className="p-2.5 font-bold uppercase text-slate-800">{c.channel}</td>
-                            <td className="p-2.5">
-                              {c.consentGranted && !c.revokedAt ? (
-                                <span className="text-[9px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-md">Autorisé</span>
-                              ) : (
-                                <span className="text-[9px] font-bold text-rose-600 bg-rose-50 px-1.5 py-0.5 rounded-md">Révoqué</span>
-                              )}
-                            </td>
-                            <td className="p-2.5 font-mono text-[9px] text-slate-400">{c.consentTextVersion}</td>
-                            <td className="p-2.5 font-mono text-[9px] text-slate-500">
-                              {new Date(c.consentedAt).toLocaleDateString("fr-FR")} {new Date(c.consentedAt).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}
-                            </td>
-                          </tr>
+                  {selectedChild ? (
+                    grades.length === 0 ? (
+                      <div className="py-8 text-center text-slate-400 text-xs font-medium">Aucune note disponible pour l'élève sélectionné.</div>
+                    ) : (
+                      <div className="space-y-3 mt-4">
+                        {grades.slice(0, 5).map((g) => (
+                          <div key={g.id} className="rounded-2xl border border-slate-100 p-3 bg-slate-50">
+                            <div className="flex items-center justify-between gap-4">
+                              <div className="min-w-0">
+                                <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">{g.subject}</p>
+                                <h4 className="text-sm font-black text-slate-900 truncate">{g.examName}</h4>
+                                <p className="text-[10px] text-slate-500 mt-0.5">Le {new Date(g.date).toLocaleDateString("fr-FR")}</p>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-xl font-black text-slate-900">{g.grade}</p>
+                                <p className="text-[9px] text-slate-500">/ 20 • coeff {g.coefficient}</p>
+                              </div>
+                            </div>
+                          </div>
                         ))}
-                      </tbody>
-                    </table>
+                      </div>
+                    )
+                  ) : (
+                    <div className="py-8 text-center text-slate-400 text-xs font-medium">Sélectionnez un enfant pour afficher ses notes.</div>
                   )}
                 </div>
               </motion.div>
@@ -1334,13 +1288,13 @@ export default function ParentPortal({
         </button>
 
         <button
-          onClick={() => handleNavigateTab("consent")}
+          onClick={() => handleNavigateTab("notes")}
           className={`flex-1 flex flex-col items-center gap-1 py-1 text-[9px] font-bold ${
-            activeTab === "consent" ? "text-indigo-600" : "text-slate-400 hover:text-slate-600"
+            activeTab === "notes" ? "text-indigo-600" : "text-slate-400 hover:text-slate-600"
           }`}
         >
-          <Shield className="h-4.5 w-4.5" />
-          <span>Consentement</span>
+          <Award className="h-4.5 w-4.5" />
+          <span>Notes</span>
         </button>
       </div>
     </div>
