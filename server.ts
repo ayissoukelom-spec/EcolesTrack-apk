@@ -140,7 +140,7 @@ const requireParentRoleOnly = (req: AuthenticatedRequest, res: Response, next: N
 // ====================================================================
 
 // 1. POST /api/mobile/parent/login
-app.post("/api/mobile/parent/login", rateLimit(15, 60000), (req, res) => {
+app.post("/api/mobile/parent/login", rateLimit(15, 60000), async (req, res) => {
   const validation = LoginSchema.safeParse(req.body);
   if (!validation.success) {
     logger.warn("Échec de la validation Zod sur la route d'authentification.");
@@ -153,7 +153,7 @@ app.post("/api/mobile/parent/login", rateLimit(15, 60000), (req, res) => {
 
   const { email, password } = validation.data;
 
-  const user = store.findParentByEmail(email);
+  const user = await store.findParentByEmail(email);
   if (!user) {
     logger.warn(`Tentative de connexion infructueuse (utilisateur inconnu): ${email}`);
     return res.status(401).json({
@@ -162,8 +162,8 @@ app.post("/api/mobile/parent/login", rateLimit(15, 60000), (req, res) => {
     });
   }
 
-  // Password verify (simple plaintext verification for demo, or match hash)
-  if (user.passwordHash !== password) {
+  const isPasswordValid = await store.verifyParentPassword(email, password);
+  if (!isPasswordValid) {
     logger.warn(`Mot de passe incorrect pour le compte parent: ${email}`);
     return res.status(401).json({
       error: "Identifiants de connexion incorrects.",
@@ -171,7 +171,6 @@ app.post("/api/mobile/parent/login", rateLimit(15, 60000), (req, res) => {
     });
   }
 
-  // Strict check: if role is NOT parent, reject with 403 Forbidden
   if (user.role !== "parent") {
     logger.audit("NON_PARENT_LOGIN_REJECT", user.id, { email, role: user.role }, "FAILURE");
     return res.status(403).json({
@@ -181,10 +180,7 @@ app.post("/api/mobile/parent/login", rateLimit(15, 60000), (req, res) => {
     });
   }
 
-  // Create a production-ready session (Access Token & Refresh Token)
   const session = AuthService.createSession(user.id, user.role);
-  
-  // Exclude sensitive fields before delivering
   const parentDetails = {
     id: user.id,
     name: user.name,
@@ -244,9 +240,9 @@ app.post("/api/mobile/parent/logout", requireAuth, requireParentRoleOnly, (req: 
 });
 
 // 3. GET /api/mobile/parent/me
-app.get("/api/mobile/parent/me", requireAuth, requireParentRoleOnly, (req: AuthenticatedRequest, res) => {
+app.get("/api/mobile/parent/me", requireAuth, requireParentRoleOnly, async (req: AuthenticatedRequest, res) => {
   const parentId = req.parent!.id;
-  const parent = store.getParentById(parentId);
+  const parent = await store.getParentById(parentId);
   
   if (!parent) {
     return res.status(404).json({
@@ -268,16 +264,16 @@ app.get("/api/mobile/parent/me", requireAuth, requireParentRoleOnly, (req: Authe
 });
 
 // 4. GET /api/mobile/parent/children
-app.get("/api/mobile/parent/children", requireAuth, requireParentRoleOnly, (req: AuthenticatedRequest, res) => {
+app.get("/api/mobile/parent/children", requireAuth, requireParentRoleOnly, async (req: AuthenticatedRequest, res) => {
   const parentId = req.parent!.id;
-  const children = store.getChildrenOfParent(parentId);
+  const children = await store.getChildrenOfParent(parentId);
   return res.json(children);
 });
 
 // 4b. POST /api/mobile/parent/children/simulate
-app.post("/api/mobile/parent/children/simulate", requireAuth, requireParentRoleOnly, (req: AuthenticatedRequest, res) => {
+app.post("/api/mobile/parent/children/simulate", requireAuth, requireParentRoleOnly, async (req: AuthenticatedRequest, res) => {
   const parentId = req.parent!.id;
-  const child = store.createSimulatedChildForParent(parentId);
+  const child = await store.createSimulatedChildForParent(parentId);
 
   if (!child) {
     return res.status(400).json({
@@ -290,55 +286,53 @@ app.post("/api/mobile/parent/children/simulate", requireAuth, requireParentRoleO
 });
 
 // 5. GET /api/mobile/parent/children/:childId/absences
-app.get("/api/mobile/parent/children/:childId/absences", requireAuth, requireParentRoleOnly, (req: AuthenticatedRequest, res) => {
+app.get("/api/mobile/parent/children/:childId/absences", requireAuth, requireParentRoleOnly, async (req: AuthenticatedRequest, res) => {
   const { childId } = req.params;
   const parentId = req.parent!.id;
 
-  // Verification of ownership to prevent child data leak
-  if (!store.isChildOwnedByParent(childId, parentId)) {
+  if (!(await store.isChildOwnedByParent(childId, parentId))) {
     return res.status(403).json({
       error: "Accès refusé. Cet enfant ne vous est pas rattaché.",
       code: "CHILD_OWNERSHIP_VIOLATION"
     });
   }
 
-  const absences = store.getAbsencesOfChild(childId);
+  const absences = await store.getAbsencesOfChild(childId);
   return res.json(absences);
 });
 
 // 6. GET /api/mobile/parent/children/:childId/grades
-app.get("/api/mobile/parent/children/:childId/grades", requireAuth, requireParentRoleOnly, (req: AuthenticatedRequest, res) => {
+app.get("/api/mobile/parent/children/:childId/grades", requireAuth, requireParentRoleOnly, async (req: AuthenticatedRequest, res) => {
   const { childId } = req.params;
   const parentId = req.parent!.id;
 
-  // Verification of ownership to prevent child data leak
-  if (!store.isChildOwnedByParent(childId, parentId)) {
+  if (!(await store.isChildOwnedByParent(childId, parentId))) {
     return res.status(403).json({
       error: "Accès refusé. Cet enfant ne vous est pas rattaché.",
       code: "CHILD_OWNERSHIP_VIOLATION"
     });
   }
 
-  const grades = store.getGradesOfChild(childId);
+  const grades = await store.getGradesOfChild(childId);
   return res.json(grades);
 });
 
 // 7. GET /api/mobile/parent/notifications
-app.get("/api/mobile/parent/notifications", requireAuth, requireParentRoleOnly, (req: AuthenticatedRequest, res) => {
+app.get("/api/mobile/parent/notifications", requireAuth, requireParentRoleOnly, async (req: AuthenticatedRequest, res) => {
   const parentId = req.parent!.id;
-  const notifications = store.getInAppNotifications(parentId);
+  const notifications = await store.getInAppNotifications(parentId);
   return res.json(notifications);
 });
 
 // 8. PUT /api/mobile/parent/notifications/read-all
-app.put("/api/mobile/parent/notifications/read-all", requireAuth, requireParentRoleOnly, (req: AuthenticatedRequest, res) => {
+app.put("/api/mobile/parent/notifications/read-all", requireAuth, requireParentRoleOnly, async (req: AuthenticatedRequest, res) => {
   const parentId = req.parent!.id;
-  store.markAllInAppNotificationsAsRead(parentId);
+  await store.markAllInAppNotificationsAsRead(parentId);
   return res.json({ success: true, message: "Toutes les notifications ont été marquées comme lues." });
 });
 
 // 9. POST /api/mobile/parent/devices/register-push-token
-app.post("/api/mobile/parent/devices/register-push-token", requireAuth, requireParentRoleOnly, (req: AuthenticatedRequest, res) => {
+app.post("/api/mobile/parent/devices/register-push-token", requireAuth, requireParentRoleOnly, async (req: AuthenticatedRequest, res) => {
   const parentId = req.parent!.id;
   const validation = RegisterPushTokenSchema.safeParse(req.body);
   
@@ -352,7 +346,7 @@ app.post("/api/mobile/parent/devices/register-push-token", requireAuth, requireP
   }
 
   const { pushToken, platform, appVersion } = validation.data;
-  const device = store.registerPushToken(parentId, pushToken, platform, appVersion);
+  const device = await store.registerPushToken(parentId, pushToken, platform, appVersion);
   
   logger.audit("REGISTER_PUSH_TOKEN", parentId, { platform, appVersion }, "SUCCESS");
   return res.json({
@@ -363,10 +357,10 @@ app.post("/api/mobile/parent/devices/register-push-token", requireAuth, requireP
 });
 
 // 10a. GET /api/mobile/parent/notification-preferences
-app.get("/api/mobile/parent/notification-preferences", requireAuth, requireParentRoleOnly, (req: AuthenticatedRequest, res) => {
+app.get("/api/mobile/parent/notification-preferences", requireAuth, requireParentRoleOnly, async (req: AuthenticatedRequest, res) => {
   const parentId = req.parent!.id;
-  const preferences = store.getNotificationPreferences(parentId);
-  const consents = store.getConsentsOfParent(parentId);
+  const preferences = await store.getNotificationPreferences(parentId);
+  const consents = await store.getConsentsOfParent(parentId);
   return res.json({
     preferences,
     consents
@@ -374,7 +368,7 @@ app.get("/api/mobile/parent/notification-preferences", requireAuth, requireParen
 });
 
 // 10. PUT /api/mobile/parent/notification-preferences
-app.put("/api/mobile/parent/notification-preferences", requireAuth, requireParentRoleOnly, (req: AuthenticatedRequest, res) => {
+app.put("/api/mobile/parent/notification-preferences", requireAuth, requireParentRoleOnly, async (req: AuthenticatedRequest, res) => {
   const parentId = req.parent!.id;
   const validation = NotificationPreferencesSchema.safeParse(req.body);
 
@@ -389,16 +383,14 @@ app.put("/api/mobile/parent/notification-preferences", requireAuth, requireParen
 
   const { pushEnabled, whatsappEnabled, smsEnabled, quietHoursStart, quietHoursEnd, whatsappConsent, smsConsent } = validation.data;
 
-  // Handle explicit consents alongside preference saves
   if (whatsappConsent !== undefined) {
-    store.updateConsent(parentId, "whatsapp", whatsappConsent, "v1.0-fr");
+    await store.updateConsent(parentId, "whatsapp", whatsappConsent, "v1.0-fr");
   }
   if (smsConsent !== undefined) {
-    store.updateConsent(parentId, "sms", smsConsent, "v1.0-fr");
+    await store.updateConsent(parentId, "sms", smsConsent, "v1.0-fr");
   }
 
-  // Update overall channel preference
-  const updatedPref = store.updateNotificationPreferences(parentId, {
+  const updatedPref = await store.updateNotificationPreferences(parentId, {
     pushEnabled,
     whatsappEnabled,
     smsEnabled,
@@ -411,7 +403,7 @@ app.put("/api/mobile/parent/notification-preferences", requireAuth, requireParen
     success: true,
     message: "Préférences de notification mises à jour.",
     preferences: updatedPref,
-    consents: store.getConsentsOfParent(parentId)
+    consents: await store.getConsentsOfParent(parentId)
   });
 });
 
@@ -470,13 +462,13 @@ app.get("/api/mobile/health", (req, res) => {
 // ====================================================================
 
 // Add absence via backend simulator
-app.post("/api/dev/add-absence", (req, res) => {
+app.post("/api/dev/add-absence", async (req, res) => {
   const { childId, date, reason, justified, justificationText } = req.body;
   if (!childId || !reason) {
     return res.status(400).json({ error: "childId and reason required" });
   }
 
-  const absence = store.addAbsence({
+  const absence = await store.addAbsence({
     childId,
     date: date || new Date().toISOString(),
     reason,
@@ -484,9 +476,9 @@ app.post("/api/dev/add-absence", (req, res) => {
     justificationText
   });
 
-  // Find child to retrieve parent
-  const children = store.getChildrenOfParent("parent-jean-dupont"); // Default for demonstration
-  const child = children.find(c => c.id === childId) || store.getChildrenOfParent("parent-marie-martin").find(c => c.id === childId);
+  const children = await store.getChildrenOfParent("parent-jean-dupont"); // Default for demonstration
+  const backupChildren = await store.getChildrenOfParent("parent-marie-martin");
+  const child = children.find(c => c.id === childId) || backupChildren.find(c => c.id === childId);
   
   if (child) {
     const parentId = child.parentId;
@@ -506,13 +498,13 @@ app.post("/api/dev/add-absence", (req, res) => {
 });
 
 // Add grade via backend simulator
-app.post("/api/dev/add-grade", (req, res) => {
+app.post("/api/dev/add-grade", async (req, res) => {
   const { childId, subject, grade, coefficient, examName, date } = req.body;
   if (!childId || !subject || grade === undefined || !examName) {
     return res.status(400).json({ error: "Missing required grade properties" });
   }
 
-  const gradeObj = store.addGrade({
+  const gradeObj = await store.addGrade({
     childId,
     subject,
     grade: parseFloat(grade),
@@ -521,8 +513,9 @@ app.post("/api/dev/add-grade", (req, res) => {
     date: date || new Date().toISOString().split('T')[0]
   });
 
-  const children = store.getChildrenOfParent("parent-jean-dupont");
-  const child = children.find(c => c.id === childId) || store.getChildrenOfParent("parent-marie-martin").find(c => c.id === childId);
+  const children = await store.getChildrenOfParent("parent-jean-dupont");
+  const backupChildren = await store.getChildrenOfParent("parent-marie-martin");
+  const child = children.find(c => c.id === childId) || backupChildren.find(c => c.id === childId);
   
   if (child) {
     const parentId = child.parentId;

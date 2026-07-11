@@ -5,14 +5,18 @@ function trimTrailingSlash(url: string): string {
 }
 
 export function resolveApiBaseUrl(): string {
+  const win = window as Window & { ECOLETRACK_API_BASE_URL?: string };
+
+  if (
+    typeof win.ECOLETRACK_API_BASE_URL === "string" &&
+    win.ECOLETRACK_API_BASE_URL.trim()
+  ) {
+    return trimTrailingSlash(win.ECOLETRACK_API_BASE_URL.trim());
+  }
+
   const envBase = (import.meta as any)?.env?.VITE_API_BASE_URL as string | undefined;
   if (envBase && envBase.trim()) {
     return trimTrailingSlash(envBase.trim());
-  }
-
-  const win = window as Window & { ECOLETRACK_API_BASE_URL?: string };
-  if (typeof win.ECOLETRACK_API_BASE_URL === "string" && win.ECOLETRACK_API_BASE_URL.trim()) {
-    return trimTrailingSlash(win.ECOLETRACK_API_BASE_URL.trim());
   }
 
   const storageBase = localStorage.getItem("ecoletrack_api_base_url");
@@ -21,7 +25,7 @@ export function resolveApiBaseUrl(): string {
   }
 
   if (window.location.host === "appassets.androidplatform.net") {
-    return "http://127.0.0.1:3001";
+    return "http://10.187.128.124:3000";
   }
 
   return "";

@@ -1,4 +1,4 @@
-import { store } from "../store";
+import { store, triggerMultiChannelNotification } from "../store";
 import { QueueManager } from "../jobs/queue";
 import { Logger } from "../utils/logger";
 import { NotificationChannel } from "../../src/types";
@@ -20,12 +20,12 @@ export class NotificationService {
     logger.info(`Orchestrating notification for Parent ID: ${parentId}`, { category, dedupeKey });
 
     // 1. Fetch parent preferences and consent from DB
-    const preferences = store.getNotificationPreferences(parentId);
-    const consents = store.getConsentsOfParent(parentId);
+    const preferences = await store.getNotificationPreferences(parentId);
+    const consents = await store.getConsentsOfParent(parentId);
 
     const isPushAuthorized = preferences.pushEnabled;
-    const isSmsAuthorized = preferences.smsEnabled && consents.some(c => c.channel === "sms" && c.granted);
-    const isWhatsappAuthorized = preferences.whatsappEnabled && consents.some(c => c.channel === "whatsapp" && c.granted);
+    const isSmsAuthorized = preferences.smsEnabled && consents.some(c => c.channel === "sms" && c.consentGranted);
+    const isWhatsappAuthorized = preferences.whatsappEnabled && consents.some(c => c.channel === "whatsapp" && c.consentGranted);
 
     // 2. Check Quiet Hours Window
     if (this.isWithinQuietHours(preferences.quietHoursStart, preferences.quietHoursEnd)) {
@@ -69,7 +69,7 @@ export class NotificationService {
     }
 
     // Also call existing store orchestrator to keep UI logs completely aligned and updated!
-    const legacyResult = await store.triggerMultiChannelNotification(
+    const legacyResult = await triggerMultiChannelNotification(
       parentId,
       title,
       message,

@@ -85,7 +85,7 @@ export default function ParentPortal({
   }, [token, selectedChildId]);
 
   const availableGradeSubjects = useMemo(
-    () => Array.from(new Set(grades.map((g) => g.subject))).sort((a, b) => a.localeCompare(b, "fr")),
+    () => Array.from(new Set(grades.map((g) => g.subject))).sort((a, b) => String(a).localeCompare(String(b), "fr")),
     [grades]
   );
 

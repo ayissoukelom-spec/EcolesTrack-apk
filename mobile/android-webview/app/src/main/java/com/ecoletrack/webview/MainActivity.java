@@ -18,7 +18,7 @@ public class MainActivity extends AppCompatActivity {
 
     private static final String APP_INDEX_URL = "https://appassets.androidplatform.net/index.html";
     // Adresse IP du serveur Express sur le réseau local (à mettre à jour si l'IP change)
-    private static final String API_SERVER_URL = "http://10.187.128.124:3001";
+    private static final String API_SERVER_URL = "http://10.187.128.124:3000";
     private WebView webView;
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -48,9 +48,17 @@ public class MainActivity extends AppCompatActivity {
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public void onPageFinished(WebView view, String url) {
-                // Injecte l'URL du serveur API dans localStorage pour que withApiBase() l'utilise
-                String js = "localStorage.setItem('ecoletrack_api_base_url', '" + API_SERVER_URL + "');";
+                // Injecte l'URL du serveur API dans localStorage et sur window pour que withApiBase() l'utilise
+                String js = "window.ECOLETRACK_API_BASE_URL = '" + API_SERVER_URL + "'; " +
+                            "localStorage.setItem('ecoletrack_api_base_url', '" + API_SERVER_URL + "');";
                 view.evaluateJavascript(js, null);
+
+                // TEMPORARY DEBUG: afficher les valeurs réellement utilisées par la WebView
+                String debugJs = "(function(){ return 'ECOLETRACK_API_BASE_URL=' + window.ECOLETRACK_API_BASE_URL + ' | localStorage=' + localStorage.getItem('ecoletrack_api_base_url'); })();";
+                view.evaluateJavascript(debugJs, value -> {
+                    String message = "API URL used: " + value;
+                    android.widget.Toast.makeText(MainActivity.this, message, android.widget.Toast.LENGTH_LONG).show();
+                });
             }
 
             @Override
