@@ -12,13 +12,12 @@ import android.webkit.WebSettings;
 import android.webkit.WebViewClient;
 
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.webkit.WebViewAssetLoader;
 
 public class MainActivity extends AppCompatActivity {
 
-    private static final String APP_INDEX_URL = "https://appassets.androidplatform.net/index.html";
     // Adresse IP du serveur Express sur le réseau local (à mettre à jour si l'IP change)
     private static final String API_SERVER_URL = "http://10.187.128.124:3001";
+    private static final String APP_INDEX_URL = API_SERVER_URL + "/?mobile=1";
     private WebView webView;
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -44,16 +43,13 @@ public class MainActivity extends AppCompatActivity {
         webView.clearCache(true);
         webView.clearHistory();
 
-        WebViewAssetLoader assetLoader = new WebViewAssetLoader.Builder()
-            .addPathHandler("/", new WebViewAssetLoader.AssetsPathHandler(this))
-                .build();
-
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public void onPageFinished(WebView view, String url) {
                 // Injecte l'URL du serveur API dans localStorage et sur window pour que withApiBase() l'utilise
                 String js = "window.ECOLETRACK_API_BASE_URL = '" + API_SERVER_URL + "'; " +
-                            "localStorage.setItem('ecoletrack_api_base_url', '" + API_SERVER_URL + "');";
+                            "localStorage.setItem('ecoletrack_api_base_url', '" + API_SERVER_URL + "'); " +
+                            "localStorage.setItem('ecoletrack_mobile_production', 'true');";
                 view.evaluateJavascript(js, null);
 
                 // TEMPORARY DEBUG: afficher les valeurs réellement utilisées par la WebView
@@ -62,11 +58,6 @@ public class MainActivity extends AppCompatActivity {
                     String message = "API URL used: " + value;
                     android.widget.Toast.makeText(MainActivity.this, message, android.widget.Toast.LENGTH_LONG).show();
                 });
-            }
-
-            @Override
-            public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
-                return assetLoader.shouldInterceptRequest(request.getUrl());
             }
 
             @Override

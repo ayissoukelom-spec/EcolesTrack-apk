@@ -657,77 +657,10 @@ export default function ParentPortal({
                     <Award className="h-8 w-8 text-indigo-500/80 shrink-0" />
                   </div>
 
-                  {/* Grades feed */}
-                  <div className="flex items-center justify-between gap-2 mb-2">
-                    <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Historique des évaluations</h4>
-                    <span className="text-[9px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md">
-                      {displayedGrades.length} note(s)
-                    </span>
+                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-3 text-center">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Historique complet</p>
+                    <p className="text-[11px] text-slate-600 mt-1">Retrouvez l’historique détaillé des évaluations dans l’onglet Notes.</p>
                   </div>
-
-                  <div className="bg-slate-50 border border-slate-100 rounded-xl p-2.5 mb-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <label htmlFor="grade-subject-filter" className="text-[10px] font-bold text-slate-600 uppercase tracking-wider shrink-0">
-                        Matiere
-                      </label>
-                      <select
-                        id="grade-subject-filter"
-                        value={gradeSubjectFilter}
-                        onChange={(e) => setGradeSubjectFilter(e.target.value)}
-                        className="bg-white border border-slate-200 rounded-lg py-1.5 px-2 text-[10px] font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-400 w-full max-w-[190px]"
-                      >
-                        <option value="all">Toutes les matieres</option>
-                        {availableGradeSubjects.map((subject) => (
-                          <option key={subject} value={subject}>{subject}</option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div className="flex items-center justify-between gap-2">
-                      <label htmlFor="grade-period-filter" className="text-[10px] font-bold text-slate-600 uppercase tracking-wider shrink-0">
-                        Periode
-                      </label>
-                      <select
-                        id="grade-period-filter"
-                        value={gradePeriodFilter}
-                        onChange={(e) => setGradePeriodFilter(e.target.value as "all" | "7d" | "30d" | "trimester")}
-                        className="bg-white border border-slate-200 rounded-lg py-1.5 px-2 text-[10px] font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-400 w-full max-w-[190px]"
-                      >
-                        <option value="all">Toute periode</option>
-                        <option value="7d">7 derniers jours</option>
-                        <option value="30d">30 derniers jours</option>
-                        <option value="trimester">Trimestre</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  {grades.length === 0 ? (
-                    <div className="text-center py-6 text-slate-400 text-xs font-medium">Aucune note enregistrée pour le moment.</div>
-                  ) : displayedGrades.length === 0 ? (
-                    <div className="text-center py-6 text-slate-400 text-xs font-medium">Aucune note pour ce filtre matiere/periode.</div>
-                  ) : (
-                    <div className="space-y-2.5">
-                      {displayedGrades.map((g) => {
-                        let badgeClass = "bg-emerald-50 border-emerald-100 text-emerald-700";
-                        if (g.grade < 10) badgeClass = "bg-rose-50 border-rose-100 text-rose-700";
-                        else if (g.grade < 14) badgeClass = "bg-amber-50 border-amber-100 text-amber-700";
-
-                        return (
-                          <div key={g.id} className="border border-slate-100 rounded-xl p-2.5 hover:bg-slate-50 transition-colors flex items-center justify-between">
-                            <div className="min-w-0">
-                              <h5 className="text-xs font-bold truncate text-slate-800">{g.examName}</h5>
-                              <p className="text-[10px] text-slate-500 font-medium">{g.subject} • Coeff {g.coefficient}</p>
-                              <span className="text-[9px] text-slate-400 font-medium">Le {new Date(g.date).toLocaleDateString("fr-FR")}</span>
-                            </div>
-                            <div className={`border px-2.5 py-1.5 rounded-xl text-center shrink-0 min-w-[55px] ${badgeClass}`}>
-                              <span className="text-xs font-black">{g.grade}</span>
-                              <span className="text-[9px] block border-t border-current/20 mt-0.5 opacity-80">/20</span>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
                 </div>
               ) : (
                 <div>
@@ -1210,21 +1143,76 @@ export default function ParentPortal({
                       <div className="py-8 text-center text-slate-400 text-xs font-medium">Aucune note disponible pour l'élève sélectionné.</div>
                     ) : (
                       <div className="space-y-3 mt-4">
-                        {grades.slice(0, 5).map((g) => (
-                          <div key={g.id} className="rounded-2xl border border-slate-100 p-3 bg-slate-50">
-                            <div className="flex items-center justify-between gap-4">
-                              <div className="min-w-0">
-                                <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">{g.subject}</p>
-                                <h4 className="text-sm font-black text-slate-900 truncate">{g.examName}</h4>
-                                <p className="text-[10px] text-slate-500 mt-0.5">Le {new Date(g.date).toLocaleDateString("fr-FR")}</p>
-                              </div>
-                              <div className="text-right">
-                                <p className="text-xl font-black text-slate-900">{g.grade}</p>
-                                <p className="text-[9px] text-slate-500">/ 20 • coeff {g.coefficient}</p>
-                              </div>
-                            </div>
+                        <div className="flex items-center justify-between gap-2 mb-2">
+                          <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Historique des évaluations</h4>
+                          <span className="text-[9px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md">
+                            {displayedGrades.length} note(s)
+                          </span>
+                        </div>
+
+                        <div className="bg-slate-50 border border-slate-100 rounded-xl p-2.5 mb-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <label htmlFor="grade-subject-filter" className="text-[10px] font-bold text-slate-600 uppercase tracking-wider shrink-0">
+                              Matiere
+                            </label>
+                            <select
+                              id="grade-subject-filter"
+                              value={gradeSubjectFilter}
+                              onChange={(e) => setGradeSubjectFilter(e.target.value)}
+                              className="bg-white border border-slate-200 rounded-lg py-1.5 px-2 text-[10px] font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-400 w-full max-w-[190px]"
+                            >
+                              <option value="all">Toutes les matieres</option>
+                              {availableGradeSubjects.map((subject) => (
+                                <option key={subject} value={subject}>{subject}</option>
+                              ))}
+                            </select>
                           </div>
-                        ))}
+
+                          <div className="flex items-center justify-between gap-2">
+                            <label htmlFor="grade-period-filter" className="text-[10px] font-bold text-slate-600 uppercase tracking-wider shrink-0">
+                              Periode
+                            </label>
+                            <select
+                              id="grade-period-filter"
+                              value={gradePeriodFilter}
+                              onChange={(e) => setGradePeriodFilter(e.target.value as "all" | "7d" | "30d" | "trimester")}
+                              className="bg-white border border-slate-200 rounded-lg py-1.5 px-2 text-[10px] font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-400 w-full max-w-[190px]"
+                            >
+                              <option value="all">Toute periode</option>
+                              <option value="7d">7 derniers jours</option>
+                              <option value="30d">30 derniers jours</option>
+                              <option value="trimester">Trimestre</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        {displayedGrades.length === 0 ? (
+                          <div className="text-center py-6 text-slate-400 text-xs font-medium">Aucune note pour ce filtre matiere/periode.</div>
+                        ) : (
+                          <div className="space-y-3">
+                            {displayedGrades.map((g) => {
+                              let badgeClass = "bg-emerald-50 border-emerald-100 text-emerald-700";
+                              if (g.grade < 10) badgeClass = "bg-rose-50 border-rose-100 text-rose-700";
+                              else if (g.grade < 14) badgeClass = "bg-amber-50 border-amber-100 text-amber-700";
+
+                              return (
+                                <div key={g.id} className="rounded-2xl border border-slate-100 p-3 bg-slate-50">
+                                  <div className="flex items-center justify-between gap-4">
+                                    <div className="min-w-0">
+                                      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">{g.subject}</p>
+                                      <h4 className="text-sm font-black text-slate-900 truncate">{g.examName}</h4>
+                                      <p className="text-[10px] text-slate-500 mt-0.5">Le {new Date(g.date).toLocaleDateString("fr-FR")}</p>
+                                    </div>
+                                    <div className="text-right">
+                                      <p className="text-xl font-black text-slate-900">{g.grade}</p>
+                                      <p className="text-[9px] text-slate-500">/ 20 • coeff {g.coefficient}</p>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
                     )
                   ) : (

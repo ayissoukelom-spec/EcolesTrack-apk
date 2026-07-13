@@ -18,7 +18,10 @@ export default function App() {
   const isMobileProductionMode = (() => {
     const envFlag = (import.meta as any)?.env?.VITE_MOBILE_PRODUCTION === "true";
     const isAndroidWebViewHost = typeof window !== "undefined" && window.location.host === "appassets.androidplatform.net";
-    return envFlag || isAndroidWebViewHost;
+    const searchParams = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
+    const isMobileQueryMode = searchParams?.get("mobile") === "1" || searchParams?.get("mode") === "mobile" || searchParams?.get("mode") === "production";
+    const isStoredMobileMode = typeof window !== "undefined" && window.localStorage.getItem("ecoletrack_mobile_production") === "true";
+    return envFlag || isAndroidWebViewHost || isMobileQueryMode || isStoredMobileMode;
   })();
   
   // Persistent parent session state
