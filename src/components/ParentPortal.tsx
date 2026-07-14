@@ -746,44 +746,56 @@ export default function ParentPortal({
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-2">
-                      <div className="rounded-xl border border-indigo-100 bg-indigo-50 p-3">
-                        <p className="text-[9px] font-bold uppercase tracking-wider text-indigo-500">Note du trimestre</p>
-                        <p className="text-xl font-black text-indigo-900 mt-1">
-                          {currentTrimesterAverage ? `${currentTrimesterAverage} / 20` : "-- / 20"}
-                        </p>
-                        <p className="text-[10px] text-indigo-700/80 font-medium mt-0.5">{currentTrimesterGrades.length} évaluation(s)</p>
+                    <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-[9px] font-bold uppercase tracking-wider text-slate-500">Accueil rapide</p>
+                          <p className="text-sm font-black text-slate-900 mt-0.5">Assiduité & suivi scolaire</p>
+                        </div>
+                        <div className="rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-semibold text-emerald-700">
+                          {attendanceRate}% d&apos;assiduité
+                        </div>
                       </div>
-                      <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-3">
-                        <p className="text-[9px] font-bold uppercase tracking-wider text-emerald-600">Assiduité</p>
-                        <p className="text-xl font-black text-emerald-900 mt-1">{attendanceRate} %</p>
-                        <p className="text-[10px] text-emerald-700/80 font-medium mt-0.5">{uniqueCurrentAbsenceDates} absence(s) sur la période</p>
-                      </div>
-                    </div>
 
-                    <div className="grid grid-cols-2 gap-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedChild(currentChild);
-                          setChildDetailTab("grades");
-                        }}
-                        className="rounded-xl border border-indigo-100 bg-white px-3 py-2 text-left hover:bg-indigo-50 transition-colors"
-                      >
-                        <div className="text-[9px] font-bold uppercase tracking-wider text-indigo-600">Raccourci</div>
-                        <div className="mt-0.5 text-xs font-bold text-slate-900">Notes</div>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedChild(currentChild);
-                          setChildDetailTab("absences");
-                        }}
-                        className="rounded-xl border border-emerald-100 bg-white px-3 py-2 text-left hover:bg-emerald-50 transition-colors"
-                      >
-                        <div className="text-[9px] font-bold uppercase tracking-wider text-emerald-600">Raccourci</div>
-                        <div className="mt-0.5 text-xs font-bold text-slate-900">Registre d&apos;absence</div>
-                      </button>
+                      <div className="mt-3 grid grid-cols-2 gap-2">
+                        <div className="rounded-xl border border-indigo-100 bg-indigo-50 p-3">
+                          <p className="text-[9px] font-bold uppercase tracking-wider text-indigo-500">Note du trimestre</p>
+                          <p className="text-xl font-black text-indigo-900 mt-1">
+                            {currentTrimesterAverage ? `${currentTrimesterAverage} / 20` : "-- / 20"}
+                          </p>
+                          <p className="text-[10px] text-indigo-700/80 font-medium mt-0.5">{currentTrimesterGrades.length} évaluation(s)</p>
+                        </div>
+                        <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-3">
+                          <p className="text-[9px] font-bold uppercase tracking-wider text-emerald-600">Absences</p>
+                          <p className="text-xl font-black text-emerald-900 mt-1">{uniqueCurrentAbsenceDates}</p>
+                          <p className="text-[10px] text-emerald-700/80 font-medium mt-0.5">sur la période en cours</p>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedChild(currentChild);
+                            setChildDetailTab("grades");
+                          }}
+                          className="rounded-xl border border-indigo-100 bg-white px-3 py-2 text-left hover:bg-indigo-50 transition-colors"
+                        >
+                          <div className="text-[9px] font-bold uppercase tracking-wider text-indigo-600">Raccourci</div>
+                          <div className="mt-0.5 text-xs font-bold text-slate-900">Notes</div>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedChild(currentChild);
+                            setChildDetailTab("absences");
+                          }}
+                          className="rounded-xl border border-emerald-100 bg-white px-3 py-2 text-left hover:bg-emerald-50 transition-colors"
+                        >
+                          <div className="text-[9px] font-bold uppercase tracking-wider text-emerald-600">Raccourci</div>
+                          <div className="mt-0.5 text-xs font-bold text-slate-900">Registre d&apos;absence</div>
+                        </button>
+                      </div>
                     </div>
                   </div>
                 )}
