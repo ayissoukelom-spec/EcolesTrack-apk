@@ -94,6 +94,7 @@ const INITIAL_DATABASE: DatabaseSchema = {
       lastName: "Dupont",
       className: "4ème B",
       birthDate: "2013-09-12",
+      gender: "Garçon",
       avatarUrl: "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&q=80&w=120"
     },
     {
@@ -103,6 +104,7 @@ const INITIAL_DATABASE: DatabaseSchema = {
       lastName: "Dupont",
       className: "6ème A",
       birthDate: "2012-11-03",
+      gender: "Fille",
       avatarUrl: "https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&q=80&w=120"
     },
     {
@@ -112,6 +114,7 @@ const INITIAL_DATABASE: DatabaseSchema = {
       lastName: "Martin",
       className: "3ème C",
       birthDate: "2013-04-23",
+      gender: "Garçon",
       avatarUrl: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=120"
     }
   ],

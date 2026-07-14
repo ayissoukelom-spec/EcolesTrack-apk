@@ -167,7 +167,7 @@ export default function ParentPortal({
           const stillVisibleChild = selectedChildId
             ? nextChildren.find((child) => child.id === selectedChildId)
             : null;
-          setSelectedChild(stillVisibleChild || nextChildren[0]);
+          setSelectedChild(stillVisibleChild || null);
         } else {
           setSelectedChild(null);
         }

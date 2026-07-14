@@ -148,6 +148,7 @@ function mapWebStudentToChild(row) {
     lastName: row.lastName,
     className: row.className ?? "",
     birthDate: row.birthDate ?? "",
+    gender: row.gender ?? void 0,
     avatarUrl: ""
   };
 }
