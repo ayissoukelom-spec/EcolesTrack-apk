@@ -23,389 +23,385 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 
 // server.ts
 var import_express = __toESM(require("express"), 1);
-var import_path = __toESM(require("path"), 1);
+var import_path2 = __toESM(require("path"), 1);
 var import_vite = require("vite");
 
 // backend/store.ts
-var fs = __toESM(require("fs"), 1);
-var path = __toESM(require("path"), 1);
 var crypto = __toESM(require("crypto"), 1);
-var DB_PATH = path.join(process.cwd(), "db.json");
-var INITIAL_DATABASE = {
-  parents: [
-    {
-      id: "parent-jean-dupont",
-      name: "Jean Dupont",
-      email: "jean.dupont@email.com",
-      phoneNumber: "+33612345678",
-      activeSchoolId: "school-pasteur",
-      schools: [
-        { id: "school-pasteur", name: "Coll\xE8ge Louis Pasteur" },
-        { id: "school-moliere", name: "Lyc\xE9e Moli\xE8re" }
-      ],
-      passwordHash: "parent123",
-      // Simple plain or hashed for mockup validation
-      role: "parent"
-    },
-    {
-      id: "parent-marie-martin",
-      name: "Marie Martin",
-      email: "marie.martin@email.com",
-      phoneNumber: "+33698765432",
-      activeSchoolId: "school-pasteur",
-      schools: [
-        { id: "school-pasteur", name: "Coll\xE8ge Louis Pasteur" }
-      ],
-      passwordHash: "parent123",
-      role: "parent"
-    },
-    // Admin & Teacher to demonstrate the 403 Parent-Only protection
-    {
-      id: "user-admin",
-      name: "Directeur Acad\xE9mique",
-      email: "admin@ecoletrack.fr",
-      phoneNumber: "+33600000001",
-      activeSchoolId: "school-pasteur",
-      schools: [],
-      passwordHash: "admin123",
-      role: "school_admin"
-    },
-    {
-      id: "user-teacher",
-      name: "M. Legendre (Prof de Maths)",
-      email: "teacher@ecoletrack.fr",
-      phoneNumber: "+33600000002",
-      activeSchoolId: "school-pasteur",
-      schools: [],
-      passwordHash: "teacher123",
-      role: "teacher"
+
+// backend/postgres.ts
+var import_path = __toESM(require("path"), 1);
+var import_fs = require("fs");
+var dotenv = __toESM(require("dotenv"), 1);
+var import_pg = require("pg");
+function loadEnvironment() {
+  const candidates = [
+    import_path.default.resolve(process.cwd(), ".env"),
+    import_path.default.resolve(process.cwd(), "..", "web ecoles", ".env"),
+    import_path.default.resolve(process.cwd(), "..", "web ecoles", ".env.local")
+  ];
+  for (const candidate of candidates) {
+    if (candidate && (0, import_fs.existsSync)(candidate)) {
+      dotenv.config({ path: candidate });
+      return candidate;
     }
-  ],
-  schools: [
-    { id: "school-pasteur", name: "Coll\xE8ge Louis Pasteur", address: "12 Rue des \xC9coles, Paris" },
-    { id: "school-moliere", name: "Lyc\xE9e Moli\xE8re", address: "45 Avenue Moli\xE8re, Paris" }
-  ],
-  parentSchools: [
-    { parentId: "parent-jean-dupont", schoolId: "school-pasteur" },
-    { parentId: "parent-jean-dupont", schoolId: "school-moliere" },
-    { parentId: "parent-marie-martin", schoolId: "school-pasteur" }
-  ],
-  children: [
-    {
-      id: "child-lucas",
-      parentId: "parent-jean-dupont",
-      firstName: "Lucas",
-      lastName: "Dupont",
-      className: "4\xE8me B",
-      avatarUrl: "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&q=80&w=120"
-    },
-    {
-      id: "child-chloe",
-      parentId: "parent-jean-dupont",
-      firstName: "Chlo\xE9",
-      lastName: "Dupont",
-      className: "6\xE8me A",
-      avatarUrl: "https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&q=80&w=120"
-    },
-    {
-      id: "child-theo",
-      parentId: "parent-marie-martin",
-      firstName: "Th\xE9o",
-      lastName: "Martin",
-      className: "3\xE8me C",
-      avatarUrl: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=120"
-    }
-  ],
-  absences: [
-    {
-      id: "abs-1",
-      childId: "child-lucas",
-      date: "2026-06-15T08:30:00Z",
-      reason: "Gastro-ent\xE9rite aigu\xEB",
-      justified: true,
-      justificationText: "Certificat m\xE9dical envoy\xE9 le 16/06."
-    },
-    {
-      id: "abs-2",
-      childId: "child-lucas",
-      date: "2026-07-02T10:00:00Z",
-      reason: "Retard injustifi\xE9 cours d'Histoire",
-      justified: false
-    },
-    {
-      id: "abs-3",
-      childId: "child-chloe",
-      date: "2026-06-20T14:00:00Z",
-      reason: "Rendez-vous orthodontiste",
-      justified: true,
-      justificationText: "Mot de passe sign\xE9 des parents fourni en amont."
-    },
-    {
-      id: "abs-4",
-      childId: "child-theo",
-      date: "2026-06-28T09:00:00Z",
-      reason: "Panne de r\xE9veil",
-      justified: false
-    }
-  ],
-  grades: [
-    {
-      id: "grade-1",
-      childId: "child-lucas",
-      subject: "Math\xE9matiques",
-      grade: 15.5,
-      coefficient: 2,
-      examName: "Contr\xF4le Alg\xE8bre & Fonctions",
-      date: "2026-06-10"
-    },
-    {
-      id: "grade-2",
-      childId: "child-lucas",
-      subject: "Fran\xE7ais",
-      grade: 12,
-      coefficient: 1,
-      examName: "Expression \xE9crite - Commentaire de texte",
-      date: "2026-06-14"
-    },
-    {
-      id: "grade-3",
-      childId: "child-lucas",
-      subject: "Histoire-G\xE9ographie",
-      grade: 14,
-      coefficient: 1.5,
-      examName: "\xC9valuation - La Premi\xE8re Guerre Mondiale",
-      date: "2026-06-25"
-    },
-    {
-      id: "grade-4",
-      childId: "child-chloe",
-      subject: "Math\xE9matiques",
-      grade: 18,
-      coefficient: 1,
-      examName: "Calcul mental - Tables et fractions",
-      date: "2026-06-12"
-    },
-    {
-      id: "grade-5",
-      childId: "child-chloe",
-      subject: "Anglais",
-      grade: 16.5,
-      coefficient: 1.5,
-      examName: "Vocabulaire & Verbes irr\xE9guliers",
-      date: "2026-06-18"
-    },
-    {
-      id: "grade-6",
-      childId: "child-chloe",
-      subject: "SVT",
-      grade: 9.5,
-      coefficient: 1,
-      examName: "Contr\xF4le - Le syst\xE8me solaire",
-      date: "2026-06-27"
-    },
-    {
-      id: "grade-7",
-      childId: "child-theo",
-      subject: "Math\xE9matiques",
-      grade: 11,
-      coefficient: 2,
-      examName: "Devoir commun - G\xE9om\xE9trie",
-      date: "2026-06-20"
-    }
-  ],
-  appNotifications: [
-    {
-      id: "not-1",
-      parentId: "parent-jean-dupont",
-      title: "Nouvelle absence signal\xE9e",
-      message: "Votre enfant Lucas Dupont a \xE9t\xE9 signal\xE9 absent aujourd'hui \xE0 10:00. Veuillez fournir un justificatif.",
-      read: false,
-      createdAt: "2026-07-02T10:15:00Z",
-      deepLink: "ecoletrack://absences?childId=child-lucas"
-    },
-    {
-      id: "not-2",
-      parentId: "parent-jean-dupont",
-      title: "Nouvelle note disponible",
-      message: "Lucas Dupont a re\xE7u un 14/20 en Histoire-G\xE9ographie (Coeff 1.5).",
-      read: true,
-      createdAt: "2026-06-25T16:00:00Z",
-      deepLink: "ecoletrack://grades?childId=child-lucas"
-    }
-  ],
-  parentDevices: [],
-  notificationPreferences: [
-    {
-      parentId: "parent-jean-dupont",
-      pushEnabled: true,
-      whatsappEnabled: true,
-      smsEnabled: false,
-      quietHoursStart: "22:00",
-      quietHoursEnd: "07:00"
-    },
-    {
-      parentId: "parent-marie-martin",
-      pushEnabled: true,
-      whatsappEnabled: false,
-      smsEnabled: true,
-      quietHoursStart: "21:30",
-      quietHoursEnd: "07:30"
-    }
-  ],
-  parentConsents: [
-    {
-      id: "c-1",
-      parentId: "parent-jean-dupont",
-      channel: "whatsapp",
-      consentGranted: true,
-      consentTextVersion: "v1.0-fr",
-      consentedAt: "2026-05-01T10:00:00Z"
-    },
-    {
-      id: "c-2",
-      parentId: "parent-jean-dupont",
-      channel: "sms",
-      consentGranted: false,
-      consentTextVersion: "v1.0-fr",
-      consentedAt: "2026-05-01T10:00:00Z",
-      revokedAt: "2026-06-01T15:30:00Z"
-    },
-    {
-      id: "c-3",
-      parentId: "parent-marie-martin",
-      channel: "sms",
-      consentGranted: true,
-      consentTextVersion: "v1.0-fr",
-      consentedAt: "2026-05-15T11:00:00Z"
-    }
-  ],
-  notificationEvents: [],
-  notificationDeliveries: []
-};
-var JSONStore = class {
+  }
+  return null;
+}
+loadEnvironment();
+var pool = new import_pg.Pool({
+  host: process.env.SQL_HOST ?? "127.0.0.1",
+  port: Number(process.env.SQL_PORT ?? 5432),
+  user: process.env.SQL_USER,
+  password: process.env.SQL_PASSWORD,
+  database: process.env.SQL_DB_NAME,
+  connectionTimeoutMillis: 15e3,
+  max: 10
+});
+pool.on("error", (err) => {
+  console.error("Unexpected PostgreSQL pool error:", err);
+});
+async function initializeMobileTables() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS mobile_parent_devices (
+      id SERIAL PRIMARY KEY,
+      parent_id TEXT NOT NULL,
+      platform TEXT NOT NULL,
+      push_token TEXT NOT NULL,
+      app_version TEXT NOT NULL,
+      last_seen_at TIMESTAMP DEFAULT now()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS mobile_parent_devices_unique_idx ON mobile_parent_devices (parent_id, platform, push_token);
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS mobile_notification_preferences (
+      parent_id TEXT PRIMARY KEY,
+      push_enabled BOOLEAN NOT NULL DEFAULT true,
+      whatsapp_enabled BOOLEAN NOT NULL DEFAULT false,
+      sms_enabled BOOLEAN NOT NULL DEFAULT false,
+      quiet_hours_start TEXT NOT NULL DEFAULT '22:00',
+      quiet_hours_end TEXT NOT NULL DEFAULT '07:00'
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS mobile_notification_consents (
+      id SERIAL PRIMARY KEY,
+      parent_id TEXT NOT NULL,
+      channel TEXT NOT NULL,
+      consent_granted BOOLEAN NOT NULL DEFAULT false,
+      consent_text_version TEXT NOT NULL DEFAULT 'v1.0-fr',
+      consented_at TIMESTAMP DEFAULT now(),
+      revoked_at TIMESTAMP
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS mobile_notification_events (
+      id SERIAL PRIMARY KEY,
+      parent_id TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      dedupe_key TEXT NOT NULL UNIQUE,
+      created_at TIMESTAMP DEFAULT now()
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS mobile_notification_deliveries (
+      id SERIAL PRIMARY KEY,
+      event_id INTEGER NOT NULL,
+      channel TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      status TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      provider_message_id TEXT,
+      error_code TEXT,
+      error_message TEXT,
+      sent_at TIMESTAMP,
+      delivered_at TIMESTAMP
+    );
+  `);
+}
+async function dbQuery(text, params = []) {
+  const result = await pool.query(text, params);
+  return result;
+}
+
+// backend/mobileAdapter.ts
+function mapWebParentToMobileParent(row) {
+  return {
+    id: String(row.userId),
+    name: row.userName,
+    email: row.userEmail,
+    phoneNumber: row.userPhone ?? "",
+    activeSchoolId: row.activeSchoolId != null ? String(row.activeSchoolId) : "",
+    schools: (row.schoolMemberships ?? []).map((school) => ({
+      id: String(school.id),
+      name: school.name
+    })),
+    role: row.role
+  };
+}
+function mapWebStudentToChild(row) {
+  return {
+    id: String(row.id),
+    parentId: row.parentId != null ? String(row.parentId) : "",
+    firstName: row.firstName,
+    lastName: row.lastName,
+    className: row.className ?? "",
+    birthDate: row.birthDate ?? "",
+    avatarUrl: ""
+  };
+}
+
+// backend/store.ts
+var PostgresStore = class {
   constructor() {
-    this.data = { ...INITIAL_DATABASE };
-    this.load();
+    void initializeMobileTables();
   }
-  load() {
-    try {
-      if (fs.existsSync(DB_PATH)) {
-        const fileContent = fs.readFileSync(DB_PATH, "utf-8");
-        this.data = JSON.parse(fileContent);
-        for (const key of Object.keys(INITIAL_DATABASE)) {
-          if (!this.data[key]) {
-            this.data[key] = INITIAL_DATABASE[key];
-          }
-        }
-      } else {
-        this.save();
-      }
-    } catch (e) {
-      console.error("Failed to load JSON database, using in-memory default", e);
-      this.data = { ...INITIAL_DATABASE };
-    }
+  async ensureParentRecord(parentId) {
+    const { rows } = await dbQuery(`
+      SELECT u.id AS user_id, u.email, u.name, u.role, u.school_id, p.phone
+      FROM users u
+      LEFT JOIN parents p ON p.user_id = u.id
+      WHERE u.id = $1
+    `, [Number(parentId)]);
+    if (rows.length === 0) return null;
+    const row = rows[0];
+    const schoolRows = await dbQuery(`
+      SELECT s.id, s.name
+      FROM user_schools us
+      JOIN schools s ON s.id = us.school_id
+      WHERE us.user_id = $1 AND us.is_active = true
+    `, [Number(parentId)]);
+    return mapWebParentToMobileParent({
+      userId: row.user_id,
+      userEmail: row.email,
+      userName: row.name,
+      userPhone: row.phone ?? null,
+      activeSchoolId: row.school_id ?? null,
+      schoolMemberships: schoolRows.rows.map((school) => ({ id: school.id, name: school.name })),
+      role: row.role
+    });
   }
-  save() {
-    try {
-      fs.writeFileSync(DB_PATH, JSON.stringify(this.data, null, 2), "utf-8");
-    } catch (e) {
-      console.error("Failed to save JSON database to disk", e);
-    }
-  }
-  // Parents
-  findParentByEmail(email) {
-    return this.data.parents.find((p) => p.email.toLowerCase() === email.toLowerCase());
-  }
-  getParentById(id) {
-    return this.data.parents.find((p) => p.id === id);
-  }
-  // Children
-  getChildrenOfParent(parentId) {
-    const linkedChildren = this.data.children.filter((c) => c.parentId === parentId);
-    if (linkedChildren.length > 0) {
-      return linkedChildren;
-    }
-    const parent = this.getParentById(parentId);
-    if (!parent || parent.role !== "parent") {
-      return linkedChildren;
-    }
-    const simulatedChild = {
-      id: "child-sim-" + crypto.randomUUID().slice(0, 8),
-      parentId,
-      firstName: "Enfant",
-      lastName: "Simule",
-      className: "Classe de demonstration",
-      birthDate: "2014-09-01",
-      avatarUrl: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=120"
+  async getParentByEmail(email) {
+    const { rows } = await dbQuery(`
+      SELECT u.id AS user_id, u.email, u.name, u.role, p.phone, u.school_id, la.password_hash, la.salt
+      FROM users u
+      LEFT JOIN parents p ON p.user_id = u.id
+      LEFT JOIN local_auths la ON la.user_id = u.id
+      WHERE LOWER(u.email) = LOWER($1)
+      LIMIT 1
+    `, [email]);
+    if (rows.length === 0) return null;
+    const row = rows[0];
+    const schoolRows = await dbQuery(`
+      SELECT s.id, s.name
+      FROM user_schools us
+      JOIN schools s ON s.id = us.school_id
+      WHERE us.user_id = $1 AND us.is_active = true
+    `, [row.user_id]);
+    const parent = {
+      ...mapWebParentToMobileParent({
+        userId: row.user_id,
+        userEmail: row.email,
+        userName: row.name,
+        userPhone: row.phone ?? null,
+        activeSchoolId: row.school_id ?? null,
+        schoolMemberships: schoolRows.rows.map((school) => ({ id: school.id, name: school.name })),
+        role: row.role
+      }),
+      passwordHash: row.password_hash ?? "",
+      role: row.role,
+      salt: row.salt ?? void 0
     };
-    this.data.children.unshift(simulatedChild);
-    this.save();
-    return [simulatedChild];
+    return parent;
   }
-  createSimulatedChildForParent(parentId) {
-    const parent = this.getParentById(parentId);
-    if (!parent || parent.role !== "parent") {
+  async findParentByEmail(email) {
+    return this.getParentByEmail(email);
+  }
+  async verifyParentPassword(email, password) {
+    const user = await this.getParentByEmail(email);
+    if (!user || !user.passwordHash || !user.salt) {
+      return false;
+    }
+    const verifyHash = crypto.pbkdf2Sync(password, user.salt, 31e4, 64, "sha512").toString("hex");
+    return verifyHash === user.passwordHash;
+  }
+  async getParentById(id) {
+    return this.ensureParentRecord(id);
+  }
+  async getChildrenOfParent(parentId) {
+    const userId = Number(parentId);
+    if (!Number.isInteger(userId)) return [];
+    const { rows } = await dbQuery(`
+      SELECT s.id, s.first_name, s.last_name, s.birth_date, s.parent_id,
+             c.name AS class_name
+      FROM students s
+      LEFT JOIN classes c ON c.id = s.class_id
+      LEFT JOIN parents p ON p.id = s.parent_id
+      WHERE p.user_id = $1
+    `, [userId]);
+    if (rows.length === 0) {
+      const parent = await this.getParentById(parentId);
+      if (!parent) return [];
+      return [];
+    }
+    return rows.map((row) => mapWebStudentToChild({
+      id: row.id,
+      firstName: row.first_name,
+      lastName: row.last_name,
+      birthDate: row.birth_date ?? "",
+      parentId: row.parent_id ?? null,
+      className: row.class_name ?? ""
+    }));
+  }
+  async createSimulatedChildForParent(parentId) {
+    const parent = await this.getParentById(parentId);
+    if (!parent) {
       return null;
     }
-    const simulatedChild = {
-      id: "child-sim-" + crypto.randomUUID().slice(0, 8),
+    return {
+      id: `child-sim-${crypto.randomUUID().slice(0, 8)}`,
       parentId,
-      firstName: "Eleve",
+      firstName: "\xC9l\xE8ve",
       lastName: "Demo",
-      className: "5eme Demo",
+      className: "5\xE8me Demo",
       birthDate: "2013-09-01",
-      avatarUrl: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=120"
+      avatarUrl: ""
     };
-    this.data.children.unshift(simulatedChild);
-    this.save();
-    return simulatedChild;
   }
-  isChildOwnedByParent(childId, parentId) {
-    const child = this.data.children.find((c) => c.id === childId);
-    return child ? child.parentId === parentId : false;
+  async isChildOwnedByParent(childId, parentId) {
+    const parentUserId = Number(parentId);
+    const childIdNum = Number(childId);
+    if (!Number.isInteger(parentUserId) || !Number.isInteger(childIdNum)) return false;
+    const { rows } = await dbQuery(`
+      SELECT COUNT(*)::text AS count
+      FROM students s
+      JOIN parents p ON p.id = s.parent_id
+      WHERE s.id = $1 AND p.user_id = $2
+    `, [childIdNum, parentUserId]);
+    return Number(rows[0]?.count ?? 0) > 0;
   }
-  // Absences
-  getAbsencesOfChild(childId) {
-    return this.data.absences.filter((a) => a.childId === childId);
-  }
-  addAbsence(absence) {
-    const newAbsence = {
-      id: "abs-" + crypto.randomUUID().slice(0, 8),
+  async addAbsence(absence) {
+    const childIdNum = Number(absence.childId);
+    if (!Number.isInteger(childIdNum)) {
+      throw new Error("Invalid child id for absence insertion");
+    }
+    const studentRow = await dbQuery(`SELECT class_id FROM students WHERE id = $1`, [childIdNum]);
+    const classId = studentRow.rows[0]?.class_id ?? null;
+    const { rows } = await dbQuery(`
+      INSERT INTO absences (student_id, class_id, date, period, is_justified, justification_reason)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING id
+    `, [childIdNum, classId, absence.date, "all_day", absence.justified, absence.justificationText ?? null]);
+    return {
+      id: String(rows[0]?.id ?? 0),
       ...absence
     };
-    this.data.absences.unshift(newAbsence);
-    this.save();
-    return newAbsence;
   }
-  // Grades
-  getGradesOfChild(childId) {
-    return this.data.grades.filter((g) => g.childId === childId);
+  async getAbsencesOfChild(childId) {
+    const childIdNum = Number(childId);
+    if (!Number.isInteger(childIdNum)) return [];
+    const { rows } = await dbQuery(`
+      SELECT id, date, period, is_justified, justification_reason
+      FROM absences
+      WHERE student_id = $1
+    `, [childIdNum]);
+    return rows.map((row) => ({
+      id: String(row.id),
+      childId,
+      date: row.date,
+      reason: row.justification_reason ?? (row.is_justified ? "Absence justifi\xE9e" : "Absence non justifi\xE9e"),
+      justified: row.is_justified,
+      justificationText: row.justification_reason ?? void 0
+    }));
   }
-  addGrade(grade) {
-    const newGrade = {
-      id: "grade-" + crypto.randomUUID().slice(0, 8),
+  async addGrade(grade) {
+    const childIdNum = Number(grade.childId);
+    if (!Number.isInteger(childIdNum)) {
+      throw new Error("Invalid child id for grade insertion");
+    }
+    const studentRow = await dbQuery(`SELECT class_id FROM students WHERE id = $1`, [childIdNum]);
+    const classId = studentRow.rows[0]?.class_id ?? null;
+    const teacherRow = await dbQuery(`SELECT id FROM teachers LIMIT 1`);
+    const teacherId = teacherRow.rows[0]?.id ?? 1;
+    const evaluationRow = await dbQuery(`
+      INSERT INTO evaluations (class_id, teacher_id, subject, title, coefficient, max_score, count_in_bulletin, date)
+      VALUES ($1, $2, $3, $4, $5, $6, true, $7)
+      RETURNING id
+    `, [classId, teacherId, grade.subject, grade.examName, Math.max(1, Math.round(grade.coefficient)), 20, grade.date]);
+    const evaluationId = evaluationRow.rows[0]?.id;
+    if (!evaluationId) {
+      throw new Error("Failed to create evaluation record for grade insertion");
+    }
+    const { rows } = await dbQuery(`
+      INSERT INTO grades (evaluation_id, student_id, score, remarks, edit_count, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, 0, NOW(), NOW())
+      RETURNING id
+    `, [evaluationId, childIdNum, String(grade.grade), "", 0]);
+    return {
+      id: String(rows[0]?.id ?? 0),
       ...grade
     };
-    this.data.grades.unshift(newGrade);
-    this.save();
-    return newGrade;
   }
-  // In-App Notifications
-  getInAppNotifications(parentId) {
-    return this.data.appNotifications.filter((n) => n.parentId === parentId);
+  async getGradesOfChild(childId) {
+    const childIdNum = Number(childId);
+    if (!Number.isInteger(childIdNum)) return [];
+    const { rows } = await dbQuery(`
+      SELECT g.id, e.subject, g.score, e.coefficient, e.title, e.date
+      FROM grades g
+      JOIN evaluations e ON e.id = g.evaluation_id
+      WHERE g.student_id = $1
+    `, [childIdNum]);
+    return rows.map((row) => ({
+      id: String(row.id),
+      childId,
+      subject: row.subject,
+      grade: Number(row.score),
+      coefficient: Number(row.coefficient ?? 1),
+      examName: row.title,
+      date: row.date
+    }));
   }
-  markAllInAppNotificationsAsRead(parentId) {
-    this.data.appNotifications = this.data.appNotifications.map((n) => {
-      if (n.parentId === parentId) {
-        return { ...n, read: true };
-      }
-      return n;
-    });
-    this.save();
+  async getInAppNotifications(parentId) {
+    const userId = Number(parentId);
+    if (!Number.isInteger(userId)) return [];
+    const { rows } = await dbQuery(`
+      SELECT id, title, body, is_read, created_at
+      FROM notifications
+      WHERE user_id = $1
+      ORDER BY created_at DESC
+    `, [userId]);
+    return rows.map((row) => ({
+      id: String(row.id),
+      parentId,
+      title: row.title,
+      message: row.body,
+      read: row.is_read,
+      createdAt: row.created_at,
+      deepLink: void 0
+    }));
   }
-  addInAppNotification(parentId, title, message, deepLink) {
-    const notification = {
-      id: "not-" + crypto.randomUUID().slice(0, 8),
+  async markAllInAppNotificationsAsRead(parentId) {
+    const userId = Number(parentId);
+    if (!Number.isInteger(userId)) return;
+    await dbQuery(`
+      UPDATE notifications
+      SET is_read = true
+      WHERE user_id = $1
+    `, [userId]);
+  }
+  async addInAppNotification(parentId, title, message, deepLink) {
+    const userId = Number(parentId);
+    if (!Number.isInteger(userId)) {
+      throw new Error("Invalid parent id for notification insertion");
+    }
+    const { rows } = await dbQuery(`
+      INSERT INTO notifications (user_id, title, body, type, is_read, created_at)
+      VALUES ($1, $2, $3, $4, false, NOW())
+      RETURNING id
+    `, [userId, title, message, "info"]);
+    return {
+      id: String(rows[0]?.id ?? 0),
       parentId,
       title,
       message,
@@ -413,155 +409,225 @@ var JSONStore = class {
       createdAt: (/* @__PURE__ */ new Date()).toISOString(),
       deepLink
     };
-    this.data.appNotifications.unshift(notification);
-    this.save();
-    return notification;
   }
-  // Device Tokens
-  registerPushToken(parentId, token, platform, appVersion) {
-    this.data.parentDevices = this.data.parentDevices.filter((d) => d.pushToken !== token);
-    const device = {
-      id: "dev-" + crypto.randomUUID().slice(0, 8),
+  async registerPushToken(parentId, token, platform, appVersion) {
+    const { rows } = await dbQuery(`
+      INSERT INTO mobile_parent_devices (parent_id, platform, push_token, app_version, last_seen_at)
+      VALUES ($1, $2, $3, $4, NOW())
+      RETURNING id
+    `, [parentId, platform, token, appVersion]);
+    return {
+      id: String(rows[0]?.id ?? 0),
       parentId,
       platform,
       pushToken: token,
       appVersion,
       lastSeenAt: (/* @__PURE__ */ new Date()).toISOString()
     };
-    this.data.parentDevices.push(device);
-    this.save();
-    return device;
   }
-  getDevicesOfParent(parentId) {
-    return this.data.parentDevices.filter((d) => d.parentId === parentId);
+  async getDevicesOfParent(parentId) {
+    const { rows } = await dbQuery(`
+      SELECT id, platform, push_token, app_version, last_seen_at
+      FROM mobile_parent_devices
+      WHERE parent_id = $1
+      ORDER BY last_seen_at DESC
+    `, [parentId]);
+    return rows.map((row) => ({
+      id: String(row.id),
+      parentId,
+      platform: row.platform,
+      pushToken: row.push_token,
+      appVersion: row.app_version,
+      lastSeenAt: row.last_seen_at
+    }));
   }
-  // Preferences
-  getNotificationPreferences(parentId) {
-    let pref = this.data.notificationPreferences.find((p) => p.parentId === parentId);
-    if (!pref) {
-      pref = {
+  async getNotificationPreferences(parentId) {
+    const { rows } = await dbQuery(`
+      SELECT push_enabled, whatsapp_enabled, sms_enabled, quiet_hours_start, quiet_hours_end
+      FROM mobile_notification_preferences
+      WHERE parent_id = $1
+    `, [parentId]);
+    if (rows.length > 0) {
+      const row = rows[0];
+      return {
         parentId,
-        pushEnabled: true,
-        whatsappEnabled: false,
-        smsEnabled: false,
-        quietHoursStart: "22:00",
-        quietHoursEnd: "07:00"
+        pushEnabled: row.push_enabled,
+        whatsappEnabled: row.whatsapp_enabled,
+        smsEnabled: row.sms_enabled,
+        quietHoursStart: row.quiet_hours_start,
+        quietHoursEnd: row.quiet_hours_end
       };
-      this.data.notificationPreferences.push(pref);
-      this.save();
     }
-    return pref;
+    await dbQuery(`
+      INSERT INTO mobile_notification_preferences (parent_id, push_enabled, whatsapp_enabled, sms_enabled, quiet_hours_start, quiet_hours_end)
+      VALUES ($1, true, false, false, '22:00', '07:00')
+    `, [parentId]);
+    return {
+      parentId,
+      pushEnabled: true,
+      whatsappEnabled: false,
+      smsEnabled: false,
+      quietHoursStart: "22:00",
+      quietHoursEnd: "07:00"
+    };
   }
-  updateNotificationPreferences(parentId, updates) {
-    const index = this.data.notificationPreferences.findIndex((p) => p.parentId === parentId);
-    let pref;
-    if (index === -1) {
-      pref = {
-        parentId,
-        pushEnabled: true,
-        whatsappEnabled: false,
-        smsEnabled: false,
-        quietHoursStart: "22:00",
-        quietHoursEnd: "07:00",
-        ...updates
-      };
-      this.data.notificationPreferences.push(pref);
-    } else {
-      pref = {
-        ...this.data.notificationPreferences[index],
-        ...updates
-      };
-      this.data.notificationPreferences[index] = pref;
-    }
-    this.save();
-    return pref;
+  async updateNotificationPreferences(parentId, updates) {
+    const existing = await this.getNotificationPreferences(parentId);
+    const next = { ...existing, ...updates, parentId };
+    await dbQuery(`
+      INSERT INTO mobile_notification_preferences (parent_id, push_enabled, whatsapp_enabled, sms_enabled, quiet_hours_start, quiet_hours_end)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      ON CONFLICT (parent_id) DO UPDATE SET
+        push_enabled = EXCLUDED.push_enabled,
+        whatsapp_enabled = EXCLUDED.whatsapp_enabled,
+        sms_enabled = EXCLUDED.sms_enabled,
+        quiet_hours_start = EXCLUDED.quiet_hours_start,
+        quiet_hours_end = EXCLUDED.quiet_hours_end
+    `, [parentId, next.pushEnabled, next.whatsappEnabled, next.smsEnabled, next.quietHoursStart, next.quietHoursEnd]);
+    return next;
   }
-  // Consent Center
-  getConsentsOfParent(parentId) {
-    return this.data.parentConsents.filter((c) => c.parentId === parentId);
+  async getConsentsOfParent(parentId) {
+    const { rows } = await dbQuery(`
+      SELECT id, channel, consent_granted, consent_text_version, consented_at, revoked_at
+      FROM mobile_notification_consents
+      WHERE parent_id = $1
+      ORDER BY consented_at ASC
+    `, [parentId]);
+    return rows.map((row) => ({
+      id: String(row.id),
+      parentId,
+      channel: row.channel,
+      consentGranted: row.consent_granted,
+      consentTextVersion: row.consent_text_version,
+      consentedAt: row.consented_at,
+      revokedAt: row.revoked_at ?? void 0
+    }));
   }
-  updateConsent(parentId, channel, granted, textVersion) {
+  async updateConsent(parentId, channel, granted, textVersion) {
     const timestamp = (/* @__PURE__ */ new Date()).toISOString();
-    this.data.parentConsents = this.data.parentConsents.map((c) => {
-      if (c.parentId === parentId && c.channel === channel && !c.revokedAt) {
-        return { ...c, revokedAt: timestamp };
-      }
-      return c;
-    });
-    const consent = {
-      id: "consent-" + crypto.randomUUID().slice(0, 8),
+    const { rows } = await dbQuery(`
+      INSERT INTO mobile_notification_consents (parent_id, channel, consent_granted, consent_text_version, consented_at, revoked_at)
+      VALUES ($1, $2, $3, $4, $5, NULL)
+      RETURNING id
+    `, [parentId, channel, granted, textVersion, timestamp]);
+    return {
+      id: String(rows[0]?.id ?? 0),
       parentId,
       channel,
       consentGranted: granted,
       consentTextVersion: textVersion,
       consentedAt: timestamp
     };
-    this.data.parentConsents.push(consent);
-    this.save();
-    return consent;
   }
-  // Notification Event logging
-  createNotificationEvent(parentId, eventType, payload, dedupeKey) {
-    const existing = this.data.notificationEvents.find((e) => e.dedupeKey === dedupeKey);
-    if (existing) {
-      console.log(`[IDEMPOTENCY TRIGGERED] Event with dedupe_key ${dedupeKey} already exists. Skipping insertion.`);
+  async createNotificationEvent(parentId, eventType, payload, dedupeKey) {
+    const existing = await dbQuery(`SELECT id FROM mobile_notification_events WHERE dedupe_key = $1`, [dedupeKey]);
+    if (existing.rows.length > 0) {
       return null;
     }
-    const event = {
-      id: "evt-" + crypto.randomUUID().slice(0, 8),
+    const { rows } = await dbQuery(`
+      INSERT INTO mobile_notification_events (parent_id, event_type, payload_json, dedupe_key, created_at)
+      VALUES ($1, $2, $3, $4, NOW())
+      RETURNING id
+    `, [parentId, eventType, JSON.stringify(payload), dedupeKey]);
+    return {
+      id: String(rows[0]?.id ?? 0),
       parentId,
       eventType,
       payloadJson: JSON.stringify(payload),
       dedupeKey,
       createdAt: (/* @__PURE__ */ new Date()).toISOString()
     };
-    this.data.notificationEvents.unshift(event);
-    this.save();
-    return event;
   }
-  addNotificationDelivery(delivery) {
-    const newDelivery = {
-      id: "del-" + crypto.randomUUID().slice(0, 8),
-      ...delivery
+  async addNotificationDelivery(delivery) {
+    const { rows } = await dbQuery(`
+      INSERT INTO mobile_notification_deliveries (event_id, channel, provider, status, attempts, provider_message_id, error_code, error_message, sent_at, delivered_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      RETURNING id
+    `, [Number(delivery.eventId), delivery.channel, delivery.provider, delivery.status, delivery.attempts, delivery.providerMessageId ?? null, delivery.errorCode ?? null, delivery.errorMessage ?? null, delivery.sentAt ?? null, delivery.deliveredAt ?? null]);
+    return {
+      ...delivery,
+      id: String(rows[0]?.id ?? 0)
     };
-    this.data.notificationDeliveries.unshift(newDelivery);
-    this.save();
-    return newDelivery;
   }
-  updateNotificationDeliveryStatus(id, updates) {
-    const index = this.data.notificationDeliveries.findIndex((d) => d.id === id);
-    if (index !== -1) {
-      this.data.notificationDeliveries[index] = {
-        ...this.data.notificationDeliveries[index],
-        ...updates
-      };
-      this.save();
-    }
-  }
-  // Logs queries
-  getCompleteDeliveryLogs() {
-    return this.data.notificationEvents.map((event) => {
-      const deliveries = this.data.notificationDeliveries.filter((d) => d.eventId === event.id);
-      return { event, deliveries };
+  async updateNotificationDeliveryStatus(id, updates) {
+    const deliveryId = Number(id);
+    if (!Number.isInteger(deliveryId)) return;
+    const fields = [];
+    const values = [];
+    const map = {
+      status: "status",
+      attempts: "attempts",
+      providerMessageId: "provider_message_id",
+      errorCode: "error_code",
+      errorMessage: "error_message",
+      sentAt: "sent_at",
+      deliveredAt: "delivered_at"
+    };
+    Object.entries(updates).forEach(([key, value]) => {
+      const column = map[key];
+      if (!column || value === void 0) return;
+      fields.push(`${column} = $${fields.length + 2}`);
+      values.push(value);
     });
+    if (fields.length === 0) return;
+    await dbQuery(`UPDATE mobile_notification_deliveries SET ${fields.join(", ")} WHERE id = $1`, [deliveryId, ...values]);
   }
-  clearAllLogs() {
-    this.data.notificationEvents = [];
-    this.data.notificationDeliveries = [];
-    this.data.appNotifications = this.data.appNotifications.filter((n) => !n.id.startsWith("test-"));
-    this.save();
+  async getCompleteDeliveryLogs() {
+    const { rows } = await dbQuery(`
+      SELECT id, parent_id, event_type, payload_json, dedupe_key, created_at
+      FROM mobile_notification_events
+      ORDER BY created_at DESC
+    `);
+    const result = [];
+    for (const event of rows) {
+      const deliveries = await dbQuery(`
+        SELECT id, event_id, channel, provider, status, attempts, provider_message_id, error_code, error_message, sent_at, delivered_at
+        FROM mobile_notification_deliveries
+        WHERE event_id = $1
+        ORDER BY id ASC
+      `, [event.id]);
+      result.push({
+        event: {
+          id: String(event.id),
+          parentId: event.parent_id,
+          eventType: event.event_type,
+          payloadJson: event.payload_json,
+          dedupeKey: event.dedupe_key,
+          createdAt: event.created_at
+        },
+        deliveries: deliveries.rows.map((row) => ({
+          id: String(row.id),
+          eventId: String(row.event_id),
+          channel: row.channel,
+          provider: row.provider,
+          status: row.status,
+          attempts: row.attempts,
+          providerMessageId: row.provider_message_id ?? void 0,
+          errorCode: row.error_code ?? void 0,
+          errorMessage: row.error_message ?? void 0,
+          sentAt: row.sent_at ?? void 0,
+          deliveredAt: row.delivered_at ?? void 0
+        }))
+      });
+    }
+    return result;
+  }
+  async clearAllLogs() {
+    await dbQuery(`DELETE FROM mobile_notification_deliveries`);
+    await dbQuery(`DELETE FROM mobile_notification_events`);
+    await dbQuery(`DELETE FROM notifications WHERE title LIKE 'test-%' OR body LIKE 'test-%'`);
   }
 };
-var store = new JSONStore();
+var store = new PostgresStore();
 async function triggerMultiChannelNotification(parentId, title, message, eventType, payload, dedupeKey) {
-  const appNotif = store.addInAppNotification(parentId, title, message, payload.deepLink);
-  const event = store.createNotificationEvent(parentId, eventType, payload, dedupeKey);
+  const appNotif = await store.addInAppNotification(parentId, title, message, payload.deepLink);
+  const event = await store.createNotificationEvent(parentId, eventType, payload, dedupeKey);
   if (!event) {
     return { status: "deduplicated", reason: "Deduplication key triggered" };
   }
-  const prefs = store.getNotificationPreferences(parentId);
-  const consents = store.getConsentsOfParent(parentId);
-  const parentObj = store.getParentById(parentId);
+  const prefs = await store.getNotificationPreferences(parentId);
+  const consents = await store.getConsentsOfParent(parentId);
+  const parentObj = await store.getParentById(parentId);
   if (!parentObj) {
     return { status: "failed", reason: "Parent not found" };
   }
@@ -593,7 +659,7 @@ async function triggerMultiChannelNotification(parentId, title, message, eventTy
   let whatsappDelivered = false;
   let smsDelivered = false;
   const isQuiet = isQuietHours();
-  const pushDelivery = store.addNotificationDelivery({
+  const pushDelivery = await store.addNotificationDelivery({
     eventId: event.id,
     channel: "push",
     provider: "fcm",
@@ -601,11 +667,11 @@ async function triggerMultiChannelNotification(parentId, title, message, eventTy
     attempts: 0
   });
   if (prefs.pushEnabled) {
-    const devices = store.getDevicesOfParent(parentId);
-    store.updateNotificationDeliveryStatus(pushDelivery.id, { attempts: 1 });
+    const devices = await store.getDevicesOfParent(parentId);
+    await store.updateNotificationDeliveryStatus(pushDelivery.id, { attempts: 1 });
     if (devices.length > 0) {
       const hasAndroidDevice = devices.some((d) => d.platform === "android");
-      store.updateNotificationDeliveryStatus(pushDelivery.id, {
+      await store.updateNotificationDeliveryStatus(pushDelivery.id, {
         status: "delivered",
         providerMessageId: `fcm-msg-${crypto.randomUUID().slice(0, 8)}`,
         sentAt: (/* @__PURE__ */ new Date()).toISOString(),
@@ -614,7 +680,7 @@ async function triggerMultiChannelNotification(parentId, title, message, eventTy
       pushDelivered = true;
       console.log(`[FCM PUSH] Delivered successfully to ${devices.length} registered devices.`);
     } else {
-      store.updateNotificationDeliveryStatus(pushDelivery.id, {
+      await store.updateNotificationDeliveryStatus(pushDelivery.id, {
         status: "failed",
         errorCode: "NO_DEVICES_REGISTERED",
         errorMessage: "Parent registered push but has no active session on device."
@@ -622,7 +688,7 @@ async function triggerMultiChannelNotification(parentId, title, message, eventTy
       console.log(`[FCM PUSH] Failed: No devices registered.`);
     }
   } else {
-    store.updateNotificationDeliveryStatus(pushDelivery.id, {
+    await store.updateNotificationDeliveryStatus(pushDelivery.id, {
       status: "failed",
       errorCode: "PUSH_DISABLED",
       errorMessage: "Push notifications are disabled in parent preferences."
@@ -630,7 +696,7 @@ async function triggerMultiChannelNotification(parentId, title, message, eventTy
     console.log(`[FCM PUSH] Skipped: push is disabled by user.`);
   }
   if (!pushDelivered) {
-    const waDelivery = store.addNotificationDelivery({
+    const waDelivery = await store.addNotificationDelivery({
       eventId: event.id,
       channel: "whatsapp",
       provider: "whatsapp_cloud_api",
@@ -638,23 +704,23 @@ async function triggerMultiChannelNotification(parentId, title, message, eventTy
       attempts: 0
     });
     if (prefs.whatsappEnabled) {
-      store.updateNotificationDeliveryStatus(waDelivery.id, { attempts: 1 });
+      await store.updateNotificationDeliveryStatus(waDelivery.id, { attempts: 1 });
       if (!hasConsent("whatsapp")) {
-        store.updateNotificationDeliveryStatus(waDelivery.id, {
+        await store.updateNotificationDeliveryStatus(waDelivery.id, {
           status: "failed",
           errorCode: "CONSENT_MISSING",
           errorMessage: "WhatsApp consent not given or explicitly revoked."
         });
         console.log(`[WHATSAPP] Failed: No active consent recorded.`);
       } else if (isQuiet) {
-        store.updateNotificationDeliveryStatus(waDelivery.id, {
+        await store.updateNotificationDeliveryStatus(waDelivery.id, {
           status: "failed",
           errorCode: "QUIET_HOURS_BLOCKED",
           errorMessage: `Delivery blocked by Quiet Hours (${prefs.quietHoursStart} - ${prefs.quietHoursEnd}).`
         });
         console.log(`[WHATSAPP] Blocked: Quiet hours active.`);
       } else {
-        store.updateNotificationDeliveryStatus(waDelivery.id, {
+        await store.updateNotificationDeliveryStatus(waDelivery.id, {
           status: "delivered",
           providerMessageId: `wa-msg-${crypto.randomUUID().slice(0, 8)}`,
           sentAt: (/* @__PURE__ */ new Date()).toISOString(),
@@ -664,7 +730,7 @@ async function triggerMultiChannelNotification(parentId, title, message, eventTy
         console.log(`[WHATSAPP] Template message delivered to ${parentObj.phoneNumber}.`);
       }
     } else {
-      store.updateNotificationDeliveryStatus(waDelivery.id, {
+      await store.updateNotificationDeliveryStatus(waDelivery.id, {
         status: "failed",
         errorCode: "CHANNEL_DISABLED",
         errorMessage: "WhatsApp notifications are disabled in parent preferences."
@@ -673,7 +739,7 @@ async function triggerMultiChannelNotification(parentId, title, message, eventTy
     }
   }
   if (!pushDelivered && !whatsappDelivered) {
-    const smsDelivery = store.addNotificationDelivery({
+    const smsDelivery = await store.addNotificationDelivery({
       eventId: event.id,
       channel: "sms",
       provider: "twilio_sms",
@@ -681,23 +747,23 @@ async function triggerMultiChannelNotification(parentId, title, message, eventTy
       attempts: 0
     });
     if (prefs.smsEnabled) {
-      store.updateNotificationDeliveryStatus(smsDelivery.id, { attempts: 1 });
+      await store.updateNotificationDeliveryStatus(smsDelivery.id, { attempts: 1 });
       if (!hasConsent("sms")) {
-        store.updateNotificationDeliveryStatus(smsDelivery.id, {
+        await store.updateNotificationDeliveryStatus(smsDelivery.id, {
           status: "failed",
           errorCode: "CONSENT_MISSING",
           errorMessage: "SMS consent not given or explicitly revoked."
         });
         console.log(`[SMS] Failed: No active consent recorded.`);
       } else if (isQuiet) {
-        store.updateNotificationDeliveryStatus(smsDelivery.id, {
+        await store.updateNotificationDeliveryStatus(smsDelivery.id, {
           status: "failed",
           errorCode: "QUIET_HOURS_BLOCKED",
           errorMessage: `Delivery blocked by Quiet Hours (${prefs.quietHoursStart} - ${prefs.quietHoursEnd}).`
         });
         console.log(`[SMS] Blocked: Quiet hours active.`);
       } else {
-        store.updateNotificationDeliveryStatus(smsDelivery.id, {
+        await store.updateNotificationDeliveryStatus(smsDelivery.id, {
           status: "delivered",
           providerMessageId: `sms-msg-${crypto.randomUUID().slice(0, 8)}`,
           sentAt: (/* @__PURE__ */ new Date()).toISOString(),
@@ -707,7 +773,7 @@ async function triggerMultiChannelNotification(parentId, title, message, eventTy
         console.log(`[SMS] Delivered SMS to ${parentObj.phoneNumber}.`);
       }
     } else {
-      store.updateNotificationDeliveryStatus(smsDelivery.id, {
+      await store.updateNotificationDeliveryStatus(smsDelivery.id, {
         status: "failed",
         errorCode: "CHANNEL_DISABLED",
         errorMessage: "SMS notifications are disabled in parent preferences."
@@ -1022,11 +1088,11 @@ var NotificationService = class {
    */
   static async dispatchNotification(parentId, title, message, category, metadata = {}, dedupeKey) {
     logger5.info(`Orchestrating notification for Parent ID: ${parentId}`, { category, dedupeKey });
-    const preferences = store.getNotificationPreferences(parentId);
-    const consents = store.getConsentsOfParent(parentId);
+    const preferences = await store.getNotificationPreferences(parentId);
+    const consents = await store.getConsentsOfParent(parentId);
     const isPushAuthorized = preferences.pushEnabled;
-    const isSmsAuthorized = preferences.smsEnabled && consents.some((c) => c.channel === "sms" && c.granted);
-    const isWhatsappAuthorized = preferences.whatsappEnabled && consents.some((c) => c.channel === "whatsapp" && c.granted);
+    const isSmsAuthorized = preferences.smsEnabled && consents.some((c) => c.channel === "sms" && c.consentGranted);
+    const isWhatsappAuthorized = preferences.whatsappEnabled && consents.some((c) => c.channel === "whatsapp" && c.consentGranted);
     if (this.isWithinQuietHours(preferences.quietHoursStart, preferences.quietHoursEnd)) {
       logger5.info(`Quiet Hours active for parent ${parentId}. Scheduling notification with lower priority or buffering.`);
       metadata.quietHoursApplied = true;
@@ -1058,7 +1124,7 @@ var NotificationService = class {
       });
       jobsTriggered.push(jobId);
     }
-    const legacyResult = await store.triggerMultiChannelNotification(
+    const legacyResult = await triggerMultiChannelNotification(
       parentId,
       title,
       message,
@@ -1212,7 +1278,7 @@ var requireParentRoleOnly = (req, res, next) => {
   }
   next();
 };
-app.post("/api/mobile/parent/login", rateLimit(15, 6e4), (req, res) => {
+app.post("/api/mobile/parent/login", rateLimit(15, 6e4), async (req, res) => {
   const validation = LoginSchema.safeParse(req.body);
   if (!validation.success) {
     logger6.warn("\xC9chec de la validation Zod sur la route d'authentification.");
@@ -1223,7 +1289,7 @@ app.post("/api/mobile/parent/login", rateLimit(15, 6e4), (req, res) => {
     });
   }
   const { email, password } = validation.data;
-  const user = store.findParentByEmail(email);
+  const user = await store.findParentByEmail(email);
   if (!user) {
     logger6.warn(`Tentative de connexion infructueuse (utilisateur inconnu): ${email}`);
     return res.status(401).json({
@@ -1231,7 +1297,8 @@ app.post("/api/mobile/parent/login", rateLimit(15, 6e4), (req, res) => {
       code: "BAD_CREDENTIALS"
     });
   }
-  if (user.passwordHash !== password) {
+  const isPasswordValid = await store.verifyParentPassword(email, password);
+  if (!isPasswordValid) {
     logger6.warn(`Mot de passe incorrect pour le compte parent: ${email}`);
     return res.status(401).json({
       error: "Identifiants de connexion incorrects.",
@@ -1295,9 +1362,9 @@ app.post("/api/mobile/parent/logout", requireAuth, requireParentRoleOnly, (req, 
     message: "D\xE9connexion r\xE9ussie avec succ\xE8s."
   });
 });
-app.get("/api/mobile/parent/me", requireAuth, requireParentRoleOnly, (req, res) => {
+app.get("/api/mobile/parent/me", requireAuth, requireParentRoleOnly, async (req, res) => {
   const parentId = req.parent.id;
-  const parent = store.getParentById(parentId);
+  const parent = await store.getParentById(parentId);
   if (!parent) {
     return res.status(404).json({
       error: "Parent introuvable.",
@@ -1314,14 +1381,14 @@ app.get("/api/mobile/parent/me", requireAuth, requireParentRoleOnly, (req, res) 
   };
   return res.json(parentDetails);
 });
-app.get("/api/mobile/parent/children", requireAuth, requireParentRoleOnly, (req, res) => {
+app.get("/api/mobile/parent/children", requireAuth, requireParentRoleOnly, async (req, res) => {
   const parentId = req.parent.id;
-  const children = store.getChildrenOfParent(parentId);
+  const children = await store.getChildrenOfParent(parentId);
   return res.json(children);
 });
-app.post("/api/mobile/parent/children/simulate", requireAuth, requireParentRoleOnly, (req, res) => {
+app.post("/api/mobile/parent/children/simulate", requireAuth, requireParentRoleOnly, async (req, res) => {
   const parentId = req.parent.id;
-  const child = store.createSimulatedChildForParent(parentId);
+  const child = await store.createSimulatedChildForParent(parentId);
   if (!child) {
     return res.status(400).json({
       error: "Impossible de simuler un enfant pour ce compte.",
@@ -1330,41 +1397,41 @@ app.post("/api/mobile/parent/children/simulate", requireAuth, requireParentRoleO
   }
   return res.status(201).json(child);
 });
-app.get("/api/mobile/parent/children/:childId/absences", requireAuth, requireParentRoleOnly, (req, res) => {
+app.get("/api/mobile/parent/children/:childId/absences", requireAuth, requireParentRoleOnly, async (req, res) => {
   const { childId } = req.params;
   const parentId = req.parent.id;
-  if (!store.isChildOwnedByParent(childId, parentId)) {
+  if (!await store.isChildOwnedByParent(childId, parentId)) {
     return res.status(403).json({
       error: "Acc\xE8s refus\xE9. Cet enfant ne vous est pas rattach\xE9.",
       code: "CHILD_OWNERSHIP_VIOLATION"
     });
   }
-  const absences = store.getAbsencesOfChild(childId);
+  const absences = await store.getAbsencesOfChild(childId);
   return res.json(absences);
 });
-app.get("/api/mobile/parent/children/:childId/grades", requireAuth, requireParentRoleOnly, (req, res) => {
+app.get("/api/mobile/parent/children/:childId/grades", requireAuth, requireParentRoleOnly, async (req, res) => {
   const { childId } = req.params;
   const parentId = req.parent.id;
-  if (!store.isChildOwnedByParent(childId, parentId)) {
+  if (!await store.isChildOwnedByParent(childId, parentId)) {
     return res.status(403).json({
       error: "Acc\xE8s refus\xE9. Cet enfant ne vous est pas rattach\xE9.",
       code: "CHILD_OWNERSHIP_VIOLATION"
     });
   }
-  const grades = store.getGradesOfChild(childId);
+  const grades = await store.getGradesOfChild(childId);
   return res.json(grades);
 });
-app.get("/api/mobile/parent/notifications", requireAuth, requireParentRoleOnly, (req, res) => {
+app.get("/api/mobile/parent/notifications", requireAuth, requireParentRoleOnly, async (req, res) => {
   const parentId = req.parent.id;
-  const notifications = store.getInAppNotifications(parentId);
+  const notifications = await store.getInAppNotifications(parentId);
   return res.json(notifications);
 });
-app.put("/api/mobile/parent/notifications/read-all", requireAuth, requireParentRoleOnly, (req, res) => {
+app.put("/api/mobile/parent/notifications/read-all", requireAuth, requireParentRoleOnly, async (req, res) => {
   const parentId = req.parent.id;
-  store.markAllInAppNotificationsAsRead(parentId);
+  await store.markAllInAppNotificationsAsRead(parentId);
   return res.json({ success: true, message: "Toutes les notifications ont \xE9t\xE9 marqu\xE9es comme lues." });
 });
-app.post("/api/mobile/parent/devices/register-push-token", requireAuth, requireParentRoleOnly, (req, res) => {
+app.post("/api/mobile/parent/devices/register-push-token", requireAuth, requireParentRoleOnly, async (req, res) => {
   const parentId = req.parent.id;
   const validation = RegisterPushTokenSchema.safeParse(req.body);
   if (!validation.success) {
@@ -1376,7 +1443,7 @@ app.post("/api/mobile/parent/devices/register-push-token", requireAuth, requireP
     });
   }
   const { pushToken, platform, appVersion } = validation.data;
-  const device = store.registerPushToken(parentId, pushToken, platform, appVersion);
+  const device = await store.registerPushToken(parentId, pushToken, platform, appVersion);
   logger6.audit("REGISTER_PUSH_TOKEN", parentId, { platform, appVersion }, "SUCCESS");
   return res.json({
     success: true,
@@ -1384,16 +1451,16 @@ app.post("/api/mobile/parent/devices/register-push-token", requireAuth, requireP
     device
   });
 });
-app.get("/api/mobile/parent/notification-preferences", requireAuth, requireParentRoleOnly, (req, res) => {
+app.get("/api/mobile/parent/notification-preferences", requireAuth, requireParentRoleOnly, async (req, res) => {
   const parentId = req.parent.id;
-  const preferences = store.getNotificationPreferences(parentId);
-  const consents = store.getConsentsOfParent(parentId);
+  const preferences = await store.getNotificationPreferences(parentId);
+  const consents = await store.getConsentsOfParent(parentId);
   return res.json({
     preferences,
     consents
   });
 });
-app.put("/api/mobile/parent/notification-preferences", requireAuth, requireParentRoleOnly, (req, res) => {
+app.put("/api/mobile/parent/notification-preferences", requireAuth, requireParentRoleOnly, async (req, res) => {
   const parentId = req.parent.id;
   const validation = NotificationPreferencesSchema.safeParse(req.body);
   if (!validation.success) {
@@ -1406,12 +1473,12 @@ app.put("/api/mobile/parent/notification-preferences", requireAuth, requireParen
   }
   const { pushEnabled, whatsappEnabled, smsEnabled, quietHoursStart, quietHoursEnd, whatsappConsent, smsConsent } = validation.data;
   if (whatsappConsent !== void 0) {
-    store.updateConsent(parentId, "whatsapp", whatsappConsent, "v1.0-fr");
+    await store.updateConsent(parentId, "whatsapp", whatsappConsent, "v1.0-fr");
   }
   if (smsConsent !== void 0) {
-    store.updateConsent(parentId, "sms", smsConsent, "v1.0-fr");
+    await store.updateConsent(parentId, "sms", smsConsent, "v1.0-fr");
   }
-  const updatedPref = store.updateNotificationPreferences(parentId, {
+  const updatedPref = await store.updateNotificationPreferences(parentId, {
     pushEnabled,
     whatsappEnabled,
     smsEnabled,
@@ -1423,7 +1490,7 @@ app.put("/api/mobile/parent/notification-preferences", requireAuth, requireParen
     success: true,
     message: "Pr\xE9f\xE9rences de notification mises \xE0 jour.",
     preferences: updatedPref,
-    consents: store.getConsentsOfParent(parentId)
+    consents: await store.getConsentsOfParent(parentId)
   });
 });
 app.post("/api/mobile/parent/notifications/test", requireAuth, requireParentRoleOnly, async (req, res) => {
@@ -1467,20 +1534,21 @@ app.get("/api/mobile/health", (req, res) => {
     }
   });
 });
-app.post("/api/dev/add-absence", (req, res) => {
+app.post("/api/dev/add-absence", async (req, res) => {
   const { childId, date, reason, justified, justificationText } = req.body;
   if (!childId || !reason) {
     return res.status(400).json({ error: "childId and reason required" });
   }
-  const absence = store.addAbsence({
+  const absence = await store.addAbsence({
     childId,
     date: date || (/* @__PURE__ */ new Date()).toISOString(),
     reason,
     justified: !!justified,
     justificationText
   });
-  const children = store.getChildrenOfParent("parent-jean-dupont");
-  const child = children.find((c) => c.id === childId) || store.getChildrenOfParent("parent-marie-martin").find((c) => c.id === childId);
+  const children = await store.getChildrenOfParent("parent-jean-dupont");
+  const backupChildren = await store.getChildrenOfParent("parent-marie-martin");
+  const child = children.find((c) => c.id === childId) || backupChildren.find((c) => c.id === childId);
   if (child) {
     const parentId = child.parentId;
     const dedupeKey = `absence-${child.id}-${Date.now()}`;
@@ -1496,12 +1564,12 @@ app.post("/api/dev/add-absence", (req, res) => {
   }
   return res.json({ success: true, absence });
 });
-app.post("/api/dev/add-grade", (req, res) => {
+app.post("/api/dev/add-grade", async (req, res) => {
   const { childId, subject, grade, coefficient, examName, date } = req.body;
   if (!childId || !subject || grade === void 0 || !examName) {
     return res.status(400).json({ error: "Missing required grade properties" });
   }
-  const gradeObj = store.addGrade({
+  const gradeObj = await store.addGrade({
     childId,
     subject,
     grade: parseFloat(grade),
@@ -1509,8 +1577,9 @@ app.post("/api/dev/add-grade", (req, res) => {
     examName,
     date: date || (/* @__PURE__ */ new Date()).toISOString().split("T")[0]
   });
-  const children = store.getChildrenOfParent("parent-jean-dupont");
-  const child = children.find((c) => c.id === childId) || store.getChildrenOfParent("parent-marie-martin").find((c) => c.id === childId);
+  const children = await store.getChildrenOfParent("parent-jean-dupont");
+  const backupChildren = await store.getChildrenOfParent("parent-marie-martin");
+  const child = children.find((c) => c.id === childId) || backupChildren.find((c) => c.id === childId);
   if (child) {
     const parentId = child.parentId;
     const dedupeKey = `grade-${child.id}-${Date.now()}`;
@@ -1542,10 +1611,10 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = import_path.default.join(process.cwd(), "dist");
+    const distPath = import_path2.default.join(process.cwd(), "dist");
     app.use(import_express.default.static(distPath));
     app.get("*", (req, res) => {
-      res.sendFile(import_path.default.join(distPath, "index.html"));
+      res.sendFile(import_path2.default.join(distPath, "index.html"));
     });
   }
   app.listen(PORT, "0.0.0.0", () => {
