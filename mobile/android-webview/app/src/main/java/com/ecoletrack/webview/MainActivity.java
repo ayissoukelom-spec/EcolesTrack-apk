@@ -18,7 +18,7 @@ import androidx.appcompat.app.AppCompatActivity;
 public class MainActivity extends AppCompatActivity {
 
     // Adresse IP du serveur Express sur le réseau local (à mettre à jour si l'IP change)
-    private static final String API_SERVER_URL = "http://10.237.25.124:3001";
+    private static final String API_SERVER_URL = "http://10.109.86.124:3001";
     private static final String APP_INDEX_URL = "file:///android_asset/index.html";
     private static final String LOADING_HTML = "<!doctype html><html lang='fr'><head><meta charset='utf-8' />" +
             "<meta name='viewport' content='width=device-width,initial-scale=1' />" +
@@ -62,6 +62,7 @@ public class MainActivity extends AppCompatActivity {
         webSettings.setCacheMode(WebSettings.LOAD_NO_CACHE);
         webView.clearCache(true);
         webView.clearHistory();
+        webView.clearMatches();
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
@@ -105,7 +106,9 @@ public class MainActivity extends AppCompatActivity {
         webView.setWebChromeClient(new WebChromeClient());
         webView.setBackgroundColor(Color.parseColor("#0f172a"));
         webView.loadDataWithBaseURL(null, LOADING_HTML, "text/html", "UTF-8", null);
-        webView.post(() -> webView.loadUrl(APP_INDEX_URL));
+        // Charge l'application avec un paramètre de cache-busting
+        String cachebustedUrl = APP_INDEX_URL + "?v=" + System.currentTimeMillis();
+        webView.post(() -> webView.loadUrl(cachebustedUrl));
     }
 
     @Override

@@ -554,20 +554,20 @@ export default function ParentPortal({
     <div className="h-screen flex flex-col bg-slate-50 text-slate-800 overflow-hidden" id="portal-logged-in">
       
       {/* Dynamic Header */}
-      <div className="bg-white border-b border-slate-100 px-4 py-3 flex items-center justify-between shadow-sm shrink-0">
-        <div className="flex items-center gap-2">
-          <div className="h-8 w-8 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-extrabold text-sm shadow-md shadow-indigo-600/10">
+      <div className="bg-gradient-to-r from-indigo-600 to-indigo-700 border-b border-indigo-700 px-4 py-3 flex items-center justify-between shadow-md shrink-0 text-white">
+        <div className="flex items-center gap-3">
+          <div className="h-8 w-8 bg-white/20 rounded-xl flex items-center justify-center text-white font-extrabold text-sm shadow-md">
             ÉT
           </div>
           <div>
-            <h2 className="text-xs font-black text-slate-900 leading-tight">ÉcoleTrack</h2>
+            <h2 className="text-xs font-black text-white leading-tight">ÉcoleTrack</h2>
             {/* Multi-school context picker */}
             {parent.schools.length > 1 ? (
               <div className="relative inline-block">
                 <select
                   value={activeSchoolId}
                   onChange={(e) => handleSchoolChange(e.target.value)}
-                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-bold py-0.5 px-1.5 rounded flex items-center gap-1 focus:outline-none cursor-pointer border-none"
+                  className="bg-indigo-500/30 hover:bg-indigo-500/50 text-white text-[10px] font-bold py-0.5 px-1.5 rounded flex items-center gap-1 focus:outline-none cursor-pointer border border-white/20"
                 >
                   {parent.schools.map((school) => (
                     <option key={school.id} value={school.id}>
@@ -577,18 +577,24 @@ export default function ParentPortal({
                 </select>
               </div>
             ) : (
-              <span className="text-[10px] text-slate-500 font-medium">{currentSchool?.name}</span>
+              <span className="text-[10px] text-indigo-100 font-medium">{currentSchool?.name}</span>
             )}
           </div>
         </div>
 
-        <button 
-          onClick={onLogout}
-          className="p-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-lg transition-colors border border-rose-100"
-          title="Se déconnecter"
-        >
-          <LogOut className="h-3.5 w-3.5" />
-        </button>
+        <div className="flex items-center gap-3">
+          <div className="text-right block">
+            <p className="text-xs font-bold text-white">{parent.name}</p>
+            <p className="text-[9px] text-indigo-100">Parent connecté</p>
+          </div>
+          <button 
+            onClick={onLogout}
+            className="p-1.5 bg-white/20 hover:bg-white/30 text-white rounded-lg transition-colors border border-white/30"
+            title="Se déconnecter"
+          >
+            <LogOut className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
 
       {/* Main Body - View Switcher */}
