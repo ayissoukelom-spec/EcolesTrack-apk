@@ -26,6 +26,7 @@ export interface Child {
   lastName: string;
   className: string;
   birthDate: string;
+  gender?: string; // 'M' | 'F' or 'male' | 'female'
   avatarUrl: string;
 }
 

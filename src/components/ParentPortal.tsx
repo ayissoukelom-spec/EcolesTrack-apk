@@ -624,6 +624,7 @@ export default function ParentPortal({
                 <div>
                   <h3 className="text-sm font-bold">{selectedChild.firstName} {selectedChild.lastName}</h3>
                   <p className="text-[11px] text-slate-400 font-medium">Classe : {selectedChild.className}</p>
+                  <p className="text-[10px] text-slate-500 font-medium">Né(e) : {formatBirthDate(selectedChild.birthDate)} {selectedChild.gender ? `• ${selectedChild.gender}` : ""}</p>
                 </div>
               </div>
 
@@ -748,7 +749,7 @@ export default function ParentPortal({
                         <div className="text-[10px] font-bold uppercase tracking-wider text-indigo-600">Actif</div>
                         <h4 className="text-sm font-black text-slate-900 truncate">{currentChild.firstName} {currentChild.lastName}</h4>
                         <p className="text-[11px] text-slate-500 font-medium">Classe : {currentChild.className}</p>
-                        <p className="text-[11px] text-slate-500 font-medium">Date de naissance : {formatBirthDate(currentChild.birthDate)}</p>
+                        <p className="text-[11px] text-slate-500 font-medium">Date de naissance : {formatBirthDate(currentChild.birthDate)} {currentChild.gender ? `• ${currentChild.gender}` : ""}</p>
                       </div>
                     </div>
 
