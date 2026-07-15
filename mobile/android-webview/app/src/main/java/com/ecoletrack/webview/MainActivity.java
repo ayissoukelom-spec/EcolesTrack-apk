@@ -22,10 +22,10 @@ public class MainActivity extends AppCompatActivity {
     private static final String APP_INDEX_URL = "file:///android_asset/index.html";
     private static final String LOADING_HTML = "<!doctype html><html lang='fr'><head><meta charset='utf-8' />" +
             "<meta name='viewport' content='width=device-width,initial-scale=1' />" +
-            "<style>body{margin:0;background:#0f172a;color:#f8fafc;font-family:system-ui,-apple-system," +
+            "<style>body{margin:0;background:#020617;color:#f8fafc;font-family:system-ui,-apple-system," +
             "Segoe UI,Roboto,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;}" +
-            ".card{padding:24px 28px;border-radius:18px;background:rgba(15,23,42,0.95);border:1px solid rgba(148,163,184,0.2);" +
-            "box-shadow:0 18px 45px rgba(2,6,23,0.35);text-align:center;}" +
+            ".card{padding:24px 28px;border-radius:18px;background:rgba(2,6,23,0.96);border:1px solid rgba(148,163,184,0.25);" +
+            "box-shadow:0 18px 45px rgba(2,6,23,0.4);text-align:center;}" +
             "h1{font-size:18px;margin:0 0 8px;}p{font-size:14px;margin:0;color:#cbd5e1;}</style></head><body>" +
             "<div class='card'><h1>ÉcoleTrack</h1><p>Chargement de l’interface…</p></div></body></html>";
     private static final String ERROR_HTML = "<!doctype html><html lang='fr'><head><meta charset='utf-8' />" +

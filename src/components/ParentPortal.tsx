@@ -73,6 +73,12 @@ export default function ParentPortal({
     }
   }, [token, parentId, parentActiveSchoolId]);
 
+  useEffect(() => {
+    if (children.length > 0 && !selectedChild) {
+      setSelectedChild(children[0]);
+    }
+  }, [children, selectedChild]);
+
   // Load specific child details when selected
   const selectedChildId = selectedChild?.id;
   useEffect(() => {
@@ -600,127 +606,8 @@ export default function ParentPortal({
       {/* Main Body - View Switcher */}
       <div className="flex-1 overflow-y-auto p-4 pb-20">
         
-        {/* Child Details Overlay View (Fiche Enfant) */}
-        {activeTab === "children" && selectedChild ? (
-          <motion.div 
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="bg-white rounded-2xl border border-slate-100 overflow-hidden shadow-sm"
-          >
-            {/* Child Header banner */}
-            <div className="bg-slate-900 text-white p-4 relative">
-              <button 
-                onClick={() => setSelectedChild(null)}
-                className="absolute top-3 right-3 text-[10px] bg-slate-800 text-slate-200 px-2 py-1 rounded-md hover:bg-slate-700 font-bold"
-              >
-                Retour
-              </button>
-              <div className="flex items-center gap-3">
-                <img 
-                  src={selectedChild.avatarUrl} 
-                  alt={selectedChild.firstName} 
-                  className="h-12 w-12 rounded-full border-2 border-indigo-400 object-cover"
-                />
-                <div>
-                  <h3 className="text-sm font-bold">{selectedChild.firstName} {selectedChild.lastName}</h3>
-                  <p className="text-[11px] text-slate-400 font-medium">Classe : {selectedChild.className}</p>
-                  <p className="text-[10px] text-slate-500 font-medium">Né(e) : {formatBirthDate(selectedChild.birthDate)} {selectedChild.gender ? `• ${selectedChild.gender}` : ""}</p>
-                </div>
-              </div>
-
-              {/* Subtabs for Child File */}
-              <div className="flex mt-4 bg-slate-800 rounded-lg p-0.5 text-xs font-semibold">
-                <button
-                  onClick={() => setChildDetailTab("grades")}
-                  className={`flex-1 py-1.5 rounded-md transition-all ${
-                    childDetailTab === "grades" ? "bg-indigo-600 text-white shadow-sm" : "text-slate-400 hover:text-white"
-                  }`}
-                >
-                  Notes & Évals
-                </button>
-                <button
-                  onClick={() => setChildDetailTab("absences")}
-                  className={`flex-1 py-1.5 rounded-md transition-all ${
-                    childDetailTab === "absences" ? "bg-indigo-600 text-white shadow-sm" : "text-slate-400 hover:text-white"
-                  }`}
-                >
-                  Absences
-                </button>
-              </div>
-            </div>
-
-            {/* Child Tab Content */}
-            <div className="p-4">
-              {childDetailTab === "grades" ? (
-                <div>
-                  {/* Performance Summary Banner */}
-                  <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-3 mb-4 flex items-center justify-between">
-                    <div>
-                      <span className="text-[10px] text-indigo-500 font-bold uppercase tracking-wider">Moyenne Générale</span>
-                      <h4 className="text-lg font-black text-indigo-900">
-                        {calculateAverage(grades) ? `${calculateAverage(grades)} / 20` : "-- / 20"}
-                      </h4>
-                    </div>
-                    <Award className="h-8 w-8 text-indigo-500/80 shrink-0" />
-                  </div>
-
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-3 text-center">
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Historique complet</p>
-                    <p className="text-[11px] text-slate-600 mt-1">Retrouvez l’historique détaillé des évaluations dans l’onglet Notes.</p>
-                  </div>
-                </div>
-              ) : (
-                <div>
-                  <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Relevé d&apos;absences</h4>
-                  {absences.length === 0 ? (
-                    <div className="text-center py-8 text-slate-400 text-xs font-medium">Parfait ! Aucune absence enregistrée.</div>
-                  ) : (
-                    <div className="space-y-3">
-                      {absences.map((abs) => (
-                        <div key={abs.id} className="border border-slate-100 rounded-xl p-3 flex flex-col gap-2">
-                          <div className="flex items-start justify-between gap-2">
-                            <div>
-                              <h5 className="text-xs font-bold text-slate-800">Date : {new Date(abs.date).toLocaleDateString("fr-FR")}</h5>
-                              <p className="text-[11px] text-slate-600 mt-0.5 leading-normal font-semibold">Motif : {abs.reason}</p>
-                            </div>
-                            
-                            {abs.justified ? (
-                              <span className="shrink-0 text-[10px] font-bold text-emerald-600 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-full flex items-center gap-1">
-                                <CheckCircle2 className="h-3 w-3" />
-                                Justifiée
-                              </span>
-                            ) : (
-                              <span className="shrink-0 text-[10px] font-bold text-rose-600 bg-rose-50 border border-rose-100 px-2 py-0.5 rounded-full flex items-center gap-1 animate-pulse">
-                                <XCircle className="h-3 w-3" />
-                                Injustifiée
-                              </span>
-                            )}
-                          </div>
-
-                          {/* Justification details */}
-                          {abs.justified ? (
-                            <div className="bg-slate-50 border border-slate-100 rounded-lg p-2 text-[10px] text-slate-500 font-medium leading-normal">
-                              <strong>Justificatif :</strong> {abs.justificationText || "Validé par l'établissement."}
-                            </div>
-                          ) : (
-                            <button
-                              onClick={() => justifyAbsence(abs.id)}
-                              className="w-full bg-slate-900 hover:bg-indigo-600 text-white font-bold text-[10px] py-2 rounded-lg transition-colors mt-1"
-                            >
-                              Fournir un justificatif
-                            </button>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </motion.div>
-        ) : (
-          /* Primary Navigation views */
-          <AnimatePresence mode="wait">
+        {/* Primary Navigation views */}
+        <AnimatePresence mode="wait">
             {activeTab === "children" && (
               <motion.div 
                 key="children"
@@ -1241,7 +1128,6 @@ export default function ParentPortal({
               </motion.div>
             )}
           </AnimatePresence>
-        )}
 
       </div>
 
