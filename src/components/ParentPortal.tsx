@@ -113,6 +113,35 @@ export default function ParentPortal({
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   }, [grades, gradeSubjectFilter, gradePeriodFilter]);
 
+  const getGradeToneClasses = (grade: number, maxScore?: number) => {
+    const normalizedScore = maxScore && maxScore > 0 ? (grade / maxScore) * 20 : grade;
+
+    if (normalizedScore < 10) {
+      return {
+        card: "border-rose-200 bg-rose-50/80",
+        title: "text-rose-700",
+        value: "text-rose-700",
+        meta: "text-rose-600"
+      };
+    }
+
+    if (normalizedScore < 14) {
+      return {
+        card: "border-amber-200 bg-amber-50/80",
+        title: "text-amber-700",
+        value: "text-amber-700",
+        meta: "text-amber-600"
+      };
+    }
+
+    return {
+      card: "border-emerald-200 bg-emerald-50/80",
+      title: "text-emerald-700",
+      value: "text-emerald-700",
+      meta: "text-emerald-600"
+    };
+  };
+
   // Quick preset accounts to speed up testing
   const presets = [
     { name: "Parent (Jean)", email: "jean.dupont@email.com", pass: "parent123", role: "parent" },
@@ -1086,21 +1115,19 @@ export default function ParentPortal({
                         ) : (
                           <div className="space-y-3">
                             {displayedGrades.map((g) => {
-                              let badgeClass = "bg-emerald-50 border-emerald-100 text-emerald-700";
-                              if (g.grade < 10) badgeClass = "bg-rose-50 border-rose-100 text-rose-700";
-                              else if (g.grade < 14) badgeClass = "bg-amber-50 border-amber-100 text-amber-700";
+                              const tone = getGradeToneClasses(g.grade, g.maxScore);
 
                               return (
-                                <div key={g.id} className="rounded-2xl border border-slate-100 p-3 bg-slate-50">
+                                <div key={g.id} className={`rounded-2xl border p-3 ${tone.card}`}>
                                   <div className="flex items-center justify-between gap-4">
                                     <div className="min-w-0">
-                                      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">{g.subject}</p>
+                                      <p className={`text-[10px] font-bold uppercase tracking-wider ${tone.title}`}>{g.subject}</p>
                                       <h4 className="text-sm font-black text-slate-900 truncate">{g.examName}</h4>
                                       <p className="text-[10px] text-slate-500 mt-0.5">Le {new Date(g.date).toLocaleDateString("fr-FR")}</p>
                                     </div>
                                     <div className="text-right">
-                                      <p className="text-xl font-black text-slate-900">{g.grade}</p>
-                                      <p className="text-[9px] text-slate-500">/ 20 • coeff {g.coefficient}</p>
+                                      <p className={`text-xl font-black ${tone.value}`}>{g.grade}</p>
+                                      <p className={`text-[9px] ${tone.meta}`}>/ {g.maxScore ?? 20} • coeff {g.coefficient}</p>
                                     </div>
                                   </div>
                                 </div>

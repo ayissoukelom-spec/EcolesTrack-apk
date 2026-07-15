@@ -44,6 +44,7 @@ export interface Grade {
   childId: string;
   subject: string;
   grade: number; // Out of 20
+  maxScore?: number;
   coefficient: number;
   examName: string;
   date: string;
