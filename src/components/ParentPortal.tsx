@@ -113,32 +113,34 @@ export default function ParentPortal({
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   }, [grades, gradeSubjectFilter, gradePeriodFilter]);
 
+  const displayedGradesAverage = calculateAverage(displayedGrades);
+
   const getGradeToneClasses = (grade: number, maxScore?: number) => {
     const normalizedScore = maxScore && maxScore > 0 ? (grade / maxScore) * 20 : grade;
 
     if (normalizedScore < 10) {
       return {
-        card: "border-rose-200 bg-rose-50/80",
-        title: "text-rose-700",
-        value: "text-rose-700",
-        meta: "text-rose-600"
+        card: "border-rose-800 bg-slate-950",
+        title: "text-rose-300",
+        value: "text-rose-300",
+        meta: "text-rose-400"
       };
     }
 
     if (normalizedScore < 14) {
       return {
-        card: "border-amber-200 bg-amber-50/80",
-        title: "text-amber-700",
-        value: "text-amber-700",
-        meta: "text-amber-600"
+        card: "border-amber-800 bg-slate-950",
+        title: "text-amber-200",
+        value: "text-amber-200",
+        meta: "text-amber-300"
       };
     }
 
     return {
-      card: "border-emerald-200 bg-emerald-50/80",
-      title: "text-emerald-700",
-      value: "text-emerald-700",
-      meta: "text-emerald-600"
+      card: "border-emerald-800 bg-slate-950",
+      title: "text-emerald-200",
+      value: "text-emerald-200",
+      meta: "text-emerald-300"
     };
   };
 
@@ -362,7 +364,7 @@ export default function ParentPortal({
   };
 
   // Calculate Weighted Average
-  const calculateAverage = (studentGrades: Grade[]) => {
+  function calculateAverage(studentGrades: Grade[]) {
     if (studentGrades.length === 0) return null;
     let totalScore = 0;
     let totalCoeff = 0;
@@ -371,7 +373,7 @@ export default function ParentPortal({
       totalCoeff += g.coefficient;
     });
     return (totalScore / totalCoeff).toFixed(2);
-  };
+  }
 
   const trimesterStart = useMemo(() => {
     const date = new Date();
@@ -681,12 +683,12 @@ export default function ParentPortal({
                       </div>
 
                       <div className="mt-3 grid grid-cols-2 gap-2">
-                        <div className="rounded-xl border border-indigo-100 bg-indigo-50 p-3">
-                          <p className="text-[9px] font-bold uppercase tracking-wider text-indigo-500">Note du trimestre</p>
-                          <p className="text-xl font-black text-indigo-900 mt-1">
+                        <div className="rounded-xl border border-indigo-800 bg-indigo-950/50 p-3">
+                          <p className="text-[9px] font-bold uppercase tracking-wider text-indigo-300">Note du trimestre</p>
+                          <p className="text-xl font-black text-indigo-100 mt-1">
                             {currentTrimesterAverage ? `${currentTrimesterAverage} / 20` : "-- / 20"}
                           </p>
-                          <p className="text-[10px] text-indigo-700/80 font-medium mt-0.5">{currentTrimesterGrades.length} évaluation(s)</p>
+                          <p className="text-[10px] text-indigo-200/80 font-medium mt-0.5">{currentTrimesterGrades.length} évaluation(s)</p>
                         </div>
                         <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-3">
                           <p className="text-[9px] font-bold uppercase tracking-wider text-emerald-600">Absences</p>
@@ -703,7 +705,7 @@ export default function ParentPortal({
                             setChildDetailTab("grades");
                             setActiveTab("notes");
                           }}
-                          className="rounded-xl border border-indigo-100 bg-white px-3 py-2 text-left hover:bg-indigo-50 transition-colors"
+                          className="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-left text-slate-100 hover:bg-slate-800 transition-colors"
                         >
                           <div className="text-[9px] font-bold uppercase tracking-wider text-indigo-600">Raccourci</div>
                           <div className="mt-0.5 text-xs font-bold text-slate-900">Notes</div>
@@ -715,7 +717,7 @@ export default function ParentPortal({
                             setChildDetailTab("absences");
                             setActiveTab("notifications");
                           }}
-                          className="rounded-xl border border-emerald-100 bg-white px-3 py-2 text-left hover:bg-emerald-50 transition-colors"
+                          className="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-left text-slate-100 hover:bg-slate-800 transition-colors"
                         >
                           <div className="text-[9px] font-bold uppercase tracking-wider text-emerald-600">Raccourci</div>
                           <div className="mt-0.5 text-xs font-bold text-slate-900">Registre d&apos;absence</div>
@@ -1053,13 +1055,13 @@ export default function ParentPortal({
                 exit={{ opacity: 0 }}
                 className="space-y-4"
               >
-                <div className="bg-white rounded-2xl border border-slate-100 p-4 shadow-sm">
+                <div className="bg-slate-900 rounded-2xl border border-slate-800 p-4 shadow-sm">
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Notes</h3>
-                      <p className="text-[11px] text-slate-500 mt-1">Dernières notes publiées pour l'enfant sélectionné.</p>
+                      <p className="text-[11px] text-slate-400 mt-1">Dernières notes publiées pour l'enfant sélectionné.</p>
                     </div>
-                    <Award className="h-5 w-5 text-indigo-600 shrink-0" />
+                    <Award className="h-5 w-5 text-indigo-300 shrink-0" />
                   </div>
 
                   {currentChild ? (
@@ -1068,22 +1070,27 @@ export default function ParentPortal({
                     ) : (
                       <div className="space-y-3 mt-4">
                         <div className="flex items-center justify-between gap-2 mb-2">
-                          <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Historique des évaluations</h4>
-                          <span className="text-[9px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md">
+                          <div>
+                            <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Historique des évaluations</h4>
+                            {displayedGradesAverage && (
+                              <p className="text-[9px] text-slate-400 mt-1">Moyenne: {displayedGradesAverage} / 20</p>
+                            )}
+                          </div>
+                          <span className="text-[9px] font-bold text-slate-100 bg-slate-800 px-2 py-0.5 rounded-md">
                             {displayedGrades.length} note(s)
                           </span>
                         </div>
 
-                        <div className="bg-slate-50 border border-slate-100 rounded-xl p-2.5 mb-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <div className="bg-slate-950 border border-slate-800 rounded-xl p-2.5 mb-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
                           <div className="flex items-center justify-between gap-2">
-                            <label htmlFor="grade-subject-filter" className="text-[10px] font-bold text-slate-600 uppercase tracking-wider shrink-0">
+                            <label htmlFor="grade-subject-filter" className="text-[10px] font-bold text-slate-400 uppercase tracking-wider shrink-0">
                               Matiere
                             </label>
                             <select
                               id="grade-subject-filter"
                               value={gradeSubjectFilter}
                               onChange={(e) => setGradeSubjectFilter(e.target.value)}
-                              className="bg-white border border-slate-200 rounded-lg py-1.5 px-2 text-[10px] font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-400 w-full max-w-[190px]"
+                              className="bg-slate-900 border border-slate-700 rounded-lg py-1.5 px-2 text-[10px] font-semibold text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-full max-w-[190px]"
                             >
                               <option value="all">Toutes les matieres</option>
                               {availableGradeSubjects.map((subject) => (
@@ -1093,14 +1100,14 @@ export default function ParentPortal({
                           </div>
 
                           <div className="flex items-center justify-between gap-2">
-                            <label htmlFor="grade-period-filter" className="text-[10px] font-bold text-slate-600 uppercase tracking-wider shrink-0">
+                            <label htmlFor="grade-period-filter" className="text-[10px] font-bold text-slate-400 uppercase tracking-wider shrink-0">
                               Periode
                             </label>
                             <select
                               id="grade-period-filter"
                               value={gradePeriodFilter}
                               onChange={(e) => setGradePeriodFilter(e.target.value as "all" | "7d" | "30d" | "trimester")}
-                              className="bg-white border border-slate-200 rounded-lg py-1.5 px-2 text-[10px] font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-400 w-full max-w-[190px]"
+                              className="bg-slate-900 border border-slate-700 rounded-lg py-1.5 px-2 text-[10px] font-semibold text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-full max-w-[190px]"
                             >
                               <option value="all">Toute periode</option>
                               <option value="7d">7 derniers jours</option>
@@ -1122,12 +1129,12 @@ export default function ParentPortal({
                                   <div className="flex items-center justify-between gap-4">
                                     <div className="min-w-0">
                                       <p className={`text-[10px] font-bold uppercase tracking-wider ${tone.title}`}>{g.subject}</p>
-                                      <h4 className="text-sm font-black text-slate-900 truncate">{g.examName}</h4>
-                                      <p className="text-[10px] text-slate-500 mt-0.5">Le {new Date(g.date).toLocaleDateString("fr-FR")}</p>
+                                      <h4 className="text-sm font-black text-slate-100 truncate">{g.examName}</h4>
+                                      <p className="text-[10px] text-slate-400 mt-0.5">Le {new Date(g.date).toLocaleDateString("fr-FR")}</p>
                                     </div>
                                     <div className="text-right">
-                                      <p className={`text-xl font-black ${tone.value}`}>{g.grade}</p>
-                                      <p className={`text-[9px] ${tone.meta}`}>/ {g.maxScore ?? 20} • coeff {g.coefficient}</p>
+                                      <p className={`text-xl font-black ${tone.value}`}>{`${g.grade} / ${g.maxScore ?? 20}`}</p>
+                                      <p className={`text-[9px] ${tone.meta}`}>coeff {g.coefficient}</p>
                                     </div>
                                   </div>
                                 </div>
