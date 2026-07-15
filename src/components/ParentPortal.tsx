@@ -672,6 +672,7 @@ export default function ParentPortal({
                           onClick={() => {
                             setSelectedChild(currentChild);
                             setChildDetailTab("grades");
+                            setActiveTab("notes");
                           }}
                           className="rounded-xl border border-indigo-100 bg-white px-3 py-2 text-left hover:bg-indigo-50 transition-colors"
                         >
@@ -683,6 +684,7 @@ export default function ParentPortal({
                           onClick={() => {
                             setSelectedChild(currentChild);
                             setChildDetailTab("absences");
+                            setActiveTab("notifications");
                           }}
                           className="rounded-xl border border-emerald-100 bg-white px-3 py-2 text-left hover:bg-emerald-50 transition-colors"
                         >
@@ -768,60 +770,47 @@ export default function ParentPortal({
                 className="space-y-3"
               >
                 <div className="flex items-center justify-between">
-                  <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Fil des absences</h3>
-                  {notifications.length > 0 && (
-                    <button 
-                      onClick={handleReadAllNotifications}
-                      className="text-[10px] text-indigo-600 hover:text-indigo-800 font-bold"
-                    >
-                      Tout marquer lu
-                    </button>
+                  <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Absences de l&apos;élève</h3>
+                  {currentChild && (
+                    <span className="text-[10px] text-indigo-600 font-bold">
+                      {currentChild.firstName} {currentChild.lastName}
+                    </span>
                   )}
                 </div>
 
-                {notifications.length === 0 ? (
+                {absences.length === 0 ? (
                   <div className="bg-white rounded-2xl border border-slate-100 p-8 text-center text-slate-400 text-xs font-medium">
                     <Bell className="h-8 w-8 text-slate-300 mx-auto mb-2" />
-                    Aucune notification in-app dans votre historique.
+                    Aucune absence enregistrée pour cet élève.
                   </div>
                 ) : (
                   <div className="space-y-2.5">
-                    {notifications.map((notif) => (
-                      <div 
-                        key={notif.id}
-                        onClick={async () => {
-                          // Clicking on app notification, redirecting to specific child's tab
-                          const firstChild = children[0];
-                          if (firstChild) {
-                            setSelectedChild(firstChild);
-                            if (notif.title.includes("absence")) {
-                              setChildDetailTab("absences");
-                            } else {
-                              setChildDetailTab("grades");
-                            }
-                          }
-                          
-                          // Mark as read
-                          try {
-                            await fetch(`/api/mobile/parent/notifications/read-all`, {
-                              method: "PUT",
-                              headers: { "Authorization": `Bearer ${token}` }
-                            });
-                            fetchNotifications();
-                          } catch (e) {}
-                        }}
-                        className={`bg-white border rounded-2xl p-3 shadow-sm text-left relative cursor-pointer hover:border-indigo-100 transition-all ${
-                          notif.read ? "border-slate-100 opacity-75" : "border-indigo-100 ring-1 ring-indigo-500/5"
-                        }`}
-                      >
-                        {!notif.read && (
-                          <span className="absolute top-3.5 right-3.5 h-2 w-2 rounded-full bg-indigo-600 animate-pulse" />
+                    {absences.map((abs) => (
+                      <div key={abs.id} className="bg-white border border-slate-100 rounded-2xl p-3 shadow-sm">
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                              {new Date(abs.date).toLocaleDateString("fr-FR")}
+                            </p>
+                            <h4 className="text-xs font-bold text-slate-800 mt-0.5">Motif : {abs.reason}</h4>
+                          </div>
+                          {abs.justified ? (
+                            <span className="shrink-0 text-[10px] font-bold text-emerald-600 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-full flex items-center gap-1">
+                              <CheckCircle2 className="h-3 w-3" />
+                              Justifiée
+                            </span>
+                          ) : (
+                            <span className="shrink-0 text-[10px] font-bold text-rose-600 bg-rose-50 border border-rose-100 px-2 py-0.5 rounded-full flex items-center gap-1">
+                              <XCircle className="h-3 w-3" />
+                              Injustifiée
+                            </span>
+                          )}
+                        </div>
+                        {abs.justified && (
+                          <p className="text-[11px] text-slate-600 mt-2 leading-normal font-medium">
+                            {abs.justificationText || "Justification validée par l’établissement."}
+                          </p>
                         )}
-                        <span className="text-[8px] text-slate-400 font-semibold uppercase">
-                          {new Date(notif.createdAt).toLocaleDateString("fr-FR")} à {new Date(notif.createdAt).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}
-                        </span>
-                        <h4 className="text-xs font-bold text-slate-800 mt-0.5">{notif.title}</h4>
-                        <p className="text-[11px] text-slate-600 mt-1 leading-normal font-medium">{notif.message}</p>
                       </div>
                     ))}
                   </div>
