@@ -18,7 +18,7 @@ import androidx.appcompat.app.AppCompatActivity;
 public class MainActivity extends AppCompatActivity {
 
     // Adresse IP du serveur Express sur le réseau local (à mettre à jour si l'IP change)
-    private static final String API_SERVER_URL = "http://10.109.86.124:3001";
+    private static final String API_SERVER_URL = "http://10.133.209.124:3001";
     private static final String APP_INDEX_URL = "file:///android_asset/index.html";
     private static final String LOADING_HTML = "<!doctype html><html lang='fr'><head><meta charset='utf-8' />" +
             "<meta name='viewport' content='width=device-width,initial-scale=1' />" +
@@ -37,6 +37,12 @@ public class MainActivity extends AppCompatActivity {
             "h1{font-size:18px;margin:0 0 8px;}p{font-size:14px;margin:0 0 8px;color:#cbd5e1;}code{font-size:12px;color:#93c5fd;word-break:break-all;}</style></head><body>" +
             "<div class='card'><h1>ÉcoleTrack</h1><p>Le chargement a échoué.</p><p><code>{DETAIL}</code></p></div></body></html>";
     private WebView webView;
+
+    private String readIndexHtmlFromAssets() throws java.io.IOException {
+        try (java.io.InputStream inputStream = getAssets().open("index.html")) {
+            return new String(inputStream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        }
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -66,6 +72,34 @@ public class MainActivity extends AppCompatActivity {
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
+            public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                if (request == null || request.getUrl() == null) {
+                    return super.shouldInterceptRequest(view, request);
+                }
+
+                String requestUrl = request.getUrl().toString();
+                if (requestUrl.contains("/index.html")) {
+                    try {
+                        String html = readIndexHtmlFromAssets();
+                        String injection = "<script>window.ECOLETRACK_API_BASE_URL='" + API_SERVER_URL + "'; " +
+                                "localStorage.setItem('ecoletrack_api_base_url', '" + API_SERVER_URL + "'); " +
+                                "localStorage.setItem('ecoletrack_mobile_production', 'true');</script>";
+                        String modifiedHtml = html.replace("</head>", injection + "</head>");
+                        return new WebResourceResponse(
+                                "text/html",
+                                "UTF-8",
+                                new java.io.ByteArrayInputStream(modifiedHtml.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                        );
+                    } catch (java.io.IOException e) {
+                        // Fall back to normal loading if asset injection fails
+                        return super.shouldInterceptRequest(view, request);
+                    }
+                }
+
+                return super.shouldInterceptRequest(view, request);
+            }
+
+            @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
                 view.setBackgroundColor(Color.parseColor("#0f172a"));
             }
@@ -74,7 +108,7 @@ public class MainActivity extends AppCompatActivity {
             public void onPageFinished(WebView view, String url) {
                 view.setBackgroundColor(Color.TRANSPARENT);
 
-                if (!url.startsWith("file:///android_asset/")) {
+                if (url == null || (!url.startsWith("file:///android_asset/") && !url.contains("appassets.androidplatform.net"))) {
                     return;
                 }
 

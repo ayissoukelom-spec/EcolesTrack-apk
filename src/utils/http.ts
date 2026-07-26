@@ -4,6 +4,8 @@ function trimTrailingSlash(url: string): string {
   return url.replace(/\/+$/, "");
 }
 
+const FALLBACK_API_BASE_URL = "http://10.133.209.124:3001";
+
 export function resolveApiBaseUrl(): string {
   const win = window as Window & { ECOLETRACK_API_BASE_URL?: string };
 
@@ -11,41 +13,60 @@ export function resolveApiBaseUrl(): string {
     typeof win.ECOLETRACK_API_BASE_URL === "string" &&
     win.ECOLETRACK_API_BASE_URL.trim()
   ) {
-    return trimTrailingSlash(win.ECOLETRACK_API_BASE_URL.trim());
-  }
-
-  const envBase = (import.meta as any)?.env?.VITE_API_BASE_URL as string | undefined;
-  if (envBase && envBase.trim()) {
-    return trimTrailingSlash(envBase.trim());
+    const resolved = trimTrailingSlash(win.ECOLETRACK_API_BASE_URL.trim());
+    console.log("Resolved API =", resolved);
+    return resolved;
   }
 
   const storageBase = localStorage.getItem("ecoletrack_api_base_url");
   if (storageBase && storageBase.trim()) {
-    return trimTrailingSlash(storageBase.trim());
+    const resolved = trimTrailingSlash(storageBase.trim());
+    console.log("Resolved API =", resolved);
+    return resolved;
   }
 
-  if (window.location.host === "appassets.androidplatform.net") {
-    return "http://10.109.86.124:3001";
+  const envBase = (import.meta as any)?.env?.VITE_API_BASE_URL as string | undefined;
+  if (envBase && envBase.trim()) {
+    const resolved = trimTrailingSlash(envBase.trim());
+    console.log("Resolved API =", resolved);
+    return resolved;
   }
 
-  return "";
+  console.log("Resolved API =", FALLBACK_API_BASE_URL);
+  return FALLBACK_API_BASE_URL;
 }
 
-export function withApiBase(input: RequestInfo | URL): RequestInfo | URL {
-  if (typeof input !== "string") {
+function getRequestUrl(input: RequestInfo | URL): string {
+  if (typeof input === "string") {
     return input;
   }
 
-  if (!input.startsWith("/api/")) {
+  if (input instanceof URL) {
+    return input.toString();
+  }
+
+  return input.url;
+}
+
+function cloneRequestWithUrl(request: Request, url: string): Request {
+  return new Request(url, request);
+}
+
+export function withApiBase(input: RequestInfo | URL): RequestInfo | URL {
+  const rawUrl = getRequestUrl(input);
+  if (!rawUrl.startsWith("/api/")) {
     return input;
   }
 
   const base = resolveApiBaseUrl();
-  if (!base) {
-    return input;
+  const resolved = `${base}${rawUrl}`;
+  console.log("Calling:", resolved);
+
+  if (input instanceof Request) {
+    return cloneRequestWithUrl(input, resolved);
   }
 
-  return `${base}${input}`;
+  return resolved;
 }
 
 export async function parseJsonSafe<T = JsonObject>(response: Response): Promise<T | null> {
