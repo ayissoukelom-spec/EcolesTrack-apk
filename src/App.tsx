@@ -8,7 +8,6 @@ import {
   Terminal, ShieldCheck, Play, RefreshCw, Trash2, Smartphone, 
   BookOpen, HelpCircle, Code, HelpCircle as HelpIcon 
 } from "lucide-react";
-import AndroidEmulator from "./components/AndroidEmulator";
 import ParentPortal from "./components/ParentPortal";
 import DeveloperConsole from "./components/DeveloperConsole";
 import { Parent, Child, AppNotification, CompleteDeliveryLog } from "./types";
@@ -19,7 +18,8 @@ export default function App() {
     const envFlag = (import.meta as any)?.env?.VITE_MOBILE_PRODUCTION === "true";
     const isAndroidWebViewHost = typeof window !== "undefined" && (
       window.location.host === "appassets.androidplatform.net" ||
-      (window.location.protocol === "file:" && window.location.pathname.includes("/android_asset/"))
+      window.location.href.startsWith("file:///android_asset/") ||
+      window.location.href.includes("/android_asset/")
     );
     const searchParams = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
     const isMobileQueryMode = searchParams?.get("mobile") === "1" || searchParams?.get("mode") === "mobile" || searchParams?.get("mode") === "production";
@@ -254,26 +254,19 @@ export default function App() {
         </div>
 
         {/* COLUMN 2: ANDROID SMARTPHONE EMULATOR (4 cols) */}
-        <div className="lg:col-span-4 flex items-start lg:items-center justify-center h-auto lg:h-full lg:min-h-0 lg:overflow-y-auto py-2 lg:py-0">
-          <AndroidEmulator
+        <div className="lg:col-span-4">
+          <ParentPortal
+            token={token}
+            parent={parent}
+            onLoginSuccess={handleLoginSuccess}
+            onLogout={handleLogout}
+            activeTab={activeTab}
+            setActiveTab={setActiveTab}
+            selectedChild={selectedChild}
+            setSelectedChild={setSelectedChild}
             notifications={notifications}
-            onNotificationClick={handleNotificationClick}
-            onClearNotifications={handleClearLogs}
-            onPowerReset={handlePowerCycle}
-          >
-            <ParentPortal
-              token={token}
-              parent={parent}
-              onLoginSuccess={handleLoginSuccess}
-              onLogout={handleLogout}
-              activeTab={activeTab}
-              setActiveTab={setActiveTab}
-              selectedChild={selectedChild}
-              setSelectedChild={setSelectedChild}
-              notifications={notifications}
-              fetchNotifications={fetchNotifications}
-            />
-          </AndroidEmulator>
+            fetchNotifications={fetchNotifications}
+          />
         </div>
 
         {/* COLUMN 3: DEV TRIGGERS & LOG CONSOLE (4 cols) */}
