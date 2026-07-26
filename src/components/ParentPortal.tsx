@@ -38,6 +38,8 @@ export default function ParentPortal({
   notifications,
   fetchNotifications
 }: ParentPortalProps) {
+  // APK debug: log incoming props
+  console.log('[APK DEBUG] ParentPortal props', { notifications });
   
   // Login credentials state
   const [email, setEmail] = useState("");
@@ -54,6 +56,19 @@ export default function ParentPortal({
   const [preferences, setPreferences] = useState<NotificationPreferences | null>(null);
   const [consents, setConsents] = useState<ParentConsent[]>([]);
   const [activeSchoolId, setActiveSchoolId] = useState("");
+  const [localNotifications, setLocalNotifications] = useState<AppNotification[]>(notifications);
+  const [markingNotificationIds, setMarkingNotificationIds] = useState<string[]>([]);
+  const [readOverrides, setReadOverrides] = useState<Set<string>>(new Set());
+
+  // Keep a local copy of notifications so the badge updates immediately.
+  useEffect(() => {
+    const mapped = notifications.map((notif) => ({
+      ...notif,
+      read: notif.read || readOverrides.has(notif.id)
+    }));
+    console.log('[APK DEBUG] localNotifications (before set)', mapped);
+    setLocalNotifications(mapped);
+  }, [notifications, readOverrides]);
 
   // Sub-tab inside child details (Notes vs Absences)
   const [childDetailTab, setChildDetailTab] = useState<"grades" | "absences">("grades");
@@ -442,8 +457,13 @@ export default function ParentPortal({
         method: "PUT",
         headers: { "Authorization": `Bearer ${token}` }
       });
+      const data = await parseJsonSafe(response);
       if (response.ok) {
+        setLocalNotifications((prev) => prev.map((item) => ({ ...item, read: true })));
+        setReadOverrides(new Set(localNotifications.map((item) => item.id)));
         fetchNotifications();
+      } else {
+        console.error("Failed to mark all notifications as read", getApiErrorMessage(data, "Unknown API error"));
       }
     } catch (e) {
       console.error(e);
@@ -451,16 +471,44 @@ export default function ParentPortal({
   };
 
   const handleMarkNotificationRead = async (notif: AppNotification) => {
+    console.log('[APK DEBUG] handleMarkNotificationRead called', { id: notif.id, read: notif.read });
+    if (notif.read || markingNotificationIds.includes(notif.id)) {
+      return;
+    }
+
+    setReadOverrides((prev) => {
+      const next = new Set(prev);
+      next.add(notif.id);
+      return next;
+    });
+    setLocalNotifications((prev) => prev.map((item) =>
+      item.id === notif.id ? { ...item, read: true } : item
+    ));
+    setMarkingNotificationIds((prev) => [...prev, notif.id]);
+
     try {
       const response = await fetch(withApiBase(`/api/mobile/parent/notifications/${notif.id}/read`), {
         method: "PUT",
         headers: { "Authorization": `Bearer ${token}` }
       });
-      if (response.ok) {
-        fetchNotifications();
+      const responseData = await parseJsonSafe(response);
+      if (!response.ok) {
+        const errorMessage = getApiErrorMessage(responseData, `Failed to mark notification ${notif.id} as read`);
+        throw new Error(errorMessage);
       }
+      fetchNotifications();
     } catch (e) {
       console.error(`Failed to mark notification ${notif.id} as read`, e);
+      setReadOverrides((prev) => {
+        const next = new Set(prev);
+        next.delete(notif.id);
+        return next;
+      });
+      setLocalNotifications((prev) => prev.map((item) =>
+        item.id === notif.id ? { ...item, read: false } : item
+      ));
+    } finally {
+      setMarkingNotificationIds((prev) => prev.filter((id) => id !== notif.id));
     }
   };
 
@@ -494,10 +542,10 @@ export default function ParentPortal({
     return "info";
   };
 
-  const notesNotifications = notifications.filter((notif) => classifyParentNotification(notif) === "notes");
-  const homeworkNotifications = notifications.filter((notif) => classifyParentNotification(notif) === "homework");
-  const absenceNotifications = notifications.filter((notif) => classifyParentNotification(notif) === "absences");
-  const infoNotifications = notifications.filter((notif) => classifyParentNotification(notif) === "info");
+  const notesNotifications = localNotifications.filter((notif) => classifyParentNotification(notif) === "notes");
+  const homeworkNotifications = localNotifications.filter((notif) => classifyParentNotification(notif) === "homework");
+  const absenceNotifications = localNotifications.filter((notif) => classifyParentNotification(notif) === "absences");
+  const infoNotifications = localNotifications.filter((notif) => classifyParentNotification(notif) === "info");
   const visibleAlertNotifications =
     alertMenu === "notes"
       ? notesNotifications
@@ -507,7 +555,7 @@ export default function ParentPortal({
           ? absenceNotifications
           : infoNotifications;
 
-  const unreadNotificationsCount = notifications.filter((n) => !n.read).length;
+  const unreadNotificationsCount = localNotifications.filter((n) => !n.read).length;
   const activeAlertsCount = [...notesNotifications, ...homeworkNotifications, ...absenceNotifications, ...infoNotifications].filter((n) => !n.read).length;
 
   // --- RENDERING VIEWS ---
@@ -961,7 +1009,10 @@ export default function ParentPortal({
                     {visibleAlertNotifications.map((notif) => (
                       <div
                         key={notif.id}
+                        role="button"
+                        tabIndex={0}
                         onClick={async () => {
+                          console.log("Notification click:", notif.id, "read?", notif.read);
                           const firstChild = children[0];
                           if (firstChild) {
                             setSelectedChild(firstChild);
@@ -969,7 +1020,19 @@ export default function ParentPortal({
                           }
                           await handleMarkNotificationRead(notif);
                         }}
-                        className={`bg-white border rounded-2xl p-3 shadow-sm text-left relative cursor-pointer hover:border-rose-200 transition-all ${
+                        onKeyDown={async (event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            console.log("Notification key activate:", notif.id, "read?", notif.read);
+                            const firstChild = children[0];
+                            if (firstChild) {
+                              setSelectedChild(firstChild);
+                              setChildDetailTab("grades");
+                            }
+                            await handleMarkNotificationRead(notif);
+                          }
+                        }}
+                        className={`bg-white border rounded-2xl p-3 shadow-sm text-left relative cursor-pointer transition-all ${
                           notif.read ? "border-slate-100 opacity-75" : "border-rose-200 ring-1 ring-rose-500/10"
                         }`}
                       >
@@ -984,7 +1047,11 @@ export default function ParentPortal({
                           {notif.title}
                         </h4>
                         <p className="text-[11px] text-slate-600 mt-1 leading-normal font-medium">{notif.message}</p>
-
+                        <div className="mt-3">
+                          <span className={`text-[10px] font-bold ${notif.read ? 'text-slate-400' : 'text-indigo-600'}`}>
+                            {notif.read ? 'Message déjà lu' : 'Nouveau message'}
+                          </span>
+                        </div>
                       </div>
                     ))}
                   </div>

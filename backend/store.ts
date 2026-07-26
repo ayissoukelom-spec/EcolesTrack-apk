@@ -11,6 +11,7 @@ import {
   CompleteDeliveryLog
 } from '../src/types';
 import { initializeMobileTables, dbQuery, pool } from './postgres';
+import { logger } from './utils/logger';
 import { mapWebParentToMobileParent, mapWebStudentToChild } from './mobileAdapter';
 
 interface DatabaseSchema {
@@ -544,6 +545,13 @@ export class PostgresStore {
       ORDER BY created_at DESC
     `, [userId]);
 
+    // TEMP LOG: list notification ids and their is_read values for debugging
+    try {
+      logger.debug(`Fetched ${rows.length} notifications for parent=${parentId}`, { notifications: rows.map(r => ({ id: r.id, is_read: r.is_read })) });
+    } catch (e) {
+      // ignore logging errors
+    }
+
     return rows.map((row) => ({
       id: String(row.id),
       parentId,
@@ -559,11 +567,15 @@ export class PostgresStore {
     const userId = Number(parentId);
     if (!Number.isInteger(userId)) return;
 
-    await dbQuery(`
+    const result = await dbQuery(`
       UPDATE notifications
       SET is_read = true
       WHERE user_id = $1
     `, [userId]);
+
+    try {
+      logger.info(`Marked all notifications as read for parent=${parentId}`, { rowCount: (result as any).rowCount });
+    } catch (e) {}
   }
 
   public async markInAppNotificationAsRead(parentId: string, notificationId: string) {
@@ -571,11 +583,28 @@ export class PostgresStore {
     const notifId = Number(notificationId);
     if (!Number.isInteger(userId) || !Number.isInteger(notifId)) return;
 
-    await dbQuery(`
+    // Log incoming ID
+    try { logger.info(`PUT mark notification read`, { parentId: userId, notificationId: notifId }); } catch (e) {}
+
+    const result = await dbQuery(`
       UPDATE notifications
       SET is_read = true
       WHERE user_id = $1 AND id = $2
     `, [userId, notifId]);
+
+    try { logger.info(`Update result for notification`, { parentId: userId, notificationId: notifId, rowCount: (result as any).rowCount }); } catch (e) {}
+
+    // Read back the value to ensure database persisted the change
+    try {
+      const check = await dbQuery<{ is_read: boolean }>(`
+        SELECT is_read
+        FROM notifications
+        WHERE user_id = $1 AND id = $2
+      `, [userId, notifId]);
+      logger.info(`Post-update is_read value`, { parentId: userId, notificationId: notifId, is_read: check.rows[0]?.is_read });
+    } catch (e) {
+      logger.error('Error while checking is_read after update', e, { parentId: userId, notificationId: notifId });
+    }
   }
 
   public async addInAppNotification(parentId: string, title: string, message: string, deepLink?: string): Promise<AppNotification> {

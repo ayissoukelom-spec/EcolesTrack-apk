@@ -50,8 +50,12 @@ export default function App() {
         headers: { "Authorization": `Bearer ${token}` }
       });
       if (response.ok) {
-        const data = await parseJsonSafe<AppNotification[]>(response);
-        setNotifications(Array.isArray(data) ? data : []);
+        const raw = await response.clone().text();
+        console.log('[APK DEBUG] GET response', raw);
+        const data = await parseJsonSafe<AppNotification[]>(response.clone());
+        const mapped = Array.isArray(data) ? data : [];
+        console.log('[APK DEBUG] mapped notifications', mapped);
+        setNotifications(mapped);
       }
     } catch (e) {
       console.error("Failed to fetch notifications", e);

@@ -125,6 +125,52 @@ async function dbQuery(text, params = []) {
   return result;
 }
 
+// backend/utils/logger.ts
+var Logger = class {
+  constructor(context = "System") {
+    this.context = context;
+  }
+  log(level, message, meta) {
+    const timestamp = (/* @__PURE__ */ new Date()).toISOString();
+    const payload = {
+      timestamp,
+      level,
+      context: this.context,
+      message,
+      ...meta || {}
+    };
+    if (process.env.NODE_ENV === "production") {
+      console.log(JSON.stringify(payload));
+    } else {
+      const metaStr = meta ? ` | Meta: ${JSON.stringify(meta)}` : "";
+      const color = level === "ERROR" ? "\x1B[31m" : level === "WARN" ? "\x1B[33m" : level === "AUDIT" ? "\x1B[36m" : "\x1B[32m";
+      const reset = "\x1B[0m";
+      console.log(`[${timestamp}] [${color}${level}${reset}] [${this.context}] ${message}${metaStr}`);
+    }
+  }
+  info(message, meta) {
+    this.log("INFO", message, meta);
+  }
+  warn(message, meta) {
+    this.log("WARN", message, meta);
+  }
+  error(message, error, meta) {
+    const errMeta = error instanceof Error ? { errorName: error.name, errorMessage: error.message, stack: error.stack } : { error };
+    this.log("ERROR", message, { ...errMeta, ...meta });
+  }
+  audit(action, actor, details, status) {
+    this.log("AUDIT", `AUDIT TRIAL: ${action} by ${actor} [${status}]`, {
+      audit: { action, actor, details, status }
+    });
+  }
+  debug(message, meta) {
+    if (process.env.NODE_ENV !== "production") {
+      this.log("DEBUG", message, meta);
+    }
+  }
+};
+var logger = new Logger("Global");
+
 // backend/mobileAdapter.ts
 function mapWebParentToMobileParent(row) {
   return {
@@ -372,6 +418,10 @@ var PostgresStore = class {
       WHERE user_id = $1
       ORDER BY created_at DESC
     `, [userId]);
+    try {
+      logger.debug(`Fetched ${rows.length} notifications for parent=${parentId}`, { notifications: rows.map((r) => ({ id: r.id, is_read: r.is_read })) });
+    } catch (e) {
+    }
     return rows.map((row) => ({
       id: String(row.id),
       parentId,
@@ -385,11 +435,43 @@ var PostgresStore = class {
   async markAllInAppNotificationsAsRead(parentId) {
     const userId = Number(parentId);
     if (!Number.isInteger(userId)) return;
-    await dbQuery(`
+    const result = await dbQuery(`
       UPDATE notifications
       SET is_read = true
       WHERE user_id = $1
     `, [userId]);
+    try {
+      logger.info(`Marked all notifications as read for parent=${parentId}`, { rowCount: result.rowCount });
+    } catch (e) {
+    }
+  }
+  async markInAppNotificationAsRead(parentId, notificationId) {
+    const userId = Number(parentId);
+    const notifId = Number(notificationId);
+    if (!Number.isInteger(userId) || !Number.isInteger(notifId)) return;
+    try {
+      logger.info(`PUT mark notification read`, { parentId: userId, notificationId: notifId });
+    } catch (e) {
+    }
+    const result = await dbQuery(`
+      UPDATE notifications
+      SET is_read = true
+      WHERE user_id = $1 AND id = $2
+    `, [userId, notifId]);
+    try {
+      logger.info(`Update result for notification`, { parentId: userId, notificationId: notifId, rowCount: result.rowCount });
+    } catch (e) {
+    }
+    try {
+      const check = await dbQuery(`
+        SELECT is_read
+        FROM notifications
+        WHERE user_id = $1 AND id = $2
+      `, [userId, notifId]);
+      logger.info(`Post-update is_read value`, { parentId: userId, notificationId: notifId, is_read: check.rows[0]?.is_read });
+    } catch (e) {
+      logger.error("Error while checking is_read after update", e, { parentId: userId, notificationId: notifId });
+    }
   }
   async addInAppNotification(parentId, title, message, deepLink) {
     const userId = Number(parentId);
@@ -793,52 +875,6 @@ async function triggerMultiChannelNotification(parentId, title, message, eventTy
     }
   };
 }
-
-// backend/utils/logger.ts
-var Logger = class {
-  constructor(context = "System") {
-    this.context = context;
-  }
-  log(level, message, meta) {
-    const timestamp = (/* @__PURE__ */ new Date()).toISOString();
-    const payload = {
-      timestamp,
-      level,
-      context: this.context,
-      message,
-      ...meta || {}
-    };
-    if (process.env.NODE_ENV === "production") {
-      console.log(JSON.stringify(payload));
-    } else {
-      const metaStr = meta ? ` | Meta: ${JSON.stringify(meta)}` : "";
-      const color = level === "ERROR" ? "\x1B[31m" : level === "WARN" ? "\x1B[33m" : level === "AUDIT" ? "\x1B[36m" : "\x1B[32m";
-      const reset = "\x1B[0m";
-      console.log(`[${timestamp}] [${color}${level}${reset}] [${this.context}] ${message}${metaStr}`);
-    }
-  }
-  info(message, meta) {
-    this.log("INFO", message, meta);
-  }
-  warn(message, meta) {
-    this.log("WARN", message, meta);
-  }
-  error(message, error, meta) {
-    const errMeta = error instanceof Error ? { errorName: error.name, errorMessage: error.message, stack: error.stack } : { error };
-    this.log("ERROR", message, { ...errMeta, ...meta });
-  }
-  audit(action, actor, details, status) {
-    this.log("AUDIT", `AUDIT TRIAL: ${action} by ${actor} [${status}]`, {
-      audit: { action, actor, details, status }
-    });
-  }
-  debug(message, meta) {
-    if (process.env.NODE_ENV !== "production") {
-      this.log("DEBUG", message, meta);
-    }
-  }
-};
-var logger = new Logger("Global");
 
 // backend/middlewares/security.ts
 var logger2 = new Logger("SecurityMiddleware");
@@ -1431,6 +1467,12 @@ app.put("/api/mobile/parent/notifications/read-all", requireAuth, requireParentR
   const parentId = req.parent.id;
   await store.markAllInAppNotificationsAsRead(parentId);
   return res.json({ success: true, message: "Toutes les notifications ont \xE9t\xE9 marqu\xE9es comme lues." });
+});
+app.put("/api/mobile/parent/notifications/:id/read", requireAuth, requireParentRoleOnly, async (req, res) => {
+  const parentId = req.parent.id;
+  const { id } = req.params;
+  await store.markInAppNotificationAsRead(parentId, id);
+  return res.json({ success: true, message: "Notification marqu\xE9e comme lue." });
 });
 app.post("/api/mobile/parent/devices/register-push-token", requireAuth, requireParentRoleOnly, async (req, res) => {
   const parentId = req.parent.id;
