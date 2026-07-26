@@ -6,11 +6,11 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { 
   Lock, Mail, LogOut, User, Award, Calendar, Bell, Shield, 
-  CheckCircle2, XCircle, ChevronRight, School, RefreshCw, Eye, AlertTriangle 
+  CheckCircle2, XCircle, ChevronRight, School, Eye, AlertTriangle 
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import logoImage from "../assets/logo.png";
-import { Parent, Child, Absence, Grade, AppNotification, NotificationPreferences, ParentConsent } from "../types";
+import { Parent, Child, Absence, Grade, AppNotification } from "../types";
 import { getApiErrorMessage, parseJsonSafe, withApiBase } from "../utils/http";
 
 interface ParentPortalProps {
@@ -53,8 +53,7 @@ export default function ParentPortal({
   const [children, setChildren] = useState<Child[]>([]);
   const [absences, setAbsences] = useState<Absence[]>([]);
   const [grades, setGrades] = useState<Grade[]>([]);
-  const [preferences, setPreferences] = useState<NotificationPreferences | null>(null);
-  const [consents, setConsents] = useState<ParentConsent[]>([]);
+
   const [activeSchoolId, setActiveSchoolId] = useState("");
   const [localNotifications, setLocalNotifications] = useState<AppNotification[]>(notifications);
   const [markingNotificationIds, setMarkingNotificationIds] = useState<string[]>([]);
@@ -75,14 +74,13 @@ export default function ParentPortal({
   const [alertMenu, setAlertMenu] = useState<"notes" | "homework" | "absences" | "info">("notes");
   const [gradeSubjectFilter, setGradeSubjectFilter] = useState("all");
   const [gradePeriodFilter, setGradePeriodFilter] = useState<"all" | "7d" | "30d" | "trimester">("all");
-
+  
   // Load children list when authenticated
   const parentId = parent?.id;
   const parentActiveSchoolId = parent?.activeSchoolId;
   useEffect(() => {
     if (token && parentId) {
       fetchChildren();
-      fetchPreferences();
       if (parentActiveSchoolId) {
         setActiveSchoolId(parentActiveSchoolId);
       }
@@ -248,7 +246,11 @@ export default function ParentPortal({
       });
       if (response.ok) {
         const data = await parseJsonSafe<Absence[]>(response);
-        setAbsences(Array.isArray(data) ? data : []);
+        // Sort absences by date descending (most recent first)
+        const sortedAbsences = Array.isArray(data) 
+          ? [...data].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+          : [];
+        setAbsences(sortedAbsences);
       }
     } catch (e) {
       console.error("Failed to fetch absences", e);
@@ -267,78 +269,6 @@ export default function ParentPortal({
       }
     } catch (e) {
       console.error("Failed to fetch grades", e);
-    }
-  };
-
-  // API Call: Fetch Notification Preferences & Consents
-  const fetchPreferences = async () => {
-    try {
-      const response = await fetch(withApiBase("/api/mobile/parent/notification-preferences"), {
-        headers: { "Authorization": `Bearer ${token}` }
-      });
-      if (response.ok) {
-        const data = await parseJsonSafe<{ preferences?: NotificationPreferences; consents?: ParentConsent[] }>(response);
-        setPreferences(data?.preferences ?? null);
-        setConsents(Array.isArray(data?.consents) ? data!.consents : []);
-      }
-    } catch (e) {
-      console.error("Failed to fetch preferences", e);
-    }
-  };
-
-  // API Call: Toggle Notification preferences and consents
-  const handleTogglePreference = async (channel: "push" | "whatsapp" | "sms", currentVal: boolean) => {
-    if (!preferences) return;
-
-    const updates: any = {};
-    if (channel === "push") updates.pushEnabled = !currentVal;
-    if (channel === "whatsapp") updates.whatsappEnabled = !currentVal;
-    if (channel === "sms") updates.smsEnabled = !currentVal;
-
-    try {
-      const response = await fetch(withApiBase("/api/mobile/parent/notification-preferences"), {
-        method: "PUT",
-        headers: {
-          "Authorization": `Bearer ${token}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(updates)
-      });
-      if (response.ok) {
-        const data = await parseJsonSafe<{ preferences?: NotificationPreferences; consents?: ParentConsent[] }>(response);
-        setPreferences(data?.preferences ?? null);
-        setConsents(Array.isArray(data?.consents) ? data!.consents : []);
-        
-        // Also trigger register token in background if user enabled push
-        if (channel === "push" && !currentVal) {
-          registerMockToken();
-        }
-      }
-    } catch (e) {
-      console.error("Failed to update preferences", e);
-    }
-  };
-
-  // API Call: Consent Toggle explicitly
-  const handleToggleConsent = async (channel: "whatsapp" | "sms", currentGranted: boolean) => {
-    try {
-      const response = await fetch(withApiBase("/api/mobile/parent/notification-preferences"), {
-        method: "PUT",
-        headers: {
-          "Authorization": `Bearer ${token}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          [`${channel}Consent`]: !currentGranted
-        })
-      });
-      if (response.ok) {
-        const data = await parseJsonSafe<{ preferences?: NotificationPreferences; consents?: ParentConsent[] }>(response);
-        setPreferences(data?.preferences ?? null);
-        setConsents(Array.isArray(data?.consents) ? data!.consents : []);
-      }
-    } catch (e) {
-      console.error("Failed to update consent", e);
     }
   };
 
@@ -1059,107 +989,6 @@ export default function ParentPortal({
               </motion.div>
             )}
 
-            {activeTab === "preferences" && preferences && (
-              <motion.div 
-                key="preferences"
-                initial={{ opacity: 0, y: 5 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                className="space-y-4"
-              >
-                <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Canaux de notification</h3>
-                
-                <div className="bg-white rounded-2xl border border-slate-100 p-4 space-y-4 shadow-sm">
-                  
-                  {/* Push channel toggle */}
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h4 className="text-xs font-bold text-slate-800">Notifications Push (Mobile)</h4>
-                      <p className="text-[10px] text-slate-500">Alertes temps réel sur votre écran d&apos;accueil.</p>
-                    </div>
-                    <label className="relative inline-flex items-center cursor-pointer select-none">
-                      <input 
-                        type="checkbox" 
-                        checked={preferences.pushEnabled} 
-                        onChange={() => handleTogglePreference("push", preferences.pushEnabled)}
-                        className="sr-only peer" 
-                      />
-                      <div className="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600"></div>
-                    </label>
-                  </div>
-
-                  {/* WhatsApp channel toggle */}
-                  <div className="flex items-center justify-between border-t border-slate-50 pt-4">
-                    <div>
-                      <h4 className="text-xs font-bold text-slate-800">WhatsApp académique</h4>
-                      <p className="text-[10px] text-slate-500">Messages modèles officiels si Push indisponible.</p>
-                      {!consents.find(c => c.channel === "whatsapp" && c.consentGranted && !c.revokedAt) && (
-                        <span className="text-[8px] bg-rose-50 text-rose-600 font-bold px-1.5 py-0.5 rounded-md mt-1 inline-block">Consentement requis</span>
-                      )}
-                    </div>
-                    <label className="relative inline-flex items-center cursor-pointer select-none">
-                      <input 
-                        type="checkbox" 
-                        checked={preferences.whatsappEnabled} 
-                        disabled={!consents.find(c => c.channel === "whatsapp" && c.consentGranted && !c.revokedAt)}
-                        onChange={() => handleTogglePreference("whatsapp", preferences.whatsappEnabled)}
-                        className="sr-only peer" 
-                      />
-                      <div className="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-600 peer-disabled:opacity-50"></div>
-                    </label>
-                  </div>
-
-                  {/* SMS channel toggle */}
-                  <div className="flex items-center justify-between border-t border-slate-50 pt-4">
-                    <div>
-                      <h4 className="text-xs font-bold text-slate-800">SMS d&apos;urgence</h4>
-                      <p className="text-[10px] text-slate-500">SMS de secours si aucun autre canal n&apos;est disponible.</p>
-                      {!consents.find(c => c.channel === "sms" && c.consentGranted && !c.revokedAt) && (
-                        <span className="text-[8px] bg-rose-50 text-rose-600 font-bold px-1.5 py-0.5 rounded-md mt-1 inline-block">Consentement requis</span>
-                      )}
-                    </div>
-                    <label className="relative inline-flex items-center cursor-pointer select-none">
-                      <input 
-                        type="checkbox" 
-                        checked={preferences.smsEnabled} 
-                        disabled={!consents.find(c => c.channel === "sms" && c.consentGranted && !c.revokedAt)}
-                        onChange={() => handleTogglePreference("sms", preferences.smsEnabled)}
-                        className="sr-only peer" 
-                      />
-                      <div className="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600 peer-disabled:opacity-50"></div>
-                    </label>
-                  </div>
-
-                </div>
-
-                <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Période de tranquillité</h3>
-                <div className="bg-white rounded-2xl border border-slate-100 p-4 shadow-sm space-y-3">
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="flex-1">
-                      <label className="text-[10px] text-slate-500 font-bold block mb-1">Heure de début</label>
-                      <input 
-                        type="time" 
-                        value={preferences.quietHoursStart} 
-                        onChange={(e) => handleTogglePreference("push", preferences.pushEnabled)} // Trigger save on change
-                        className="bg-slate-100 rounded-xl py-1.5 px-2.5 text-xs font-bold focus:outline-none border-none w-full" 
-                      />
-                    </div>
-                    <div className="flex-1">
-                      <label className="text-[10px] text-slate-500 font-bold block mb-1">Heure de fin</label>
-                      <input 
-                        type="time" 
-                        value={preferences.quietHoursEnd} 
-                        onChange={(e) => handleTogglePreference("push", preferences.pushEnabled)} // Trigger save
-                        className="bg-slate-100 rounded-xl py-1.5 px-2.5 text-xs font-bold focus:outline-none border-none w-full" 
-                      />
-                    </div>
-                  </div>
-                  <p className="text-[10px] text-slate-500 leading-normal font-medium mt-1">
-                    * Durant ces heures, les SMS et WhatsApp sont bloqués et stockés pour livraison ultérieure afin de ne pas perturber votre sommeil.
-                  </p>
-                </div>
-              </motion.div>
-            )}
 
             {activeTab === "notes" && (
               <motion.div 
@@ -1304,16 +1133,6 @@ export default function ParentPortal({
           )}
           <Bell className="h-4.5 w-4.5" />
           <span>Absence</span>
-        </button>
-
-        <button
-          onClick={() => handleNavigateTab("preferences")}
-          className={`flex-1 flex flex-col items-center gap-1 py-1 text-[9px] font-bold ${
-            activeTab === "preferences" ? "text-indigo-600" : "text-slate-400 hover:text-slate-600"
-          }`}
-        >
-          <RefreshCw className="h-4.5 w-4.5" />
-          <span>Canaux</span>
         </button>
 
         <button
