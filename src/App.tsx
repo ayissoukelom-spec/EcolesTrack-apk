@@ -177,7 +177,7 @@ export default function App() {
           </div>
           <div>
             <h1 className="text-base font-black tracking-tight text-white flex items-center gap-2">
-              ÉcoleTrack Workspace
+              Ecoles Track Workspace
               <span className="text-[10px] bg-indigo-950 text-indigo-400 border border-indigo-800 px-2 py-0.5 rounded font-bold uppercase tracking-wider">
                 Fullstack SDK
               </span>

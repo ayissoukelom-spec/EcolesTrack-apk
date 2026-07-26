@@ -9,6 +9,7 @@ import {
   CheckCircle2, XCircle, ChevronRight, School, RefreshCw, Eye, AlertTriangle 
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
+import logoImage from "../assets/logo.png";
 import { Parent, Child, Absence, Grade, AppNotification, NotificationPreferences, ParentConsent } from "../types";
 import { getApiErrorMessage, parseJsonSafe, withApiBase } from "../utils/http";
 
@@ -143,14 +144,6 @@ export default function ParentPortal({
       meta: "text-emerald-300"
     };
   };
-
-  // Quick preset accounts to speed up testing
-  const presets = [
-    { name: "Parent (Jean)", email: "jean.dupont@email.com", pass: "parent123", role: "parent" },
-    { name: "Parent (Marie)", email: "marie.martin@email.com", pass: "parent123", role: "parent" },
-    { name: "Prof (Maths)", email: "teacher@ecoletrack.fr", pass: "teacher123", role: "teacher" },
-    { name: "Directeur Admin", email: "admin@ecoletrack.fr", pass: "admin123", role: "school_admin" }
-  ];
 
   // API Call: Login
   const handleLogin = async (e?: React.FormEvent, customEmail?: string, customPass?: string) => {
@@ -484,99 +477,94 @@ export default function ParentPortal({
   // Screen A: LOGIN SCREEN
   if (!token || !parent) {
     return (
-      <div className="flex-1 flex flex-col bg-slate-50 p-6 overflow-y-auto text-slate-800" id="login-screen">
-        {/* Brand header */}
-        <div className="text-center my-6">
-          <div className="mx-auto h-12 w-12 bg-indigo-600 rounded-2xl flex items-center justify-center text-white font-black text-xl shadow-lg shadow-indigo-600/30">
-            ÉT
-          </div>
-          <h1 className="text-xl font-extrabold text-slate-900 tracking-tight mt-3">ÉcoleTrack</h1>
-          <p className="text-xs text-slate-500 font-medium mt-1">Espace mobile d&apos;informations parents</p>
-        </div>
-
-        {/* Login Form card */}
-        <div className="bg-white rounded-2xl p-5 shadow-sm border border-slate-100 flex-1 flex flex-col justify-between">
-          <form onSubmit={handleLogin} className="space-y-4">
-            <div>
-              <label className="block text-xs font-bold text-slate-600 uppercase mb-1.5">Adresse email</label>
-              <div className="relative">
-                <Mail className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="nom@email.com"
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all"
-                  required
-                />
+      <div className="flex-1 flex flex-col items-center justify-center min-h-screen px-4 py-8 bg-slate-950 text-slate-100" id="login-screen">
+        <div className="w-full max-w-md">
+          <div className="rounded-[2rem] border border-slate-800 bg-slate-900/95 p-7 shadow-2xl shadow-indigo-900/30">
+            <div className="flex flex-col items-center gap-4 mb-7 text-center">
+              <img
+                src={logoImage}
+                alt="Ecoles Track"
+                className="mx-auto h-20 w-20 rounded-3xl object-contain shadow-lg shadow-indigo-900/20"
+              />
+              <div>
+                <h1 className="text-2xl font-extrabold tracking-tight text-white">Ecoles Track</h1>
+                <p className="text-xs text-slate-500 mt-1">Portail parents</p>
+              </div>
+            </div>
+            <div className="space-y-3 mb-7">
+              <div className="inline-flex items-center justify-center rounded-full bg-slate-800/90 px-3 py-2 text-xs font-semibold text-slate-100 ring-1 ring-slate-700">
+                <span className="text-lg">🇹🇬</span>
+                <span className="ml-2">Togo</span>
               </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-bold text-slate-600 uppercase mb-1.5">Mot de passe</label>
-              <div className="relative">
-                <Lock className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
-                <input
-                  type={showPassword ? "text" : "password"}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-10 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all"
-                  required
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-3 text-slate-400 hover:text-indigo-600"
+            <div className="space-y-2 mb-8">
+              <h1 className="text-3xl font-extrabold tracking-tight text-white">Connexion parentale</h1>
+              <p className="text-sm leading-6 text-slate-400">Utilisez votre email et mot de passe fournis par l&apos;école pour accéder aux notes, absences et messages.</p>
+            </div>
+
+            <form onSubmit={handleLogin} className="space-y-5">
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-[0.15em] text-slate-400 mb-2">Adresse email</label>
+                <div className="relative">
+                  <Mail className="absolute left-3 top-3 h-4 w-4 text-slate-500" />
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="nom@email.com"
+                    className="w-full rounded-2xl border border-slate-800 bg-slate-950 py-3 pl-11 pr-4 text-sm text-slate-100 placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-[0.15em] text-slate-400 mb-2">Mot de passe</label>
+                <div className="relative">
+                  <Lock className="absolute left-3 top-3 h-4 w-4 text-slate-500" />
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full rounded-2xl border border-slate-800 bg-slate-950 py-3 pl-11 pr-11 text-sm text-slate-100 placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-3 text-slate-400 hover:text-indigo-300"
+                    aria-label={showPassword ? "Masquer le mot de passe" : "Afficher le mot de passe"}
+                  >
+                    <Eye className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+
+              {errorMsg && (
+                <motion.div
+                  initial={{ opacity: 0, y: -5 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="rounded-2xl border border-rose-700/40 bg-rose-950/80 p-3 text-sm text-rose-200"
                 >
-                  <Eye className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
+                  <div className="flex items-start gap-2">
+                    <XCircle className="h-4 w-4 text-rose-300 mt-0.5" />
+                    <span>{errorMsg}</span>
+                  </div>
+                </motion.div>
+              )}
 
-            {errorMsg && (
-              <motion.div
-                initial={{ opacity: 0, y: -5 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="p-3 rounded-xl bg-rose-50 border border-rose-100 text-[11px] font-semibold text-rose-600 flex items-start gap-2"
+              <button
+                type="submit"
+                disabled={isLoading}
+                className="w-full rounded-2xl bg-gradient-to-r from-indigo-500 via-violet-600 to-emerald-500 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-indigo-900/25 transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                <XCircle className="h-4 w-4 shrink-0 mt-0.5" />
-                <span>{errorMsg}</span>
-              </motion.div>
-            )}
+                {isLoading ? "Connexion..." : "Se connecter"}
+              </button>
+            </form>
 
-            <button
-              type="submit"
-              disabled={isLoading}
-              className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-bold text-xs py-3 rounded-xl transition-all shadow-md shadow-indigo-600/20 active:scale-95"
-            >
-              {isLoading ? "Connexion..." : "Se connecter"}
-            </button>
-          </form>
-
-          {/* Quick Preset Buttons (To demonstrate role restriction & account switching) */}
-          <div className="mt-6 pt-5 border-t border-slate-100">
-            <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider text-center mb-3">Comptes de test (Un clic)</h3>
-            <div className="grid grid-cols-2 gap-2">
-              {presets.map((p, idx) => (
-                <button
-                  key={idx}
-                  type="button"
-                  onClick={() => handleLogin(undefined, p.email, p.pass)}
-                  className={`py-2 px-2.5 text-[10px] font-bold rounded-xl border transition-all text-left flex flex-col justify-between ${
-                    p.role === "parent" 
-                      ? "bg-indigo-50/50 border-indigo-100 text-indigo-700 hover:bg-indigo-50" 
-                      : "bg-amber-50/50 border-amber-100 text-amber-800 hover:bg-amber-50"
-                  }`}
-                >
-                  <span>{p.name}</span>
-                  <span className="text-[8px] font-normal text-slate-400 mt-0.5 truncate">{p.email}</span>
-                </button>
-              ))}
-            </div>
-            <p className="text-[9px] text-center text-slate-400 leading-normal mt-4">
-              * Les comptes <strong>Prof</strong> et <strong>Directeur</strong> échoueront avec une erreur <span className="text-rose-500 font-semibold">403 interdite</span> car l&apos;application est réservée aux parents.
-            </p>
+            <p className="mt-6 text-center text-xs text-slate-500">Connexion sécurisée pour les parents d&apos;élèves d&apos;Ecoles Track.</p>
           </div>
         </div>
       </div>
@@ -597,7 +585,7 @@ export default function ParentPortal({
             ÉT
           </div>
           <div>
-            <h2 className="text-xs font-black text-white leading-tight">ÉcoleTrack</h2>
+            <h2 className="text-xs font-black text-white leading-tight">Ecoles Track</h2>
             {/* Multi-school context picker */}
             {parent.schools.length > 1 ? (
               <div className="relative inline-block">
