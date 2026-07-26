@@ -384,6 +384,10 @@ export default function ParentPortal({
     [absences, trimesterStart]
   );
 
+  const absenceCount = currentTrimesterAbsences.length;
+  console.log("Absences reçues API :", absences);
+  console.log("Nombre calculé :", absenceCount);
+
   const currentChild = selectedChild || children[0] || null;
 
   const formatBirthDate = (dateString: string) => {
@@ -581,8 +585,8 @@ export default function ParentPortal({
       {/* Dynamic Header */}
       <div className="bg-gradient-to-r from-indigo-600 to-indigo-700 border-b border-indigo-700 px-4 py-3 flex items-center justify-between shadow-md shrink-0 text-white">
         <div className="flex items-center gap-3">
-          <div className="h-8 w-8 bg-white/20 rounded-xl flex items-center justify-center text-white font-extrabold text-sm shadow-md">
-            ÉT
+          <div className="h-8 w-8 bg-white/20 rounded-xl flex items-center justify-center shadow-md overflow-hidden">
+            <img src={logoImage} alt="Ecoles Track" className="h-6 w-6 object-contain" />
           </div>
           <div>
             <h2 className="text-xs font-black text-white leading-tight">Ecoles Track</h2>
@@ -680,7 +684,7 @@ export default function ParentPortal({
                         </div>
                         <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-3">
                           <p className="text-[9px] font-bold uppercase tracking-wider text-emerald-600">Absences</p>
-                          <p className="text-xl font-black text-emerald-900 mt-1">{uniqueCurrentAbsenceDates}</p>
+                          <p className="text-xl font-black text-emerald-900 mt-1">{absenceCount}</p>
                           <p className="text-[10px] text-emerald-700/80 font-medium mt-0.5">sur la période en cours</p>
                         </div>
                       </div>
