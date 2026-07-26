@@ -57,7 +57,7 @@ export default function ParentPortal({
 
   // Sub-tab inside child details (Notes vs Absences)
   const [childDetailTab, setChildDetailTab] = useState<"grades" | "absences">("grades");
-  const [alertMenu, setAlertMenu] = useState<"grades" | "homework">("grades");
+  const [alertMenu, setAlertMenu] = useState<"notes" | "homework" | "absences" | "info">("notes");
   const [gradeSubjectFilter, setGradeSubjectFilter] = useState("all");
   const [gradePeriodFilter, setGradePeriodFilter] = useState<"all" | "7d" | "30d" | "trimester">("all");
 
@@ -450,31 +450,65 @@ export default function ParentPortal({
     }
   };
 
-  const isGradeAlert = (notif: AppNotification) => {
-    const content = `${notif.title} ${notif.message}`.toLowerCase();
-    return (
-      content.includes("note") ||
-      content.includes("éval") ||
-      content.includes("evaluation") ||
-      content.includes("bulletin") ||
-      content.includes("moyenne")
-    );
+  const handleMarkNotificationRead = async (notif: AppNotification) => {
+    try {
+      const response = await fetch(withApiBase(`/api/mobile/parent/notifications/${notif.id}/read`), {
+        method: "PUT",
+        headers: { "Authorization": `Bearer ${token}` }
+      });
+      if (response.ok) {
+        fetchNotifications();
+      }
+    } catch (e) {
+      console.error(`Failed to mark notification ${notif.id} as read`, e);
+    }
   };
 
-  const isHomeworkAlert = (notif: AppNotification) => {
-    const content = `${notif.title} ${notif.message}`.toLowerCase();
-    return (
-      content.includes("devoir") ||
-      content.includes("homework") ||
-      content.includes("exercice")
-    );
+  const normalizeNotificationText = (text?: string) =>
+    (text || "")
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[-\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9\s]/g, " ")
+      .trim();
+
+  const classifyParentNotification = (notif: AppNotification) => {
+    const payload = normalizeNotificationText(`${notif.title} ${notif.message}`);
+
+    if (/\b(devoir|homework|assignment|exercice|travail)\b/.test(payload)) {
+      return "homework";
+    }
+
+    if (/\b(note|notes|moyenne|evaluation|évaluation|éval|bulletin)\b/.test(payload)) {
+      return "notes";
+    }
+
+    if (/\b(absence|absences|retard|retards)\b/.test(payload)) {
+      return "absences";
+    }
+
+    if (/\b(info|information|informations|annonce|message|communique|communiqué|actualité)\b/.test(payload)) {
+      return "info";
+    }
+
+    return "info";
   };
 
-  const gradeAlertNotifications = notifications.filter(isGradeAlert);
-  const homeworkAlertNotifications = notifications.filter(isHomeworkAlert);
-  const visibleAlertNotifications = alertMenu === "grades" ? gradeAlertNotifications : homeworkAlertNotifications;
+  const notesNotifications = notifications.filter((notif) => classifyParentNotification(notif) === "notes");
+  const homeworkNotifications = notifications.filter((notif) => classifyParentNotification(notif) === "homework");
+  const absenceNotifications = notifications.filter((notif) => classifyParentNotification(notif) === "absences");
+  const infoNotifications = notifications.filter((notif) => classifyParentNotification(notif) === "info");
+  const visibleAlertNotifications =
+    alertMenu === "notes"
+      ? notesNotifications
+      : alertMenu === "homework"
+        ? homeworkNotifications
+        : alertMenu === "absences"
+          ? absenceNotifications
+          : infoNotifications;
+
   const unreadNotificationsCount = notifications.filter((n) => !n.read).length;
-  const activeAlertsCount = [...gradeAlertNotifications, ...homeworkAlertNotifications].filter((n) => !n.read).length;
+  const activeAlertsCount = [...notesNotifications, ...homeworkNotifications, ...absenceNotifications, ...infoNotifications].filter((n) => !n.read).length;
 
   // --- RENDERING VIEWS ---
 
@@ -861,16 +895,16 @@ export default function ParentPortal({
 
                 <div className="bg-white rounded-2xl border border-slate-100 p-1.5 grid grid-cols-2 gap-1.5">
                   <button
-                    onClick={() => setAlertMenu("grades")}
+                    onClick={() => setAlertMenu("notes")}
                     className={`rounded-xl px-3 py-2 text-[10px] font-bold transition-colors flex items-center justify-center gap-1.5 ${
-                      alertMenu === "grades"
+                      alertMenu === "notes"
                         ? "bg-indigo-600 text-white"
                         : "bg-slate-50 text-slate-600 hover:bg-slate-100"
                     }`}
                   >
-                    Notes publiées
-                    <span className={`text-[9px] px-1.5 py-0.5 rounded-md ${alertMenu === "grades" ? "bg-white/20" : "bg-white"}`}>
-                      {gradeAlertNotifications.length}
+                    Notes
+                    <span className={`text-[9px] px-1.5 py-0.5 rounded-md ${alertMenu === "notes" ? "bg-white/20" : "bg-white"}`}>
+                      {notesNotifications.filter((n) => !n.read).length}
                     </span>
                   </button>
                   <button
@@ -881,9 +915,35 @@ export default function ParentPortal({
                         : "bg-slate-50 text-slate-600 hover:bg-slate-100"
                     }`}
                   >
-                    Devoirs
+                    Devoirs à venir
                     <span className={`text-[9px] px-1.5 py-0.5 rounded-md ${alertMenu === "homework" ? "bg-white/20" : "bg-white"}`}>
-                      {homeworkAlertNotifications.length}
+                      {homeworkNotifications.filter((n) => !n.read).length}
+                    </span>
+                  </button>
+                  <button
+                    onClick={() => setAlertMenu("absences")}
+                    className={`rounded-xl px-3 py-2 text-[10px] font-bold transition-colors flex items-center justify-center gap-1.5 ${
+                      alertMenu === "absences"
+                        ? "bg-emerald-600 text-white"
+                        : "bg-slate-50 text-slate-600 hover:bg-slate-100"
+                    }`}
+                  >
+                    Absences
+                    <span className={`text-[9px] px-1.5 py-0.5 rounded-md ${alertMenu === "absences" ? "bg-white/20" : "bg-white"}`}>
+                      {absenceNotifications.filter((n) => !n.read).length}
+                    </span>
+                  </button>
+                  <button
+                    onClick={() => setAlertMenu("info")}
+                    className={`rounded-xl px-3 py-2 text-[10px] font-bold transition-colors flex items-center justify-center gap-1.5 ${
+                      alertMenu === "info"
+                        ? "bg-slate-800 text-white"
+                        : "bg-slate-50 text-slate-600 hover:bg-slate-100"
+                    }`}
+                  >
+                    Informations
+                    <span className={`text-[9px] px-1.5 py-0.5 rounded-md ${alertMenu === "info" ? "bg-white/20" : "bg-white"}`}>
+                      {infoNotifications.filter((n) => !n.read).length}
                     </span>
                   </button>
                 </div>
@@ -891,9 +951,10 @@ export default function ParentPortal({
                 {visibleAlertNotifications.length === 0 ? (
                   <div className="bg-white rounded-2xl border border-slate-100 p-8 text-center text-slate-400 text-xs font-medium">
                     <CheckCircle2 className="h-8 w-8 text-emerald-400 mx-auto mb-2" />
-                    {alertMenu === "grades"
-                      ? "Aucune alerte de notes publiée pour le moment."
-                      : "Aucune alerte de devoir disponible. Le module devoirs sera alimenté prochainement."}
+                    {alertMenu === "notes" && "Aucune alerte de notes publiée pour le moment."}
+                    {alertMenu === "homework" && "Aucune alerte de devoirs à venir pour le moment."}
+                    {alertMenu === "absences" && "Aucune alerte d'absence pour le moment."}
+                    {alertMenu === "info" && "Aucune information à afficher pour le moment."}
                   </div>
                 ) : (
                   <div className="space-y-2.5">
@@ -906,14 +967,7 @@ export default function ParentPortal({
                             setSelectedChild(firstChild);
                             setChildDetailTab("grades");
                           }
-
-                          try {
-                            await fetch(`/api/mobile/parent/notifications/read-all`, {
-                              method: "PUT",
-                              headers: { "Authorization": `Bearer ${token}` }
-                            });
-                            fetchNotifications();
-                          } catch (e) {}
+                          await handleMarkNotificationRead(notif);
                         }}
                         className={`bg-white border rounded-2xl p-3 shadow-sm text-left relative cursor-pointer hover:border-rose-200 transition-all ${
                           notif.read ? "border-slate-100 opacity-75" : "border-rose-200 ring-1 ring-rose-500/10"
@@ -926,10 +980,11 @@ export default function ParentPortal({
                           {new Date(notif.createdAt).toLocaleDateString("fr-FR")} à {new Date(notif.createdAt).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}
                         </span>
                         <h4 className="text-xs font-bold text-slate-800 mt-0.5 flex items-center gap-1.5">
-                          <AlertTriangle className={`h-3.5 w-3.5 ${alertMenu === "grades" ? "text-indigo-500" : "text-amber-500"}`} />
+                          <AlertTriangle className={`h-3.5 w-3.5 ${alertMenu === "notes" ? "text-indigo-500" : alertMenu === "homework" ? "text-amber-500" : alertMenu === "absences" ? "text-emerald-500" : "text-slate-500"}`} />
                           {notif.title}
                         </h4>
                         <p className="text-[11px] text-slate-600 mt-1 leading-normal font-medium">{notif.message}</p>
+
                       </div>
                     ))}
                   </div>

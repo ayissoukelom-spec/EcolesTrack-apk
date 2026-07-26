@@ -566,6 +566,18 @@ export class PostgresStore {
     `, [userId]);
   }
 
+  public async markInAppNotificationAsRead(parentId: string, notificationId: string) {
+    const userId = Number(parentId);
+    const notifId = Number(notificationId);
+    if (!Number.isInteger(userId) || !Number.isInteger(notifId)) return;
+
+    await dbQuery(`
+      UPDATE notifications
+      SET is_read = true
+      WHERE user_id = $1 AND id = $2
+    `, [userId, notifId]);
+  }
+
   public async addInAppNotification(parentId: string, title: string, message: string, deepLink?: string): Promise<AppNotification> {
     const userId = Number(parentId);
     if (!Number.isInteger(userId)) {

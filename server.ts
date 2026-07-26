@@ -331,6 +331,14 @@ app.put("/api/mobile/parent/notifications/read-all", requireAuth, requireParentR
   return res.json({ success: true, message: "Toutes les notifications ont été marquées comme lues." });
 });
 
+// 8b. PUT /api/mobile/parent/notifications/:id/read
+app.put("/api/mobile/parent/notifications/:id/read", requireAuth, requireParentRoleOnly, async (req: AuthenticatedRequest, res) => {
+  const parentId = req.parent!.id;
+  const { id } = req.params;
+  await store.markInAppNotificationAsRead(parentId, id);
+  return res.json({ success: true, message: "Notification marquée comme lue." });
+});
+
 // 9. POST /api/mobile/parent/devices/register-push-token
 app.post("/api/mobile/parent/devices/register-push-token", requireAuth, requireParentRoleOnly, async (req: AuthenticatedRequest, res) => {
   const parentId = req.parent!.id;
