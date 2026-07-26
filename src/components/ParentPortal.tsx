@@ -1110,16 +1110,13 @@ export default function ParentPortal({
         </button>
 
         <button
-          onClick={() => handleNavigateTab("alerts")}
-          className={`flex-1 flex flex-col items-center gap-1 py-1 text-[9px] font-bold relative ${
-            activeTab === "alerts" ? "text-rose-600" : "text-slate-400 hover:text-slate-600"
+          onClick={() => handleNavigateTab("notes")}
+          className={`flex-1 flex flex-col items-center gap-1 py-1 text-[9px] font-bold ${
+            activeTab === "notes" ? "text-indigo-600" : "text-slate-400 hover:text-slate-600"
           }`}
         >
-          {activeAlertsCount > 0 && (
-            <span className="absolute top-1 right-8 h-2 w-2 rounded-full bg-rose-600 animate-pulse" />
-          )}
-          <AlertTriangle className="h-4.5 w-4.5" />
-          <span>Alertes</span>
+          <Award className="h-4.5 w-4.5" />
+          <span>Notes</span>
         </button>
 
         <button
@@ -1132,17 +1129,20 @@ export default function ParentPortal({
             <span className="absolute top-1 right-8 h-2 w-2 rounded-full bg-indigo-600 animate-pulse" />
           )}
           <Bell className="h-4.5 w-4.5" />
-          <span>Absence</span>
+          <span>Absences</span>
         </button>
 
         <button
-          onClick={() => handleNavigateTab("notes")}
-          className={`flex-1 flex flex-col items-center gap-1 py-1 text-[9px] font-bold ${
-            activeTab === "notes" ? "text-indigo-600" : "text-slate-400 hover:text-slate-600"
+          onClick={() => handleNavigateTab("alerts")}
+          className={`flex-1 flex flex-col items-center gap-1 py-1 text-[9px] font-bold relative ${
+            activeTab === "alerts" ? "text-rose-600" : "text-slate-400 hover:text-slate-600"
           }`}
         >
-          <Award className="h-4.5 w-4.5" />
-          <span>Notes</span>
+          {activeAlertsCount > 0 && (
+            <span className="absolute top-1 right-8 h-2 w-2 rounded-full bg-rose-600 animate-pulse" />
+          )}
+          <AlertTriangle className="h-4.5 w-4.5" />
+          <span>Alertes</span>
         </button>
       </div>
     </div>
