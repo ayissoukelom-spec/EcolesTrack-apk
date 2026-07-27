@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { 
   Lock, Mail, LogOut, User, Award, Calendar, Bell, Shield, 
   CheckCircle2, XCircle, ChevronRight, School, Eye, AlertTriangle 
@@ -60,6 +60,7 @@ export default function ParentPortal({
   const [localNotifications, setLocalNotifications] = useState<AppNotification[]>(notifications);
   const [markingNotificationIds, setMarkingNotificationIds] = useState<string[]>([]);
   const [readOverrides, setReadOverrides] = useState<Set<string>>(new Set());
+  const hasCompletedProtectedLoadRef = useRef(false);
 
   // Keep a local copy of notifications so the badge updates immediately.
   useEffect(() => {
@@ -78,6 +79,10 @@ export default function ParentPortal({
   const [gradePeriodFilter, setGradePeriodFilter] = useState<"all" | "7d" | "30d" | "trimester">("all");
   
   const handleSessionExpired = () => {
+    if (!hasCompletedProtectedLoadRef.current) {
+      return;
+    }
+
     setChildren([]);
     setAbsences([]);
     setGrades([]);
@@ -90,11 +95,14 @@ export default function ParentPortal({
   const parentId = parent?.id;
   const parentActiveSchoolId = parent?.activeSchoolId;
   useEffect(() => {
-    if (token && parentId) {
-      fetchChildren();
-      if (parentActiveSchoolId) {
-        setActiveSchoolId(parentActiveSchoolId);
-      }
+    if (!token || !parentId) {
+      hasCompletedProtectedLoadRef.current = false;
+      return;
+    }
+
+    fetchChildren();
+    if (parentActiveSchoolId) {
+      setActiveSchoolId(parentActiveSchoolId);
     }
   }, [token, parentId, parentActiveSchoolId]);
 
@@ -223,6 +231,7 @@ export default function ParentPortal({
       }
       const data = await parseJsonSafe<Child[] | { error?: string }>(response);
       if (response.ok) {
+        hasCompletedProtectedLoadRef.current = true;
         const nextChildren = Array.isArray(data) ? data : [];
         setChildren(nextChildren);
         if (nextChildren.length > 0) {
@@ -268,6 +277,7 @@ export default function ParentPortal({
         return;
       }
       if (response.ok) {
+        hasCompletedProtectedLoadRef.current = true;
         const data = await parseJsonSafe<Absence[]>(response);
         // Sort absences by date descending (most recent first)
         const sortedAbsences = Array.isArray(data) 
@@ -292,6 +302,7 @@ export default function ParentPortal({
       }
       const serverAverageHeader = response.headers.get('X-Student-Term-Average');
       if (response.ok) {
+        hasCompletedProtectedLoadRef.current = true;
         const data = await parseJsonSafe<{ grades?: Grade[]; termAverage?: number }>(response);
         const gradesData = Array.isArray((data as any)) ? (data as any) : (data && Array.isArray((data as any).grades) ? (data as any).grades : []);
         console.log("[APK DEBUG] Grades received from API:", gradesData.length, "items");

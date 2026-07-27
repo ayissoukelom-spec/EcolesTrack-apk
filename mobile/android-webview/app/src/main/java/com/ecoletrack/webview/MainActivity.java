@@ -4,8 +4,10 @@ import android.annotation.SuppressLint;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
+import android.webkit.JavascriptInterface;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebView;
@@ -22,8 +24,8 @@ import androidx.core.view.WindowInsetsCompat;
 
 public class MainActivity extends AppCompatActivity {
 
-    // Adresse IP du serveur Express sur le réseau local (à mettre à jour si l'IP change)
-    private static final String API_SERVER_URL = "http://10.133.209.124:3001";
+    private static final String TAG = "EcoleTrackAndroid";
+    private String apiServerUrl;
     private static final String APP_INDEX_URL = "file:///android_asset/index.html";
     private static final String LOADING_HTML = "<!doctype html><html lang='fr'><head><meta charset='utf-8' />" +
             "<meta name='viewport' content='width=device-width,initial-scale=1' />" +
@@ -55,6 +57,8 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
 
         WindowCompat.setDecorFitsSystemWindows(getWindow(), true);
+
+        apiServerUrl = getString(R.string.api_base_url);
 
         FrameLayout rootLayout = new FrameLayout(this);
         rootLayout.setLayoutParams(new FrameLayout.LayoutParams(
@@ -89,6 +93,13 @@ public class MainActivity extends AppCompatActivity {
         webView.clearHistory();
         webView.clearMatches();
 
+        webView.addJavascriptInterface(new Object() {
+            @JavascriptInterface
+            public void log(String message) {
+                Log.i(TAG, message);
+            }
+        }, "AndroidBridge");
+
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
@@ -100,9 +111,10 @@ public class MainActivity extends AppCompatActivity {
                 if (requestUrl.contains("/index.html")) {
                     try {
                         String html = readIndexHtmlFromAssets();
-                        String injection = "<script>window.ECOLETRACK_API_BASE_URL='" + API_SERVER_URL + "'; " +
-                                "localStorage.setItem('ecoletrack_api_base_url', '" + API_SERVER_URL + "'); " +
-                                "localStorage.setItem('ecoletrack_mobile_production', 'true');</script>";
+                        String injection = "<script>window.ECOLETRACK_API_BASE_URL='" + apiServerUrl + "'; " +
+                                "localStorage.setItem('ecoletrack_api_base_url', '" + apiServerUrl + "'); " +
+                                "localStorage.setItem('ecoletrack_mobile_production', 'true'); " +
+                                "window.AndroidBridge && window.AndroidBridge.log('[EcoleTrack] API base injected: ' + '" + apiServerUrl + "');</script>";
                         String modifiedHtml = html.replace("</head>", injection + "</head>");
                         return new WebResourceResponse(
                                 "text/html",
@@ -132,9 +144,10 @@ public class MainActivity extends AppCompatActivity {
                 }
 
                 // Injecte l'URL du serveur API dans localStorage et sur window pour que withApiBase() l'utilise
-                String js = "window.ECOLETRACK_API_BASE_URL = '" + API_SERVER_URL + "'; " +
-                            "localStorage.setItem('ecoletrack_api_base_url', '" + API_SERVER_URL + "'); " +
-                            "localStorage.setItem('ecoletrack_mobile_production', 'true');";
+                String js = "window.ECOLETRACK_API_BASE_URL = '" + apiServerUrl + "'; " +
+                            "localStorage.setItem('ecoletrack_api_base_url', '" + apiServerUrl + "'); " +
+                            "localStorage.setItem('ecoletrack_mobile_production', 'true'); " +
+                            "window.AndroidBridge && window.AndroidBridge.log('[EcoleTrack] API base set: ' + '" + apiServerUrl + "');";
                 view.evaluateJavascript(js, null);
             }
 
@@ -142,6 +155,7 @@ public class MainActivity extends AppCompatActivity {
             public void onReceivedError(WebView view, WebResourceRequest request, android.webkit.WebResourceError error) {
                 if (request != null && request.isForMainFrame()) {
                     String message = error != null ? String.valueOf(error.getDescription()) : "Unknown error";
+                    Log.e(TAG, "WebView main frame error: " + message);
                     String html = ERROR_HTML.replace("{DETAIL}", message.replace("'", "&#39;"));
                     view.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null);
                 }
@@ -151,11 +165,13 @@ public class MainActivity extends AppCompatActivity {
             public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse errorResponse) {
                 if (request != null && request.isForMainFrame()) {
                     String message = errorResponse != null ? String.valueOf(errorResponse.getStatusCode()) : "unknown";
+                    Log.e(TAG, "WebView HTTP error: " + message);
                     String html = ERROR_HTML.replace("{DETAIL}", "HTTP " + message.replace("'", "&#39;"));
                     view.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null);
                 }
             }
         });
+        Log.i(TAG, "API base URL configured: " + apiServerUrl);
         webView.setWebChromeClient(new WebChromeClient());
         webView.setBackgroundColor(Color.parseColor("#0f172a"));
         webView.loadDataWithBaseURL(null, LOADING_HTML, "text/html", "UTF-8", null);

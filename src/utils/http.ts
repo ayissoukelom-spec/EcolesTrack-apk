@@ -4,7 +4,47 @@ function trimTrailingSlash(url: string): string {
   return url.replace(/\/+$/, "");
 }
 
-const FALLBACK_API_BASE_URL = "http://10.133.209.124:3001";
+function logDiagnostic(message: string): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const runtime = window as Window & {
+    AndroidBridge?: {
+      log?: (message: string) => void;
+    };
+  };
+
+  if (typeof runtime.AndroidBridge?.log === "function") {
+    runtime.AndroidBridge.log(message);
+  }
+
+  console.log(message);
+}
+
+const FALLBACK_API_BASE_URL = "http://10.24.18.124:3001";
+
+function readApiBaseFromUrl(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  const queryValue = params.get("apiBaseUrl") || params.get("api_base_url");
+  if (queryValue && queryValue.trim()) {
+    return queryValue.trim();
+  }
+
+  const hashValue = window.location.hash.replace(/^#/, "").trim();
+  if (hashValue && hashValue.startsWith("apiBaseUrl=")) {
+    const value = hashValue.split("=")[1]?.trim();
+    if (value) {
+      return value;
+    }
+  }
+
+  return null;
+}
 
 export function resolveApiBaseUrl(): string {
   const win = window as Window & { ECOLETRACK_API_BASE_URL?: string };
@@ -14,25 +54,32 @@ export function resolveApiBaseUrl(): string {
     win.ECOLETRACK_API_BASE_URL.trim()
   ) {
     const resolved = trimTrailingSlash(win.ECOLETRACK_API_BASE_URL.trim());
-    console.log("Resolved API =", resolved);
+    logDiagnostic(`[EcoleTrack] Resolved API = ${resolved}`);
+    return resolved;
+  }
+
+  const urlOverride = readApiBaseFromUrl();
+  if (urlOverride) {
+    const resolved = trimTrailingSlash(urlOverride);
+    logDiagnostic(`[EcoleTrack] Resolved API = ${resolved}`);
     return resolved;
   }
 
   const storageBase = localStorage.getItem("ecoletrack_api_base_url");
   if (storageBase && storageBase.trim()) {
     const resolved = trimTrailingSlash(storageBase.trim());
-    console.log("Resolved API =", resolved);
+    logDiagnostic(`[EcoleTrack] Resolved API = ${resolved}`);
     return resolved;
   }
 
   const envBase = (import.meta as any)?.env?.VITE_API_BASE_URL as string | undefined;
   if (envBase && envBase.trim()) {
     const resolved = trimTrailingSlash(envBase.trim());
-    console.log("Resolved API =", resolved);
+    logDiagnostic(`[EcoleTrack] Resolved API = ${resolved}`);
     return resolved;
   }
 
-  console.log("Resolved API =", FALLBACK_API_BASE_URL);
+  logDiagnostic(`[EcoleTrack] Resolved API = ${FALLBACK_API_BASE_URL}`);
   return FALLBACK_API_BASE_URL;
 }
 
@@ -60,7 +107,7 @@ export function withApiBase(input: RequestInfo | URL): RequestInfo | URL {
 
   const base = resolveApiBaseUrl();
   const resolved = `${base}${rawUrl}`;
-  console.log("Calling:", resolved);
+  logDiagnostic(`[EcoleTrack] Calling: ${resolved}`);
 
   if (input instanceof Request) {
     return cloneRequestWithUrl(input, resolved);
