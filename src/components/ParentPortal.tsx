@@ -151,33 +151,31 @@ export default function ParentPortal({
     : calculateAverage(displayedGrades);
 
   const getGradeToneClasses = (grade: number, maxScore?: number) => {
-    // Detect if `grade` is already normalized to /20 or is raw out of `maxScore`.
-    // If `grade` is less-or-equal to `maxScore`, treat it as raw and normalize it.
     const normalizedScore = (maxScore && maxScore > 0 && grade <= maxScore) ? (grade / maxScore) * 20 : grade;
 
     if (normalizedScore < 10) {
       return {
-        card: "border-rose-800 bg-slate-950",
-        title: "text-rose-300",
-        value: "text-rose-300",
-        meta: "text-rose-400"
+        card: "border-rose-300/80 bg-rose-50/90 dark:border-rose-800/70 dark:bg-rose-950/40",
+        title: "text-rose-700 dark:text-rose-300",
+        value: "text-rose-700 dark:text-rose-200",
+        meta: "text-rose-600 dark:text-rose-400"
       };
     }
 
     if (normalizedScore < 14) {
       return {
-        card: "border-amber-800 bg-slate-950",
-        title: "text-amber-200",
-        value: "text-amber-200",
-        meta: "text-amber-300"
+        card: "border-amber-300/80 bg-amber-50/90 dark:border-amber-800/70 dark:bg-amber-950/40",
+        title: "text-amber-700 dark:text-amber-200",
+        value: "text-amber-700 dark:text-amber-200",
+        meta: "text-amber-600 dark:text-amber-300"
       };
     }
 
     return {
-      card: "border-emerald-800 bg-slate-950",
-      title: "text-emerald-200",
-      value: "text-emerald-200",
-      meta: "text-emerald-300"
+      card: "border-emerald-300/80 bg-emerald-50/90 dark:border-emerald-800/70 dark:bg-emerald-950/40",
+      title: "text-emerald-700 dark:text-emerald-300",
+      value: "text-emerald-700 dark:text-emerald-200",
+      meta: "text-emerald-600 dark:text-emerald-400"
     };
   };
 
@@ -623,7 +621,7 @@ export default function ParentPortal({
     return (
       <div className="flex-1 flex flex-col items-center justify-center min-h-screen px-4 py-8 theme-bg theme-text" id="login-screen">
         <div className="w-full max-w-md">
-          <div className="rounded-[2rem] border theme-border theme-card p-7 shadow-2xl shadow-indigo-900/30">
+          <div className="rounded-[2rem] border theme-border theme-card p-7 shadow-2xl shadow-indigo-900/20">
             <div className="flex flex-col items-center gap-4 mb-7 text-center">
               <img
                 src={logoImage}
@@ -631,54 +629,54 @@ export default function ParentPortal({
                 className="mx-auto h-20 w-20 rounded-3xl object-contain shadow-lg shadow-indigo-900/20"
               />
               <div>
-                <h1 className="text-2xl font-extrabold tracking-tight text-white">Ecoles Track</h1>
-                <p className="text-xs text-slate-500 mt-1">Portail parents</p>
+                <h1 className="text-2xl font-extrabold tracking-tight text-slate-900 dark:text-white">Ecoles Track</h1>
+                <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">Portail parents</p>
               </div>
             </div>
             <div className="space-y-3 mb-7">
-              <div className="inline-flex items-center justify-center rounded-full theme-panel px-3 py-2 text-xs font-semibold theme-text ring-1 theme-border">
+              <div className="inline-flex items-center justify-center rounded-full theme-panel px-3 py-2 text-xs font-semibold theme-text-primary ring-1 theme-border">
                 <span className="text-lg">🇹🇬</span>
                 <span className="ml-2">Togo</span>
               </div>
             </div>
 
             <div className="space-y-2 mb-8">
-              <h1 className="text-3xl font-extrabold tracking-tight text-white">Connexion parentale</h1>
-              <p className="text-sm leading-6 text-slate-400">Utilisez votre email et mot de passe fournis par l&apos;école pour accéder aux notes, absences et messages.</p>
+              <h1 className="text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white">Connexion parentale</h1>
+              <p className="text-sm leading-6 text-slate-600 dark:text-slate-400">Utilisez votre email et mot de passe fournis par l&apos;école pour accéder aux notes, absences et messages.</p>
             </div>
 
             <form onSubmit={handleLogin} className="space-y-5">
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-[0.15em] text-slate-400 mb-2">Adresse email</label>
+                <label className="block text-xs font-semibold uppercase tracking-[0.15em] text-slate-700 dark:text-slate-300 mb-2">Adresse email</label>
                 <div className="relative">
-                  <Mail className="absolute left-3 top-3 h-4 w-4 text-slate-500" />
+                  <Mail className="absolute left-3 top-3 h-4 w-4 text-slate-500 dark:text-slate-400" />
                   <input
                     type="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="nom@email.com"
-                    className="w-full rounded-2xl border theme-border theme-card py-3 pl-11 pr-4 text-sm theme-text placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                    className="w-full rounded-2xl border theme-border theme-input py-3 pl-11 pr-4 text-sm theme-text-primary shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                     required
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-[0.15em] text-slate-400 mb-2">Mot de passe</label>
+                <label className="block text-xs font-semibold uppercase tracking-[0.15em] text-slate-700 dark:text-slate-300 mb-2">Mot de passe</label>
                 <div className="relative">
-                  <Lock className="absolute left-3 top-3 h-4 w-4 text-slate-500" />
+                  <Lock className="absolute left-3 top-3 h-4 w-4 text-slate-500 dark:text-slate-400" />
                   <input
                     type={showPassword ? "text" : "password"}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••"
-                    className="w-full rounded-2xl border theme-border theme-card py-3 pl-11 pr-11 text-sm theme-text placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                    className="w-full rounded-2xl border theme-border theme-input py-3 pl-11 pr-11 text-sm theme-text-primary shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                     required
                   />
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-3 text-slate-400 hover:text-indigo-300"
+                    className="absolute right-3 top-3 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
                     aria-label={showPassword ? "Masquer le mot de passe" : "Afficher le mot de passe"}
                   >
                     <Eye className="h-4 w-4" />
@@ -690,10 +688,10 @@ export default function ParentPortal({
                 <motion.div
                   initial={{ opacity: 0, y: -5 }}
                   animate={{ opacity: 1, y: 0 }}
-                  className="rounded-2xl border border-rose-700/40 bg-rose-950/80 p-3 text-sm text-rose-200"
+                  className="rounded-2xl border border-rose-300/80 bg-rose-50/90 p-3 text-sm text-rose-700 dark:border-rose-800/70 dark:bg-rose-950/50 dark:text-rose-200"
                 >
                   <div className="flex items-start gap-2">
-                    <XCircle className="h-4 w-4 text-rose-300 mt-0.5" />
+                    <XCircle className="h-4 w-4 text-rose-600 dark:text-rose-300 mt-0.5" />
                     <span>{errorMsg}</span>
                   </div>
                 </motion.div>
@@ -702,13 +700,13 @@ export default function ParentPortal({
               <button
                 type="submit"
                 disabled={isLoading}
-                className="w-full rounded-2xl bg-gradient-to-r from-indigo-500 via-violet-600 to-emerald-500 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-indigo-900/25 transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60"
+                className="w-full rounded-2xl bg-gradient-to-r from-indigo-600 via-violet-600 to-emerald-500 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-indigo-900/20 transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {isLoading ? "Connexion..." : "Se connecter"}
               </button>
             </form>
 
-            <p className="mt-6 text-center text-xs text-slate-500">Connexion sécurisée pour les parents d&apos;élèves d&apos;Ecoles Track.</p>
+            <p className="mt-6 text-center text-xs text-slate-600 dark:text-slate-400">Connexion sécurisée pour les parents d&apos;élèves d&apos;Ecoles Track.</p>
           </div>
         </div>
       </div>
@@ -730,7 +728,6 @@ export default function ParentPortal({
           </div>
           <div>
             <h2 className="text-xs font-black text-white leading-tight">Ecoles Track</h2>
-            {/* Multi-school context picker */}
             {parent.schools.length > 1 ? (
               <div className="relative inline-block">
                 <select
@@ -794,42 +791,42 @@ export default function ParentPortal({
                       <img
                         src={currentChild.avatarUrl}
                         alt={currentChild.firstName}
-                        className="h-14 w-14 rounded-full object-cover border border-slate-100 shrink-0"
+                        className="h-14 w-14 rounded-full object-cover border border-slate-200 dark:border-slate-700 shrink-0"
                       />
                       <div className="min-w-0">
-                        <div className="text-[10px] font-bold uppercase tracking-wider text-indigo-600">Actif</div>
-                        <h4 className="text-sm font-black text-slate-900 truncate">{currentChild.firstName} {currentChild.lastName}</h4>
-                        <p className="text-[11px] text-slate-500 font-medium">Classe : {currentChild.className}</p>
-                        <p className="text-[11px] text-slate-500 font-medium">Date de naissance : {formatBirthDate(currentChild.birthDate)} {currentChild.gender ? `• ${currentChild.gender}` : ""}</p>
+                        <div className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">Actif</div>
+                        <h4 className="text-sm font-black text-slate-900 dark:text-white truncate">{currentChild.firstName} {currentChild.lastName}</h4>
+                        <p className="text-[11px] text-slate-700 dark:text-slate-300 font-medium">Classe : {currentChild.className}</p>
+                        <p className="text-[11px] text-slate-700 dark:text-slate-300 font-medium">Date de naissance : {formatBirthDate(currentChild.birthDate)} {currentChild.gender ? `• ${currentChild.gender}` : ""}</p>
                       </div>
                     </div>
 
-                    <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3">
+                    <div className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/70 p-3">
                       <div className="flex items-center justify-between gap-3">
                         <div>
-                          <p className="text-[9px] font-bold uppercase tracking-wider text-slate-500">Accueil rapide</p>
-                          <p className="text-sm font-black text-slate-900 mt-0.5">Assiduité & suivi scolaire</p>
+                          <p className="text-[9px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400">Accueil rapide</p>
+                          <p className="text-sm font-black text-slate-900 dark:text-white mt-0.5">Assiduité & suivi scolaire</p>
                         </div>
-                        <div className="rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-semibold text-emerald-700">
+                        <div className="rounded-full bg-emerald-100 dark:bg-emerald-950/70 px-2.5 py-1 text-[10px] font-semibold text-emerald-700 dark:text-emerald-400">
                           {attendanceRate}% d&apos;assiduité
                         </div>
                       </div>
 
                       <div className="mt-3 grid grid-cols-2 gap-2">
-                        <div className="rounded-xl border border-indigo-800 bg-indigo-950/50 p-3">
-                          <p className="text-[9px] font-bold uppercase tracking-wider text-indigo-300">Note du trimestre</p>
-                          <p className="text-xl font-black text-indigo-100 mt-1">
+                        <div className="rounded-xl border border-indigo-200 dark:border-indigo-900 bg-indigo-50/90 dark:bg-indigo-950/60 p-3">
+                          <p className="text-[9px] font-bold uppercase tracking-wider text-indigo-700 dark:text-indigo-300">Note du trimestre</p>
+                          <p className="text-xl font-black text-indigo-900 dark:text-indigo-100 mt-1">
                             {currentTrimesterAverage ? `${currentTrimesterAverage} / 20` : "-- / 20"}
                           </p>
-                          <p className="text-[10px] text-indigo-200/80 font-medium mt-0.5">{currentTrimesterGrades.length} évaluation(s)</p>
+                          <p className="text-[10px] text-indigo-700/80 dark:text-indigo-300/80 font-medium mt-0.5">{currentTrimesterGrades.length} évaluation(s)</p>
                         </div>
-                        <div className="rounded-xl border border-slate-800 bg-slate-950 p-3">
-                          <p className="text-[9px] font-bold uppercase tracking-wider text-red-500">Assiduité</p>
+                        <div className="rounded-xl border border-rose-200 dark:border-rose-900 bg-rose-50/90 dark:bg-rose-950/50 p-3">
+                          <p className="text-[9px] font-bold uppercase tracking-wider text-rose-700 dark:text-rose-300">Assiduité</p>
                           <div className="flex items-baseline gap-2 mt-2">
-                            <p className="text-3xl font-black text-red-500">{absenceCount}</p>
-                            <p className="text-sm font-semibold text-slate-300">absences</p>
+                            <p className="text-3xl font-black text-rose-700 dark:text-rose-300">{absenceCount}</p>
+                            <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">absences</p>
                           </div>
-                          <p className="text-[10px] text-slate-300 font-medium mt-2">{unjustifiedAbsenceCount} non justifiées</p>
+                          <p className="text-[10px] text-slate-700 dark:text-slate-300 font-medium mt-2">{unjustifiedAbsenceCount} non justifiées</p>
                         </div>
                       </div>
 
@@ -841,10 +838,10 @@ export default function ParentPortal({
                             setChildDetailTab("grades");
                             setActiveTab("notes");
                           }}
-                          className="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-left text-slate-100 hover:bg-slate-800 transition-colors"
+                          className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-left text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
                         >
-                          <div className="text-[9px] font-bold uppercase tracking-wider text-indigo-600">Raccourci</div>
-                          <div className="mt-0.5 text-xs font-bold text-slate-900">Notes</div>
+                          <div className="text-[9px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">Raccourci</div>
+                          <div className="mt-0.5 text-xs font-bold text-slate-900 dark:text-white">Notes</div>
                         </button>
                         <button
                           type="button"
@@ -853,30 +850,29 @@ export default function ParentPortal({
                             setChildDetailTab("absences");
                             setActiveTab("notifications");
                           }}
-                          className="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-left text-slate-100 hover:bg-slate-800 transition-colors"
+                          className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-left text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
                         >
-                          <div className="text-[9px] font-bold uppercase tracking-wider text-emerald-600">Raccourci</div>
-                          <div className="mt-0.5 text-xs font-bold text-slate-900">Registre d&apos;absence</div>
+                          <div className="text-[9px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">Raccourci</div>
+                          <div className="mt-0.5 text-xs font-bold text-slate-900 dark:text-white">Registre d&apos;absence</div>
                         </button>
                       </div>
                     </div>
                   </div>
                 )}
 
-                {/* Children List */}
-                <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Sélection de l&apos;élève</h3>
+                <h3 className="text-[10px] font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider">Sélection de l&apos;élève</h3>
                 {childrenLoadError && (
-                  <div className="bg-rose-50 border border-rose-100 rounded-xl p-2.5 text-[11px] text-rose-700 font-semibold">
+                  <div className="bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900 rounded-xl p-2.5 text-[11px] text-rose-700 dark:text-rose-300 font-semibold">
                     {childrenLoadError}
                   </div>
                 )}
                 {children.length === 0 ? (
-                  <div className="bg-white rounded-2xl border border-slate-100 p-4 text-center">
-                    <p className="text-xs text-slate-500 font-semibold">Aucun enfant rattaché pour ce compte.</p>
+                  <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 p-4 text-center">
+                    <p className="text-xs text-slate-700 dark:text-slate-300 font-semibold">Aucun enfant rattaché pour ce compte.</p>
                     <div className="mt-3 flex items-center justify-center gap-2">
                       <button
                         onClick={fetchChildren}
-                        className="bg-slate-200 hover:bg-slate-300 text-slate-700 text-[11px] font-bold px-3 py-2 rounded-lg"
+                        className="bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 text-[11px] font-bold px-3 py-2 rounded-lg"
                       >
                         Rafraichir
                       </button>
@@ -891,7 +887,7 @@ export default function ParentPortal({
                 ) : (
                   <div className="theme-card rounded-2xl border theme-border p-2 shadow-sm space-y-1.5">
                     {children.length > 1 && (
-                      <p className="px-2 pt-1 text-[10px] font-semibold text-slate-500">
+                      <p className="px-2 pt-1 text-[10px] font-semibold text-slate-600 dark:text-slate-400">
                         Choisissez un seul élève à afficher.
                       </p>
                     )}
@@ -905,8 +901,8 @@ export default function ParentPortal({
                           onClick={() => handleSelectChild(child)}
                           className={`w-full flex items-center justify-between rounded-xl border px-3 py-2 text-left transition-colors ${
                             isActiveChild
-                              ? "border-indigo-200 bg-indigo-50 text-indigo-900"
-                              : "border-slate-100 bg-slate-50 text-slate-700 hover:border-indigo-200 hover:bg-indigo-50/60"
+                              ? "border-indigo-300 bg-indigo-50 text-indigo-900 dark:border-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-100"
+                              : "border-slate-200 bg-slate-50 text-slate-700 hover:border-indigo-300 hover:bg-indigo-50/70 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-indigo-700 dark:hover:bg-slate-800"
                           }`}
                         >
                           <div className="min-w-0">
@@ -914,11 +910,11 @@ export default function ParentPortal({
                           </div>
                           <div className="flex items-center gap-1.5 shrink-0">
                             {isActiveChild && (
-                              <span className="text-[9px] font-bold uppercase tracking-wider text-indigo-600 bg-white px-2 py-0.5 rounded-md border border-indigo-100">
+                              <span className="text-[9px] font-bold uppercase tracking-wider text-indigo-700 bg-white px-2 py-0.5 rounded-md border border-indigo-200 dark:text-indigo-300 dark:bg-slate-900 dark:border-indigo-700">
                                 Actif
                               </span>
                             )}
-                            <ChevronRight className={`h-4 w-4 ${isActiveChild ? "text-indigo-600" : "text-slate-400"}`} />
+                            <ChevronRight className={`h-4 w-4 ${isActiveChild ? "text-indigo-600 dark:text-indigo-400" : "text-slate-500 dark:text-slate-400"}`} />
                           </div>
                         </button>
                       );
@@ -937,44 +933,44 @@ export default function ParentPortal({
                 className="space-y-3"
               >
                 <div className="flex items-center justify-between">
-                  <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Absences de l&apos;élève</h3>
+                  <h3 className="text-[10px] font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider">Absences de l&apos;élève</h3>
                   {currentChild && (
-                    <span className="text-[10px] text-indigo-600 font-bold">
+                    <span className="text-[10px] text-indigo-700 dark:text-indigo-400 font-bold">
                       {currentChild.firstName} {currentChild.lastName}
                     </span>
                   )}
                 </div>
 
                 {absences.length === 0 ? (
-                  <div className="bg-white rounded-2xl border border-slate-100 p-8 text-center text-slate-400 text-xs font-medium">
-                    <Bell className="h-8 w-8 text-slate-300 mx-auto mb-2" />
+                  <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 p-8 text-center text-slate-700 dark:text-slate-300 text-xs font-medium">
+                    <Bell className="h-8 w-8 text-slate-400 dark:text-slate-500 mx-auto mb-2" />
                     Aucune absence enregistrée pour cet élève.
                   </div>
                 ) : (
                   <div className="space-y-2.5">
                     {absences.map((abs) => (
-                      <div key={abs.id} className="bg-white border border-slate-100 rounded-2xl p-3 shadow-sm">
+                      <div key={abs.id} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl p-3 shadow-sm">
                         <div className="flex items-start justify-between gap-2">
                           <div>
-                            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                            <p className="text-[10px] font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
                               {new Date(abs.date).toLocaleDateString("fr-FR")}
                             </p>
-                            <h4 className="text-xs font-bold text-slate-800 mt-0.5">Motif : {abs.reason}</h4>
+                            <h4 className="text-xs font-bold text-slate-900 dark:text-white mt-0.5">Motif : {abs.reason}</h4>
                           </div>
                           {abs.justified ? (
-                            <span className="shrink-0 text-[10px] font-bold text-emerald-600 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-full flex items-center gap-1">
+                            <span className="shrink-0 text-[10px] font-bold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-900 px-2 py-0.5 rounded-full flex items-center gap-1">
                               <CheckCircle2 className="h-3 w-3" />
                               Justifiée
                             </span>
                           ) : (
-                            <span className="shrink-0 text-[10px] font-bold text-rose-600 bg-rose-50 border border-rose-100 px-2 py-0.5 rounded-full flex items-center gap-1">
+                            <span className="shrink-0 text-[10px] font-bold text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900 px-2 py-0.5 rounded-full flex items-center gap-1">
                               <XCircle className="h-3 w-3" />
                               Injustifiée
                             </span>
                           )}
                         </div>
                         {abs.justified && (
-                          <p className="text-[11px] text-slate-600 mt-2 leading-normal font-medium">
+                          <p className="text-[11px] text-slate-700 dark:text-slate-300 mt-2 leading-normal font-medium">
                             {abs.justificationText || "Justification validée par l’établissement."}
                           </p>
                         )}
@@ -993,74 +989,82 @@ export default function ParentPortal({
                 exit={{ opacity: 0 }}
                 className="space-y-3"
               >
-                <div className="bg-rose-50 border border-rose-100 rounded-2xl p-3 flex items-start gap-2.5">
-                  <AlertTriangle className="h-4.5 w-4.5 text-rose-600 shrink-0 mt-0.5" />
-                  <div>
-                    <h3 className="text-[11px] font-black text-rose-700">Centre d&apos;alertes parentales</h3>
-                    <p className="text-[10px] text-rose-600 font-medium mt-0.5 leading-relaxed">
-                      Les alertes sont séparées par type pour distinguer les notes publiées et les devoirs à venir.
-                    </p>
+                <div className="rounded-3xl border border-slate-200/90 bg-gradient-to-br from-slate-50 via-white to-indigo-50/70 p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] dark:border-slate-700 dark:from-slate-900/90 dark:via-slate-900/95 dark:to-indigo-950/40">
+                  <div className="flex items-start gap-2.5">
+                    <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-indigo-100 text-indigo-700 shadow-sm dark:bg-indigo-950/70 dark:text-indigo-300">
+                      <AlertTriangle className="h-4.5 w-4.5" />
+                    </div>
+                    <div>
+                      <h3 className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-900 dark:text-slate-100">
+                        Centre d&apos;alertes parentales
+                      </h3>
+                      <p className="mt-1 text-[10px] font-medium leading-relaxed text-slate-700 dark:text-slate-300">
+                        Les alertes sont séparées par type pour distinguer les notes publiées, les devoirs à venir et les informations importantes.
+                      </p>
+                    </div>
                   </div>
                 </div>
 
-                <div className="bg-white rounded-2xl border border-slate-100 p-1.5 grid grid-cols-2 gap-1.5">
-                  <button
-                    onClick={() => setAlertMenu("notes")}
-                    className={`rounded-xl px-3 py-2 text-[10px] font-bold transition-colors flex items-center justify-center gap-1.5 ${
-                      alertMenu === "notes"
-                        ? "bg-indigo-600 text-white"
-                        : "bg-slate-50 text-slate-600 hover:bg-slate-100"
-                    }`}
-                  >
-                    Notes
-                    <span className={`text-[9px] px-1.5 py-0.5 rounded-md ${alertMenu === "notes" ? "bg-white/20" : "bg-white"}`}>
-                      {notesNotifications.filter((n) => !n.read).length}
-                    </span>
-                  </button>
-                  <button
-                    onClick={() => setAlertMenu("homework")}
-                    className={`rounded-xl px-3 py-2 text-[10px] font-bold transition-colors flex items-center justify-center gap-1.5 ${
-                      alertMenu === "homework"
-                        ? "bg-amber-600 text-white"
-                        : "bg-slate-50 text-slate-600 hover:bg-slate-100"
-                    }`}
-                  >
-                    Devoirs à venir
-                    <span className={`text-[9px] px-1.5 py-0.5 rounded-md ${alertMenu === "homework" ? "bg-white/20" : "bg-white"}`}>
-                      {homeworkNotifications.filter((n) => !n.read).length}
-                    </span>
-                  </button>
-                  <button
-                    onClick={() => setAlertMenu("absences")}
-                    className={`rounded-xl px-3 py-2 text-[10px] font-bold transition-colors flex items-center justify-center gap-1.5 ${
-                      alertMenu === "absences"
-                        ? "bg-emerald-600 text-white"
-                        : "bg-slate-50 text-slate-600 hover:bg-slate-100"
-                    }`}
-                  >
-                    Absences
-                    <span className={`text-[9px] px-1.5 py-0.5 rounded-md ${alertMenu === "absences" ? "bg-white/20" : "bg-white"}`}>
-                      {absenceNotifications.filter((n) => !n.read).length}
-                    </span>
-                  </button>
-                  <button
-                    onClick={() => setAlertMenu("info")}
-                    className={`rounded-xl px-3 py-2 text-[10px] font-bold transition-colors flex items-center justify-center gap-1.5 ${
-                      alertMenu === "info"
-                        ? "bg-slate-800 text-white"
-                        : "bg-slate-50 text-slate-600 hover:bg-slate-100"
-                    }`}
-                  >
-                    Informations
-                    <span className={`text-[9px] px-1.5 py-0.5 rounded-md ${alertMenu === "info" ? "bg-white/20" : "bg-white"}`}>
-                      {infoNotifications.filter((n) => !n.read).length}
-                    </span>
-                  </button>
+                <div className="rounded-2xl border border-slate-200/90 bg-slate-50/90 p-1.5 shadow-sm dark:border-slate-700 dark:bg-slate-900/90">
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <button
+                      onClick={() => setAlertMenu("notes")}
+                      className={`rounded-xl px-3 py-2 text-[10px] font-semibold transition-all duration-200 flex items-center justify-center gap-1.5 ${
+                        alertMenu === "notes"
+                          ? "border border-indigo-200 bg-indigo-50/90 text-slate-900 shadow-sm dark:border-indigo-800 dark:bg-indigo-950/70 dark:text-indigo-100"
+                          : "bg-transparent text-slate-700 hover:bg-indigo-50/70 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100"
+                      }`}
+                    >
+                      Notes
+                      <span className={`rounded-md px-1.5 py-0.5 text-[9px] font-bold ${alertMenu === "notes" ? "bg-indigo-100 text-indigo-800 dark:bg-indigo-900/70 dark:text-indigo-200" : "bg-white/90 text-slate-700 dark:bg-slate-900 dark:text-slate-300"}`}>
+                        {notesNotifications.filter((n) => !n.read).length}
+                      </span>
+                    </button>
+                    <button
+                      onClick={() => setAlertMenu("homework")}
+                      className={`rounded-xl px-3 py-2 text-[10px] font-semibold transition-all duration-200 flex items-center justify-center gap-1.5 ${
+                        alertMenu === "homework"
+                          ? "border border-amber-200 bg-amber-50/90 text-slate-900 shadow-sm dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-100"
+                          : "bg-transparent text-slate-700 hover:bg-amber-50/70 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100"
+                      }`}
+                    >
+                      Devoirs à venir
+                      <span className={`rounded-md px-1.5 py-0.5 text-[9px] font-bold ${alertMenu === "homework" ? "bg-amber-100 text-amber-800 dark:bg-amber-900/70 dark:text-amber-200" : "bg-white/90 text-slate-700 dark:bg-slate-900 dark:text-slate-300"}`}>
+                        {homeworkNotifications.filter((n) => !n.read).length}
+                      </span>
+                    </button>
+                    <button
+                      onClick={() => setAlertMenu("absences")}
+                      className={`rounded-xl px-3 py-2 text-[10px] font-semibold transition-all duration-200 flex items-center justify-center gap-1.5 ${
+                        alertMenu === "absences"
+                          ? "border border-emerald-200 bg-emerald-50/90 text-slate-900 shadow-sm dark:border-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-100"
+                          : "bg-transparent text-slate-700 hover:bg-emerald-50/70 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100"
+                      }`}
+                    >
+                      Absences
+                      <span className={`rounded-md px-1.5 py-0.5 text-[9px] font-bold ${alertMenu === "absences" ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/70 dark:text-emerald-200" : "bg-white/90 text-slate-700 dark:bg-slate-900 dark:text-slate-300"}`}>
+                        {absenceNotifications.filter((n) => !n.read).length}
+                      </span>
+                    </button>
+                    <button
+                      onClick={() => setAlertMenu("info")}
+                      className={`rounded-xl px-3 py-2 text-[10px] font-semibold transition-all duration-200 flex items-center justify-center gap-1.5 ${
+                        alertMenu === "info"
+                          ? "border border-sky-200 bg-sky-50/90 text-slate-900 shadow-sm dark:border-sky-800 dark:bg-sky-950/50 dark:text-sky-100"
+                          : "bg-transparent text-slate-700 hover:bg-sky-50/70 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100"
+                      }`}
+                    >
+                      Informations
+                      <span className={`rounded-md px-1.5 py-0.5 text-[9px] font-bold ${alertMenu === "info" ? "bg-sky-100 text-sky-800 dark:bg-sky-900/70 dark:text-sky-200" : "bg-white/90 text-slate-700 dark:bg-slate-900 dark:text-slate-300"}`}>
+                        {infoNotifications.filter((n) => !n.read).length}
+                      </span>
+                    </button>
+                  </div>
                 </div>
 
                 {visibleAlertNotifications.length === 0 ? (
-                  <div className="theme-card rounded-2xl border theme-border p-8 text-center text-slate-400 text-xs font-medium">
-                    <CheckCircle2 className="h-8 w-8 text-emerald-400 mx-auto mb-2" />
+                  <div className="rounded-3xl border border-slate-200/90 bg-slate-50/80 p-8 text-center text-sm font-semibold text-slate-700 shadow-sm dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-300">
+                    <CheckCircle2 className="mx-auto mb-2 h-8 w-8 text-emerald-600 dark:text-emerald-400" />
                     {alertMenu === "notes" && "Aucune alerte de notes publiée pour le moment."}
                     {alertMenu === "homework" && "Aucune alerte de devoirs à venir pour le moment."}
                     {alertMenu === "absences" && "Aucune alerte d'absence pour le moment."}
@@ -1094,24 +1098,42 @@ export default function ParentPortal({
                             await handleMarkNotificationRead(notif);
                           }
                         }}
-                        className={`theme-card border rounded-2xl p-3 shadow-sm text-left relative cursor-pointer transition-all ${
-                          notif.read ? "border-slate-100 opacity-75" : "border-rose-200 ring-1 ring-rose-500/10"
+                        className={`relative overflow-hidden rounded-2xl border p-3.5 text-left shadow-[0_4px_14px_rgba(15,23,42,0.05)] transition-all duration-200 ${
+                          notif.read
+                            ? "border-slate-200 bg-slate-50/90 text-slate-700 dark:border-slate-700 dark:bg-slate-900/80 dark:text-slate-300"
+                            : "border-indigo-200 bg-indigo-50/80 text-slate-800 shadow-[0_10px_24px_rgba(79,70,229,0.10)] dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-slate-200"
                         }`}
                       >
+                        <div className={`absolute left-0 top-0 h-full w-1.5 ${alertMenu === "notes" ? "bg-indigo-400" : alertMenu === "homework" ? "bg-amber-400" : alertMenu === "absences" ? "bg-emerald-400" : "bg-sky-400"}`} />
                         {!notif.read && (
-                          <span className="absolute top-3.5 right-3.5 h-2 w-2 rounded-full bg-rose-600 animate-pulse" />
+                          <span className="absolute right-3.5 top-3.5 h-2.5 w-2.5 rounded-full bg-indigo-600 animate-pulse dark:bg-indigo-400" />
                         )}
-                        <span className="text-[8px] text-slate-400 font-semibold uppercase">
-                          {new Date(notif.createdAt).toLocaleDateString("fr-FR")} à {new Date(notif.createdAt).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}
-                        </span>
-                        <h4 className="text-xs font-bold text-slate-800 mt-0.5 flex items-center gap-1.5">
-                          <AlertTriangle className={`h-3.5 w-3.5 ${alertMenu === "notes" ? "text-indigo-500" : alertMenu === "homework" ? "text-amber-500" : alertMenu === "absences" ? "text-emerald-500" : "text-slate-500"}`} />
-                          {notif.title}
-                        </h4>
-                        <p className="text-[11px] text-slate-600 mt-1 leading-normal font-medium">{notif.message}</p>
-                        <div className="mt-3">
-                          <span className={`text-[10px] font-bold ${notif.read ? 'text-slate-400' : 'text-indigo-600'}`}>
-                            {notif.read ? 'Message déjà lu' : 'Nouveau message'}
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ${notif.read ? "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300" : alertMenu === "notes" ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/70 dark:text-indigo-300" : alertMenu === "homework" ? "bg-amber-100 text-amber-700 dark:bg-amber-900/70 dark:text-amber-300" : alertMenu === "absences" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/70 dark:text-emerald-300" : "bg-sky-100 text-sky-700 dark:bg-sky-900/70 dark:text-sky-300"}`}>
+                                <AlertTriangle className="h-3.5 w-3.5" />
+                              </div>
+                              <div className="min-w-0">
+                                <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                                  {new Date(notif.createdAt).toLocaleDateString("fr-FR")} à {new Date(notif.createdAt).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}
+                                </p>
+                                <h4 className="mt-0.5 text-sm font-bold text-slate-900 dark:text-white">
+                                  {notif.title}
+                                </h4>
+                              </div>
+                            </div>
+                            <p className="mt-2 text-[11px] font-medium leading-5 text-slate-700 dark:text-slate-300">
+                              {notif.message}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="mt-3 flex flex-wrap items-center gap-2">
+                          <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold ${notif.read ? "border-slate-200 bg-slate-100 text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300" : alertMenu === "notes" ? "border-indigo-200 bg-indigo-100 text-indigo-800 dark:border-indigo-800 dark:bg-indigo-900/70 dark:text-indigo-200" : alertMenu === "homework" ? "border-amber-200 bg-amber-100 text-amber-800 dark:border-amber-800 dark:bg-amber-900/70 dark:text-amber-200" : alertMenu === "absences" ? "border-emerald-200 bg-emerald-100 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-900/70 dark:text-emerald-200" : "border-sky-200 bg-sky-100 text-sky-800 dark:border-sky-800 dark:bg-sky-900/70 dark:text-sky-200"}`}>
+                            {notif.read ? "Consultée" : "Nouvelle"}
+                          </span>
+                          <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold ${alertMenu === "notes" ? "border-indigo-200 bg-indigo-100 text-indigo-800 dark:border-indigo-800 dark:bg-indigo-900/70 dark:text-indigo-200" : alertMenu === "homework" ? "border-amber-200 bg-amber-100 text-amber-800 dark:border-amber-800 dark:bg-amber-900/70 dark:text-amber-200" : alertMenu === "absences" ? "border-emerald-200 bg-emerald-100 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-900/70 dark:text-emerald-200" : "border-sky-200 bg-sky-100 text-sky-800 dark:border-sky-800 dark:bg-sky-900/70 dark:text-sky-200"}`}>
+                            {alertMenu === "notes" ? "Notes" : alertMenu === "homework" ? "Devoirs" : alertMenu === "absences" ? "Absences" : "Info"}
                           </span>
                         </div>
                       </div>
@@ -1133,39 +1155,39 @@ export default function ParentPortal({
                 <div className="theme-panel rounded-2xl border theme-border p-4 shadow-sm">
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Notes</h3>
-                      <p className="text-[11px] text-slate-400 mt-1">Dernières notes publiées pour l'enfant sélectionné.</p>
+                      <h3 className="text-[10px] font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider">Notes</h3>
+                      <p className="text-[11px] text-slate-700 dark:text-slate-300 mt-1">Dernières notes publiées pour l'enfant sélectionné.</p>
                     </div>
-                    <Award className="h-5 w-5 text-indigo-300 shrink-0" />
+                    <Award className="h-5 w-5 text-indigo-500 dark:text-indigo-400 shrink-0" />
                   </div>
 
                   {currentChild ? (
                     grades.length === 0 ? (
-                      <div className="py-8 text-center text-slate-400 text-xs font-medium">Aucune note disponible pour l'élève sélectionné.</div>
+                      <div className="py-8 text-center text-slate-700 dark:text-slate-300 text-xs font-medium">Aucune note disponible pour l'élève sélectionné.</div>
                     ) : (
                       <div className="space-y-3 mt-4">
                         <div className="flex items-center justify-between gap-2 mb-2">
                           <div>
-                            <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Historique des évaluations</h4>
+                            <h4 className="text-[10px] font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider">Historique des évaluations</h4>
                             {displayedGradesAverage && (
-                              <p className="text-[9px] text-slate-400 mt-1">Moyenne: {displayedGradesAverage} / 20</p>
+                              <p className="text-[9px] text-slate-700 dark:text-slate-300 mt-1">Moyenne: {displayedGradesAverage} / 20</p>
                             )}
                           </div>
-                          <span className="text-[9px] font-bold text-slate-100 bg-slate-800 px-2 py-0.5 rounded-md">
+                          <span className="text-[9px] font-bold text-slate-100 bg-slate-800 dark:bg-slate-700 px-2 py-0.5 rounded-md">
                             {displayedGrades.length} note(s)
                           </span>
                         </div>
 
                         <div className="theme-panel border theme-border rounded-xl p-2.5 mb-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
                           <div className="flex items-center justify-between gap-2">
-                            <label htmlFor="grade-subject-filter" className="text-[10px] font-bold text-slate-400 uppercase tracking-wider shrink-0">
+                            <label htmlFor="grade-subject-filter" className="text-[10px] font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider shrink-0">
                               Matiere
                             </label>
                             <select
                               id="grade-subject-filter"
                               value={gradeSubjectFilter}
                               onChange={(e) => setGradeSubjectFilter(e.target.value)}
-                              className="bg-slate-900 border border-slate-700 rounded-lg py-1.5 px-2 text-[10px] font-semibold text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-full max-w-[190px]"
+                              className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg py-1.5 px-2 text-[10px] font-semibold text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-full max-w-[190px]"
                             >
                               <option value="all">Toutes les matieres</option>
                               {availableGradeSubjects.map((subject) => (
@@ -1175,14 +1197,14 @@ export default function ParentPortal({
                           </div>
 
                           <div className="flex items-center justify-between gap-2">
-                            <label htmlFor="grade-period-filter" className="text-[10px] font-bold text-slate-400 uppercase tracking-wider shrink-0">
+                            <label htmlFor="grade-period-filter" className="text-[10px] font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider shrink-0">
                               Periode
                             </label>
                             <select
                               id="grade-period-filter"
                               value={gradePeriodFilter}
                               onChange={(e) => setGradePeriodFilter(e.target.value as "all" | "7d" | "30d" | "trimester")}
-                              className="bg-slate-900 border border-slate-700 rounded-lg py-1.5 px-2 text-[10px] font-semibold text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-full max-w-[190px]"
+                              className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg py-1.5 px-2 text-[10px] font-semibold text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-full max-w-[190px]"
                             >
                               <option value="all">Toute periode</option>
                               <option value="7d">7 derniers jours</option>
@@ -1193,7 +1215,7 @@ export default function ParentPortal({
                         </div>
 
                         {displayedGrades.length === 0 ? (
-                          <div className="text-center py-6 text-slate-400 text-xs font-medium">Aucune note pour ce filtre matiere/periode.</div>
+                          <div className="text-center py-6 text-slate-700 dark:text-slate-300 text-xs font-medium">Aucune note pour ce filtre matiere/periode.</div>
                         ) : (
                           <div className="space-y-3">
                             {displayedGrades.map((g) => {
@@ -1204,8 +1226,8 @@ export default function ParentPortal({
                                   <div className="flex items-center justify-between gap-4">
                                     <div className="min-w-0">
                                       <p className={`text-[10px] font-bold uppercase tracking-wider ${tone.title}`}>{g.subject}</p>
-                                      <h4 className="text-sm font-black text-slate-100 truncate">{g.examName}</h4>
-                                      <p className="text-[10px] text-slate-400 mt-0.5">Le {new Date(g.date).toLocaleDateString("fr-FR")}</p>
+                                      <h4 className="text-sm font-black text-slate-900 dark:text-white truncate">{g.examName}</h4>
+                                      <p className="text-[10px] text-slate-700 dark:text-slate-300 mt-0.5">Le {new Date(g.date).toLocaleDateString("fr-FR")}</p>
                                     </div>
                                     <div className="text-right">
                                       <p className={`text-xl font-black ${tone.value}`}>{`${g.grade} / ${g.maxScore ?? 20}`}</p>
@@ -1220,7 +1242,7 @@ export default function ParentPortal({
                       </div>
                     )
                   ) : (
-                    <div className="py-8 text-center text-slate-400 text-xs font-medium">Sélectionnez un enfant pour afficher ses notes.</div>
+                    <div className="py-8 text-center text-slate-700 dark:text-slate-300 text-xs font-medium">Sélectionnez un enfant pour afficher ses notes.</div>
                   )}
                 </div>
               </motion.div>
@@ -1234,7 +1256,7 @@ export default function ParentPortal({
         <button
           onClick={() => handleNavigateTab("children")}
           className={`flex-1 flex flex-col items-center gap-1 py-1 text-[9px] font-bold ${
-            activeTab === "children" ? "text-indigo-600" : "text-slate-400 hover:text-slate-600"
+            activeTab === "children" ? "text-indigo-600 dark:text-indigo-400" : "text-slate-600 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200"
           }`}
         >
           <School className="h-4.5 w-4.5" />
@@ -1244,7 +1266,7 @@ export default function ParentPortal({
         <button
           onClick={() => handleNavigateTab("notes")}
           className={`flex-1 flex flex-col items-center gap-1 py-1 text-[9px] font-bold ${
-            activeTab === "notes" ? "text-indigo-600" : "text-slate-400 hover:text-slate-600"
+            activeTab === "notes" ? "text-indigo-600 dark:text-indigo-400" : "text-slate-600 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200"
           }`}
         >
           <Award className="h-4.5 w-4.5" />
@@ -1254,7 +1276,7 @@ export default function ParentPortal({
         <button
           onClick={() => handleNavigateTab("notifications")}
           className={`flex-1 flex flex-col items-center gap-1 py-1 text-[9px] font-bold relative ${
-            activeTab === "notifications" ? "text-indigo-600" : "text-slate-400 hover:text-slate-600"
+            activeTab === "notifications" ? "text-indigo-600 dark:text-indigo-400" : "text-slate-600 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200"
           }`}
         >
           {unreadNotificationsCount > 0 && (
@@ -1267,7 +1289,7 @@ export default function ParentPortal({
         <button
           onClick={() => handleNavigateTab("alerts")}
           className={`flex-1 flex flex-col items-center gap-1 py-1 text-[9px] font-bold relative ${
-            activeTab === "alerts" ? "text-rose-600" : "text-slate-400 hover:text-slate-600"
+            activeTab === "alerts" ? "text-rose-600 dark:text-rose-400" : "text-slate-600 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200"
           }`}
         >
           {activeAlertsCount > 0 && (
