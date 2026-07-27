@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import ParentPortal from "./components/ParentPortal";
 import DeveloperConsole from "./components/DeveloperConsole";
+import ThemeToggle from "./components/ThemeToggle";
 import { Parent, Child, AppNotification, CompleteDeliveryLog } from "./types";
 import { parseJsonSafe, withApiBase } from "./utils/http";
 
@@ -49,6 +50,11 @@ export default function App() {
       const response = await fetch(withApiBase("/api/mobile/parent/notifications"), {
         headers: { "Authorization": `Bearer ${token}` }
       });
+      if (response.status === 401 || response.status === 403) {
+        setNotifications([]);
+        handleLogout();
+        return;
+      }
       if (response.ok) {
         const raw = await response.clone().text();
         console.log('[APK DEBUG] GET response', raw);
@@ -117,21 +123,24 @@ export default function App() {
     fetchNotifications();
   };
 
-  const handleLogout = async () => {
-    if (token) {
-      try {
-        await fetch(withApiBase("/api/mobile/parent/logout"), {
-          method: "POST",
-          headers: { "Authorization": `Bearer ${token}` }
-        });
-      } catch (e) {}
-    }
+  const handleLogout = () => {
+    const currentToken = token;
+
     localStorage.removeItem("ecoletrack_token");
     localStorage.removeItem("ecoletrack_parent");
     setToken(null);
     setParent(null);
     setNotifications([]);
     setSelectedChild(null);
+
+    if (!currentToken) {
+      return;
+    }
+
+    void fetch(withApiBase("/api/mobile/parent/logout"), {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${currentToken}` }
+    }).catch(() => undefined);
   };
 
   // Deep link push click handling
@@ -153,7 +162,7 @@ export default function App() {
 
   if (isMobileProductionMode) {
     return (
-      <div className="h-screen overflow-hidden bg-slate-50 text-slate-900 flex flex-col" id="ecoletrack-mobile-production">
+      <div className="h-screen overflow-hidden theme-bg flex flex-col" id="ecoletrack-mobile-production">
         <ParentPortal
           token={token}
           parent={parent}
@@ -171,10 +180,10 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans" id="ecoletrack-workspace">
+    <div className="min-h-screen theme-bg flex flex-col font-sans" id="ecoletrack-workspace">
       
       {/* Upper Navigation banner */}
-      <header className="bg-slate-900 border-b border-slate-800 px-6 py-4 flex items-center justify-between shrink-0">
+      <header className="theme-panel border-b theme-border px-6 py-4 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-3">
           <div className="h-10 w-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-black text-lg shadow-lg shadow-indigo-600/20">
             ÉT
@@ -191,17 +200,18 @@ export default function App() {
         </div>
 
         {/* Health State badge */}
-        <div className="flex items-center gap-2 bg-slate-950 border border-slate-850 px-3 py-1.5 rounded-xl">
+        <div className="flex items-center gap-2 theme-panel theme-border px-3 py-1.5 rounded-xl">
           <div className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-          <span className="text-[10px] font-bold text-slate-300 font-mono">Backend: PORT 3001 (Vite + Express)</span>
+          <span className="text-[10px] font-bold theme-muted font-mono">Backend: PORT 3001 (Vite + Express)</span>
         </div>
+        <ThemeToggle />
       </header>
 
       {/* Main workspace layout */}
       <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6 p-6 overflow-y-auto lg:min-h-0">
         
         {/* COLUMN 1: SETUP DOCUMENTATION GUIDE (4 cols) */}
-        <div className="lg:col-span-4 bg-slate-900/40 border border-slate-900 rounded-2xl p-5 overflow-y-auto flex flex-col justify-between h-auto lg:h-full">
+        <div className="lg:col-span-4 theme-card border theme-border rounded-2xl p-5 overflow-y-auto flex flex-col justify-between h-auto lg:h-full">
           <div className="space-y-4">
             <div className="flex items-center gap-2 text-indigo-400 border-b border-slate-800 pb-2.5">
               <BookOpen className="h-4.5 w-4.5 shrink-0" />
@@ -232,8 +242,8 @@ export default function App() {
                 </p>
               </section>
 
-              <section className="bg-slate-950 p-3 rounded-xl border border-slate-900">
-                <h3 className="font-bold text-slate-200 mb-1 text-[11px] flex items-center gap-1.5">
+              <section className="theme-card p-3 rounded-xl border theme-border">
+                <h3 className="font-bold theme-text mb-1 text-[11px] flex items-center gap-1.5">
                   <Terminal className="h-3.5 w-3.5 text-amber-400" />
                   Commandes de Build (Android)
                 </h3>

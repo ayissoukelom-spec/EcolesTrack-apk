@@ -3,6 +3,7 @@ import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
 import { resolveApiBaseUrl, withApiBase } from './utils/http';
+import { ThemeProvider } from './contexts/ThemeContext';
 
 const nativeFetch = window.fetch.bind(window);
 window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
@@ -14,6 +15,8 @@ console.log('Calling:', withApiBase('/api/login'));
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <ThemeProvider>
+      <App />
+    </ThemeProvider>
   </StrictMode>,
 );

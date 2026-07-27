@@ -8,6 +8,7 @@ import path from "path";
 import crypto from "crypto";
 import { createServer as createViteServer } from "vite";
 import { store, triggerMultiChannelNotification } from "./backend/store";
+import { dbQuery } from "./backend/postgres";
 import { helmetHeaders, requestIdMiddleware, sanitizePayload } from "./backend/middlewares/security";
 import { Logger } from "./backend/utils/logger";
 import { AuthService } from "./backend/services/auth";
@@ -314,7 +315,126 @@ app.get("/api/mobile/parent/children/:childId/grades", requireAuth, requireParen
   }
 
   const grades = await store.getGradesOfChild(childId);
-  return res.json(grades);
+  let termAverage: number | null = null;
+
+  try {
+    const childIdNum = Number(childId);
+    const studentResult = await dbQuery<{ first_name: string; last_name: string; school_id: number | null }>(
+      `SELECT first_name, last_name, school_id FROM students WHERE id = $1`,
+      [childIdNum]
+    );
+    const studentRow = studentResult.rows[0];
+    const studentName = studentRow ? `${studentRow.first_name} ${studentRow.last_name}` : 'Unknown';
+
+    const termResult = studentRow?.school_id != null
+      ? await dbQuery<{ id: number; name: string }>(
+          `SELECT id, name FROM school_terms WHERE school_id = $1 AND is_active = true ORDER BY order_index DESC LIMIT 1`,
+          [studentRow.school_id]
+        )
+      : { rows: [] };
+
+    const activeTerm = termResult.rows[0] ?? null;
+    const termName = activeTerm ? activeTerm.name : 'Aucun terme actif';
+
+    const rawRows = await dbQuery<{
+      evaluation_id: number;
+      term_id: number | null;
+      subject: string;
+      title: string;
+      coefficient: number | null;
+      max_score: number | null;
+      count_in_bulletin: boolean | null;
+      date: string;
+      grade_id: number;
+      score: string;
+      created_at: string;
+      updated_at: string;
+    }>(
+      `SELECT e.id AS evaluation_id, e.term_id, e.subject, e.title, e.coefficient, e.max_score, e.count_in_bulletin,
+              e.date, g.id AS grade_id, g.score, g.created_at, g.updated_at
+       FROM grades g
+       JOIN evaluations e ON e.id = g.evaluation_id
+       WHERE g.student_id = $1`,
+      [childIdNum]
+    );
+
+    const gradesByEvaluation = new Map<number, typeof rawRows.rows>();
+    rawRows.rows.forEach((row) => {
+      const existing = gradesByEvaluation.get(row.evaluation_id) ?? [];
+      existing.push(row);
+      gradesByEvaluation.set(row.evaluation_id, existing);
+    });
+
+    const usedEvaluations: string[] = [];
+    const ignoredEvaluations: string[] = [];
+    let totalWeighted = 0;
+    let totalCoefficient = 0;
+
+    if (activeTerm) {
+      for (const [evaluationId, rows] of gradesByEvaluation.entries()) {
+        const evaluation = rows[0];
+        const termMatches = evaluation.term_id === activeTerm.id || evaluation.term_id == null;
+        const countInBulletin = evaluation.count_in_bulletin !== false;
+
+        if (!termMatches) {
+          ignoredEvaluations.push(`${evaluation.subject} ${evaluation.score}/${evaluation.max_score ?? 20} -> term_id=${evaluation.term_id}`);
+          continue;
+        }
+
+        if (!countInBulletin) {
+          ignoredEvaluations.push(`${evaluation.subject} ${evaluation.score}/${evaluation.max_score ?? 20} -> countInBulletin=false`);
+          continue;
+        }
+
+        const latestGrade = rows.sort((a, b) => {
+          const aTime = new Date(a.updated_at || a.created_at).getTime();
+          const bTime = new Date(b.updated_at || b.created_at).getTime();
+          return bTime - aTime;
+        })[0];
+
+        const rawScore = latestGrade.score.trim().replace(',', '.');
+        const rawValue = Number(rawScore);
+        if (!Number.isFinite(rawValue)) {
+          ignoredEvaluations.push(`${evaluation.subject} ${latestGrade.score} -> invalid raw score`);
+          continue;
+        }
+
+        const maxScore = Number(evaluation.max_score ?? 20);
+        if (!Number.isFinite(maxScore) || maxScore <= 0) {
+          ignoredEvaluations.push(`${evaluation.subject} ${rawValue}/${evaluation.max_score} -> invalid maxScore`);
+          continue;
+        }
+
+        const coefficient = Number(evaluation.coefficient ?? 1);
+        if (!Number.isFinite(coefficient) || coefficient <= 0) {
+          ignoredEvaluations.push(`${evaluation.subject} ${rawValue}/${maxScore} -> invalid coefficient`);
+          continue;
+        }
+
+        const normalizedScore = (rawValue / maxScore) * 20;
+        totalWeighted += normalizedScore * coefficient;
+        totalCoefficient += coefficient;
+
+        usedEvaluations.push(`${evaluation.subject} ${rawValue}/${maxScore} coef ${coefficient}`);
+      }
+
+      termAverage = totalCoefficient > 0 ? Number((totalWeighted / totalCoefficient).toFixed(2)) : null;
+    }
+
+    console.log('[SERVER TERM AVERAGE DEBUG]');
+    console.log('[SERVER TERM AVERAGE DEBUG] Student:', studentName);
+    console.log('[SERVER TERM AVERAGE DEBUG] Term:', termName);
+    console.log('[SERVER TERM AVERAGE DEBUG] USED:');
+    usedEvaluations.forEach((line) => console.log('[SERVER TERM AVERAGE DEBUG] ' + line));
+    console.log('[SERVER TERM AVERAGE DEBUG] IGNORED:');
+    ignoredEvaluations.forEach((line) => console.log('[SERVER TERM AVERAGE DEBUG] ' + line));
+    console.log('[SERVER TERM AVERAGE DEBUG] Average:', termAverage != null ? termAverage.toFixed(2) : 'null');
+  } catch (e) {
+    console.log('[SERVER TERM AVERAGE DEBUG] Failed to compute term average:', String(e));
+    termAverage = null;
+  }
+
+  return res.json({ grades, termAverage });
 });
 
 // 7. GET /api/mobile/parent/notifications

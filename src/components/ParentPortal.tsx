@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import logoImage from "../assets/logo.png";
+import ThemeToggle from "./ThemeToggle";
 import { Parent, Child, Absence, Grade, AppNotification } from "../types";
 import { getApiErrorMessage, parseJsonSafe, withApiBase } from "../utils/http";
 
@@ -39,7 +40,7 @@ export default function ParentPortal({
   fetchNotifications
 }: ParentPortalProps) {
   // APK debug: log incoming props
-  console.log('[APK DEBUG] ParentPortal props', { notifications });
+  console.log('[APK DEBUG] ParentPortal props', JSON.stringify({ notifications }, null, 2));
   
   // Login credentials state
   const [email, setEmail] = useState("");
@@ -53,6 +54,7 @@ export default function ParentPortal({
   const [children, setChildren] = useState<Child[]>([]);
   const [absences, setAbsences] = useState<Absence[]>([]);
   const [grades, setGrades] = useState<Grade[]>([]);
+  const [termAverageApi, setTermAverageApi] = useState<number | null>(null);
 
   const [activeSchoolId, setActiveSchoolId] = useState("");
   const [localNotifications, setLocalNotifications] = useState<AppNotification[]>(notifications);
@@ -65,7 +67,7 @@ export default function ParentPortal({
       ...notif,
       read: notif.read || readOverrides.has(notif.id)
     }));
-    console.log('[APK DEBUG] localNotifications (before set)', mapped);
+    console.log('[APK DEBUG] localNotifications (before set)', JSON.stringify(mapped, null, 2));
     setLocalNotifications(mapped);
   }, [notifications, readOverrides]);
 
@@ -75,6 +77,15 @@ export default function ParentPortal({
   const [gradeSubjectFilter, setGradeSubjectFilter] = useState("all");
   const [gradePeriodFilter, setGradePeriodFilter] = useState<"all" | "7d" | "30d" | "trimester">("all");
   
+  const handleSessionExpired = () => {
+    setChildren([]);
+    setAbsences([]);
+    setGrades([]);
+    setTermAverageApi(null);
+    setChildrenLoadError(null);
+    onLogout();
+  };
+
   // Load children list when authenticated
   const parentId = parent?.id;
   const parentActiveSchoolId = parent?.activeSchoolId;
@@ -127,10 +138,14 @@ export default function ParentPortal({
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   }, [grades, gradeSubjectFilter, gradePeriodFilter]);
 
-  const displayedGradesAverage = calculateAverage(displayedGrades);
+  const displayedGradesAverage = (gradePeriodFilter === "trimester" && termAverageApi != null)
+    ? termAverageApi.toFixed(2)
+    : calculateAverage(displayedGrades);
 
   const getGradeToneClasses = (grade: number, maxScore?: number) => {
-    const normalizedScore = maxScore && maxScore > 0 ? (grade / maxScore) * 20 : grade;
+    // Detect if `grade` is already normalized to /20 or is raw out of `maxScore`.
+    // If `grade` is less-or-equal to `maxScore`, treat it as raw and normalize it.
+    const normalizedScore = (maxScore && maxScore > 0 && grade <= maxScore) ? (grade / maxScore) * 20 : grade;
 
     if (normalizedScore < 10) {
       return {
@@ -202,6 +217,10 @@ export default function ParentPortal({
       const response = await fetch(withApiBase("/api/mobile/parent/children"), {
         headers: { "Authorization": `Bearer ${token}` }
       });
+      if (response.status === 401 || response.status === 403) {
+        handleSessionExpired();
+        return;
+      }
       const data = await parseJsonSafe<Child[] | { error?: string }>(response);
       if (response.ok) {
         const nextChildren = Array.isArray(data) ? data : [];
@@ -244,6 +263,10 @@ export default function ParentPortal({
       const response = await fetch(withApiBase(`/api/mobile/parent/children/${childId}/absences`), {
         headers: { "Authorization": `Bearer ${token}` }
       });
+      if (response.status === 401 || response.status === 403) {
+        handleSessionExpired();
+        return;
+      }
       if (response.ok) {
         const data = await parseJsonSafe<Absence[]>(response);
         // Sort absences by date descending (most recent first)
@@ -263,9 +286,63 @@ export default function ParentPortal({
       const response = await fetch(withApiBase(`/api/mobile/parent/children/${childId}/grades`), {
         headers: { "Authorization": `Bearer ${token}` }
       });
+      if (response.status === 401 || response.status === 403) {
+        handleSessionExpired();
+        return;
+      }
+      const serverAverageHeader = response.headers.get('X-Student-Term-Average');
       if (response.ok) {
-        const data = await parseJsonSafe<Grade[]>(response);
-        setGrades(Array.isArray(data) ? data : []);
+        const data = await parseJsonSafe<{ grades?: Grade[]; termAverage?: number }>(response);
+        const gradesData = Array.isArray((data as any)) ? (data as any) : (data && Array.isArray((data as any).grades) ? (data as any).grades : []);
+        console.log("[APK DEBUG] Grades received from API:", gradesData.length, "items");
+        // Determine average from body or header
+        const bodyAverage = (data && (data as any).termAverage != null) ? Number((data as any).termAverage) : null;
+        const headerAverage = serverAverageHeader ? Number(serverAverageHeader) : null;
+        const chosenAverage = bodyAverage != null ? bodyAverage : headerAverage;
+        if (chosenAverage != null) {
+          console.log(`[APK DEBUG] Average received from API: ${chosenAverage}`);
+          setTermAverageApi(chosenAverage);
+        } else {
+          setTermAverageApi(null);
+        }
+
+        try {
+          const trimesterGrades = gradesData.filter((gd: any) => {
+            try { return new Date(gd.date).getTime() >= trimesterStart.getTime(); } catch { return false; }
+          });
+
+          const studentName = currentChild ? `${currentChild.firstName} ${currentChild.lastName}` : 'unknown';
+          const displayedAverage = (gradePeriodFilter === 'trimester' && chosenAverage != null)
+            ? Number(chosenAverage).toFixed(2)
+            : (calculateAverage(trimesterGrades) ?? '—');
+
+          console.log('[DEBUG AVERAGE] START');
+          console.log('[DEBUG AVERAGE] childId:', childId);
+          console.log('[DEBUG AVERAGE] student:', studentName);
+          console.log('[DEBUG AVERAGE] serverAverage:', chosenAverage != null ? Number(chosenAverage).toFixed(2) : 'null');
+          console.log('[DEBUG AVERAGE] displayedAverage:', displayedAverage);
+
+          trimesterGrades.forEach((g: any) => {
+            const raw = typeof g.rawScore === 'number' ? g.rawScore : g.grade;
+            const max = g.maxScore ?? 20;
+            const coeff = g.coefficient ?? 1;
+            const normalized = typeof g.grade === 'number' ? Number(g.grade.toFixed(2)) : null;
+            console.log(
+              '[DEBUG AVERAGE] GRADE:',
+              g.subject,
+              'raw:', raw,
+              'max:', max,
+              'coef:', coeff,
+              'normalized:', normalized
+            );
+          });
+
+          console.log('[DEBUG AVERAGE] END');
+        } catch (e) {
+          console.log('Failed to print DEBUG AVERAGE block', String(e));
+        }
+
+        setGrades(gradesData);
       }
     } catch (e) {
       console.error("Failed to fetch grades", e);
@@ -306,11 +383,33 @@ export default function ParentPortal({
     if (studentGrades.length === 0) return null;
     let totalScore = 0;
     let totalCoeff = 0;
+    const debugInfo: any[] = [];
+    
     studentGrades.forEach(g => {
-      totalScore += g.grade * g.coefficient;
+      const weightedScore = g.grade * g.coefficient;
+      totalScore += weightedScore;
       totalCoeff += g.coefficient;
+      debugInfo.push({
+        subject: g.subject,
+        grade: g.grade,
+        rawScore: (g as any).rawScore,
+        maxScore: g.maxScore,
+        coefficient: g.coefficient,
+        weightedScore: weightedScore,
+        date: g.date
+      });
     });
-    return (totalScore / totalCoeff).toFixed(2);
+    
+    const average = (totalScore / totalCoeff).toFixed(2);
+    console.log("[APK DEBUG] Trimester average calculation:", JSON.stringify({
+      gradesCount: studentGrades.length,
+      totalScore,
+      totalCoeff,
+      average,
+      details: debugInfo
+    }, null, 2));
+    
+    return average;
   }
 
   const trimesterStart = useMemo(() => {
@@ -330,6 +429,7 @@ export default function ParentPortal({
   );
 
   const absenceCount = currentTrimesterAbsences.length;
+  const unjustifiedAbsenceCount = currentTrimesterAbsences.filter((abs) => !abs.justified).length;
   console.log("Absences reçues API :", absences);
   console.log("Nombre calculé :", absenceCount);
 
@@ -358,7 +458,24 @@ export default function ParentPortal({
     return weekdays;
   };
 
-  const currentTrimesterAverage = calculateAverage(currentTrimesterGrades);
+  const currentTrimesterAverage = termAverageApi != null ? termAverageApi.toFixed(2) : calculateAverage(currentTrimesterGrades);
+  
+  // Debug: Log current trimester info
+  console.log("[APK DEBUG] Trimester filter info:", JSON.stringify({
+    trimesterStart: trimesterStart.toISOString(),
+    currentDate: new Date().toISOString(),
+    totalGradesCount: grades.length,
+    trimesterGradesCount: currentTrimesterGrades.length,
+    trimesterGrades: currentTrimesterGrades.map(g => ({
+      subject: g.subject,
+      grade: g.grade,
+      rawScore: (g as any).rawScore,
+      coefficient: g.coefficient,
+      date: g.date,
+      inRange: new Date(g.date).getTime() >= trimesterStart.getTime()
+    }))
+  }, null, 2));
+  
   const uniqueCurrentAbsenceDates = new Set(
     currentTrimesterAbsences.map((absence) => new Date(absence.date).toDateString())
   ).size;
@@ -493,9 +610,9 @@ export default function ParentPortal({
   // Screen A: LOGIN SCREEN
   if (!token || !parent) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center min-h-screen px-4 py-8 bg-slate-950 text-slate-100" id="login-screen">
+      <div className="flex-1 flex flex-col items-center justify-center min-h-screen px-4 py-8 theme-bg theme-text" id="login-screen">
         <div className="w-full max-w-md">
-          <div className="rounded-[2rem] border border-slate-800 bg-slate-900/95 p-7 shadow-2xl shadow-indigo-900/30">
+          <div className="rounded-[2rem] border theme-border theme-card p-7 shadow-2xl shadow-indigo-900/30">
             <div className="flex flex-col items-center gap-4 mb-7 text-center">
               <img
                 src={logoImage}
@@ -508,7 +625,7 @@ export default function ParentPortal({
               </div>
             </div>
             <div className="space-y-3 mb-7">
-              <div className="inline-flex items-center justify-center rounded-full bg-slate-800/90 px-3 py-2 text-xs font-semibold text-slate-100 ring-1 ring-slate-700">
+              <div className="inline-flex items-center justify-center rounded-full theme-panel px-3 py-2 text-xs font-semibold theme-text ring-1 theme-border">
                 <span className="text-lg">🇹🇬</span>
                 <span className="ml-2">Togo</span>
               </div>
@@ -529,7 +646,7 @@ export default function ParentPortal({
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="nom@email.com"
-                    className="w-full rounded-2xl border border-slate-800 bg-slate-950 py-3 pl-11 pr-4 text-sm text-slate-100 placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                    className="w-full rounded-2xl border theme-border theme-card py-3 pl-11 pr-4 text-sm theme-text placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                     required
                   />
                 </div>
@@ -544,7 +661,7 @@ export default function ParentPortal({
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••"
-                    className="w-full rounded-2xl border border-slate-800 bg-slate-950 py-3 pl-11 pr-11 text-sm text-slate-100 placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                    className="w-full rounded-2xl border theme-border theme-card py-3 pl-11 pr-11 text-sm theme-text placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                     required
                   />
                   <button
@@ -592,10 +709,10 @@ export default function ParentPortal({
 
   // Screen B: LOGGED IN PORTAL VIEWPORT
   return (
-    <div className="h-screen flex flex-col bg-slate-50 text-slate-800 overflow-hidden" id="portal-logged-in">
+    <div className="h-screen flex flex-col theme-bg theme-text overflow-hidden" id="portal-logged-in">
       
       {/* Dynamic Header */}
-      <div className="bg-gradient-to-r from-indigo-600 to-indigo-700 border-b border-indigo-700 px-4 py-3 flex items-center justify-between shadow-md shrink-0 text-white">
+      <div className="bg-gradient-to-r from-indigo-600 to-indigo-700 border-b theme-border px-4 py-3 flex items-center justify-between shadow-md shrink-0 text-white">
         <div className="flex items-center gap-3">
           <div className="h-8 w-8 bg-white/20 rounded-xl flex items-center justify-center shadow-md overflow-hidden">
             <img src={logoImage} alt="Ecoles Track" className="h-6 w-6 object-contain" />
@@ -628,6 +745,7 @@ export default function ParentPortal({
             <p className="text-xs font-bold text-white">{parent.name}</p>
             <p className="text-[9px] text-indigo-100">Parent connecté</p>
           </div>
+          <ThemeToggle />
           <button 
             onClick={onLogout}
             className="p-1.5 bg-white/20 hover:bg-white/30 text-white rounded-lg transition-colors border border-white/30"
@@ -660,7 +778,7 @@ export default function ParentPortal({
                 </div>
 
                 {currentChild && (
-                  <div className="bg-white rounded-2xl border border-slate-100 p-4 shadow-sm space-y-4">
+                  <div className="theme-card rounded-2xl border theme-border p-4 shadow-sm space-y-4">
                     <div className="flex items-center gap-3">
                       <img
                         src={currentChild.avatarUrl}
@@ -694,10 +812,13 @@ export default function ParentPortal({
                           </p>
                           <p className="text-[10px] text-indigo-200/80 font-medium mt-0.5">{currentTrimesterGrades.length} évaluation(s)</p>
                         </div>
-                        <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-3">
-                          <p className="text-[9px] font-bold uppercase tracking-wider text-emerald-600">Absences</p>
-                          <p className="text-xl font-black text-emerald-900 mt-1">{absenceCount}</p>
-                          <p className="text-[10px] text-emerald-700/80 font-medium mt-0.5">sur la période en cours</p>
+                        <div className="rounded-xl border border-slate-800 bg-slate-950 p-3">
+                          <p className="text-[9px] font-bold uppercase tracking-wider text-red-500">Assiduité</p>
+                          <div className="flex items-baseline gap-2 mt-2">
+                            <p className="text-3xl font-black text-red-500">{absenceCount}</p>
+                            <p className="text-sm font-semibold text-slate-300">absences</p>
+                          </div>
+                          <p className="text-[10px] text-slate-300 font-medium mt-2">{unjustifiedAbsenceCount} non justifiées</p>
                         </div>
                       </div>
 
@@ -757,7 +878,7 @@ export default function ParentPortal({
                     </div>
                   </div>
                 ) : (
-                  <div className="bg-white rounded-2xl border border-slate-100 p-2 shadow-sm space-y-1.5">
+                  <div className="theme-card rounded-2xl border theme-border p-2 shadow-sm space-y-1.5">
                     {children.length > 1 && (
                       <p className="px-2 pt-1 text-[10px] font-semibold text-slate-500">
                         Choisissez un seul élève à afficher.
@@ -927,7 +1048,7 @@ export default function ParentPortal({
                 </div>
 
                 {visibleAlertNotifications.length === 0 ? (
-                  <div className="bg-white rounded-2xl border border-slate-100 p-8 text-center text-slate-400 text-xs font-medium">
+                  <div className="theme-card rounded-2xl border theme-border p-8 text-center text-slate-400 text-xs font-medium">
                     <CheckCircle2 className="h-8 w-8 text-emerald-400 mx-auto mb-2" />
                     {alertMenu === "notes" && "Aucune alerte de notes publiée pour le moment."}
                     {alertMenu === "homework" && "Aucune alerte de devoirs à venir pour le moment."}
@@ -962,7 +1083,7 @@ export default function ParentPortal({
                             await handleMarkNotificationRead(notif);
                           }
                         }}
-                        className={`bg-white border rounded-2xl p-3 shadow-sm text-left relative cursor-pointer transition-all ${
+                        className={`theme-card border rounded-2xl p-3 shadow-sm text-left relative cursor-pointer transition-all ${
                           notif.read ? "border-slate-100 opacity-75" : "border-rose-200 ring-1 ring-rose-500/10"
                         }`}
                       >
@@ -998,7 +1119,7 @@ export default function ParentPortal({
                 exit={{ opacity: 0 }}
                 className="space-y-4"
               >
-                <div className="bg-slate-900 rounded-2xl border border-slate-800 p-4 shadow-sm">
+                <div className="theme-panel rounded-2xl border theme-border p-4 shadow-sm">
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Notes</h3>
@@ -1024,7 +1145,7 @@ export default function ParentPortal({
                           </span>
                         </div>
 
-                        <div className="bg-slate-950 border border-slate-800 rounded-xl p-2.5 mb-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <div className="theme-panel border theme-border rounded-xl p-2.5 mb-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
                           <div className="flex items-center justify-between gap-2">
                             <label htmlFor="grade-subject-filter" className="text-[10px] font-bold text-slate-400 uppercase tracking-wider shrink-0">
                               Matiere
@@ -1098,7 +1219,7 @@ export default function ParentPortal({
       </div>
 
       {/* Persistent Bottom Bar Navigation - Parent Portal */}
-      <div className="fixed bottom-0 left-0 right-0 h-16 bg-white border-t border-slate-100 flex items-center justify-around px-2 py-1 shadow-md z-50">
+      <div className="fixed bottom-0 left-0 right-0 h-16 theme-card theme-border flex items-center justify-around px-2 py-1 shadow-md z-50">
         <button
           onClick={() => handleNavigateTab("children")}
           className={`flex-1 flex flex-col items-center gap-1 py-1 text-[9px] font-bold ${

@@ -516,22 +516,34 @@ export class PostgresStore {
     const childIdNum = Number(childId);
     if (!Number.isInteger(childIdNum)) return [];
 
-    const { rows } = await dbQuery<{ id: number; subject: string; score: string; coefficient: number | null; title: string; date: string }>(`
-      SELECT g.id, e.subject, g.score, e.coefficient, e.title, e.date
+    const { rows } = await dbQuery<{ id: number; subject: string; score: string; coefficient: number | null; title: string; date: string; max_score: number }>(`
+      SELECT g.id, e.subject, g.score, e.coefficient, e.title, e.date, e.max_score
       FROM grades g
       JOIN evaluations e ON e.id = g.evaluation_id
       WHERE g.student_id = $1
     `, [childIdNum]);
 
-    return rows.map((row) => ({
-      id: String(row.id),
-      childId,
-      subject: row.subject,
-      grade: Number(row.score),
-      coefficient: Number(row.coefficient ?? 1),
-      examName: row.title,
-      date: row.date,
-    }));
+    return rows.map((row) => {
+      const rawScore = Number(row.score);
+      const maxScore = row.max_score || 20;
+      // Normalize score to /20 (same as website)
+      const normalizedScore = (rawScore / maxScore) * 20;
+      
+      return {
+        id: String(row.id),
+        childId,
+        subject: row.subject,
+        // `grade` is the normalized score on a /20 scale (backward compatible)
+        grade: normalizedScore,
+        // Keep original max score to allow clients to display raw values
+        maxScore: maxScore,
+        // Expose the raw recorded score so clients can detect double-normalization
+        rawScore: rawScore,
+        coefficient: Number(row.coefficient ?? 1),
+        examName: row.title,
+        date: row.date,
+      };
+    });
   }
 
   public async getInAppNotifications(parentId: string): Promise<AppNotification[]> {
