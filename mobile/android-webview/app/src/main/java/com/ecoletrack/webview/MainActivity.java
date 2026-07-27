@@ -1,9 +1,12 @@
 package com.ecoletrack.webview;
 
 import android.annotation.SuppressLint;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.os.Bundle;
+import android.os.Build;
 import android.util.Log;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
@@ -14,13 +17,15 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
-import android.webkit.WebViewClient;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.NotificationCompat;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
+
+import com.google.firebase.messaging.FirebaseMessaging;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -44,11 +49,27 @@ public class MainActivity extends AppCompatActivity {
             "h1{font-size:18px;margin:0 0 8px;}p{font-size:14px;margin:0 0 8px;color:#cbd5e1;}code{font-size:12px;color:#93c5fd;word-break:break-all;}</style></head><body>" +
             "<div class='card'><h1>ÉcoleTrack</h1><p>Le chargement a échoué.</p><p><code>{DETAIL}</code></p></div></body></html>";
     private WebView webView;
+    private String pendingFcmToken;
 
     private String readIndexHtmlFromAssets() throws java.io.IOException {
         try (java.io.InputStream inputStream = getAssets().open("index.html")) {
             return new String(inputStream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
         }
+    }
+
+    private void dispatchFcmTokenToWebView(String token) {
+        pendingFcmToken = token;
+        if (webView == null) {
+            return;
+        }
+
+        String escapedToken = token.replace("\\", "\\\\").replace("'", "\\'").replace("\"", "\\\"");
+        String script = "window.setFcmToken('" + escapedToken + "');";
+        webView.post(() -> {
+            if (webView != null) {
+                webView.evaluateJavascript(script, null);
+            }
+        });
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -149,6 +170,11 @@ public class MainActivity extends AppCompatActivity {
                             "localStorage.setItem('ecoletrack_mobile_production', 'true'); " +
                             "window.AndroidBridge && window.AndroidBridge.log('[EcoleTrack] API base set: ' + '" + apiServerUrl + "');";
                 view.evaluateJavascript(js, null);
+
+                if (pendingFcmToken != null) {
+                    dispatchFcmTokenToWebView(pendingFcmToken);
+                    pendingFcmToken = null;
+                }
             }
 
             @Override
@@ -173,7 +199,20 @@ public class MainActivity extends AppCompatActivity {
         });
         Log.i(TAG, "API base URL configured: " + apiServerUrl);
         webView.setWebChromeClient(new WebChromeClient());
-        webView.setBackgroundColor(Color.parseColor("#0f172a"));
+
+FirebaseMessaging.getInstance().getToken()
+        .addOnCompleteListener(task -> {
+            if (!task.isSuccessful()) {
+                Log.w(TAG, "Impossible de récupérer le token Firebase", task.getException());
+                return;
+            }
+
+            String token = task.getResult();
+            Log.i(TAG, "TOKEN_FCM_PARENT = " + token);
+            dispatchFcmTokenToWebView(token);
+        });
+
+webView.setBackgroundColor(Color.parseColor("#0f172a"));
         webView.loadDataWithBaseURL(null, LOADING_HTML, "text/html", "UTF-8", null);
         // Charge l'application avec un paramètre de cache-busting
         String cachebustedUrl = APP_INDEX_URL + "?v=" + System.currentTimeMillis();

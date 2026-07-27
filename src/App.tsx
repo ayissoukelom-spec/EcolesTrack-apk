@@ -34,6 +34,22 @@ export default function App() {
     const saved = localStorage.getItem("ecoletrack_parent");
     return saved ? JSON.parse(saved) : null;
   });
+  const [receivedFcmToken, setReceivedFcmToken] = useState<string | null>(null);
+
+  useEffect(() => {
+    const runtime = window as Window & typeof globalThis & {
+      setFcmToken?: (token: string) => void;
+    };
+
+    runtime.setFcmToken = (token: string) => {
+      console.log("[FCM] token received", token);
+      setReceivedFcmToken(token);
+    };
+
+    return () => {
+      delete runtime.setFcmToken;
+    };
+  }, []);
 
   // Navigation states
   const [activeTab, setActiveTab] = useState("children");
