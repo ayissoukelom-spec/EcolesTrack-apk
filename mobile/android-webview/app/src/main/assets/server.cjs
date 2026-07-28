@@ -1582,29 +1582,8 @@ app.post("/api/mobile/parent/devices/register-push-token", requireAuth, requireP
     });
   }
   const { pushToken, platform, appVersion } = validation.data;
-
-console.log("PUSH TOKEN RECU :", {
-  parentId,
-  pushToken,
-  platform,
-  appVersion
-});
-
-const device = await store.registerPushToken(
-  parentId,
-  pushToken,
-  platform,
-  appVersion
-);
-
-console.log("DEVICE ENREGISTRE :", device);
-
-logger6.audit(
-  "REGISTER_PUSH_TOKEN",
-  parentId,
-  { platform, appVersion },
-  "SUCCESS"
-);
+  const device = await store.registerPushToken(parentId, pushToken, platform, appVersion);
+  logger6.audit("REGISTER_PUSH_TOKEN", parentId, { platform, appVersion }, "SUCCESS");
   return res.json({
     success: true,
     message: "Token de notification enregistr\xE9.",

@@ -8,6 +8,12 @@ import {
   Terminal, ShieldCheck, Play, RefreshCw, Trash2, Smartphone, 
   BookOpen, HelpCircle, Code, HelpCircle as HelpIcon 
 } from "lucide-react";
+// Réception du token Firebase envoyé par Android
+declare global {
+  interface Window {
+    setFcmToken?: (token: string) => void;
+  }
+}
 import ParentPortal from "./components/ParentPortal";
 import DeveloperConsole from "./components/DeveloperConsole";
 import ThemeToggle from "./components/ThemeToggle";
@@ -15,6 +21,21 @@ import { Parent, Child, AppNotification, CompleteDeliveryLog } from "./types";
 import { parseJsonSafe, withApiBase } from "./utils/http";
 
 export default function App() {
+  const [fcmToken, setFcmToken] = useState<string | null>(null);
+
+useEffect(() => {
+  window.setFcmToken = (token: string) => {
+    console.log("TOKEN FCM reçu depuis Android :", token);
+    setFcmToken(token);
+
+    // Sauvegarde locale temporaire
+    localStorage.setItem("fcm_token", token);
+  };
+
+  return () => {
+    delete window.setFcmToken;
+  };
+}, []);
   const isMobileProductionMode = (() => {
     const envFlag = (import.meta as any)?.env?.VITE_MOBILE_PRODUCTION === "true";
     const isAndroidWebViewHost = typeof window !== "undefined" && (
@@ -143,6 +164,11 @@ export default function App() {
 };
 
 useEffect(() => {
+  console.log("[FCM] useEffect", {
+    token: !!token,
+    receivedFcmToken,
+  });
+
   if (token && receivedFcmToken) {
     registerPushToken(receivedFcmToken);
   }

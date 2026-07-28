@@ -30,24 +30,19 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
 
   logDiagnostic(`[EcoleTrack] fetch -> ${resolvedUrl}`);
 
-  const timeoutMs = 10000;
-  const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
-
   try {
-    const response = await nativeFetch(resolvedInput, {
-      ...init,
-      signal: controller.signal,
-    });
-    logDiagnostic(`[EcoleTrack] fetch status ${response.status} -> ${resolvedUrl}`);
-    return response;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    logDiagnostic(`[EcoleTrack] fetch error ${message}`);
-    throw error;
-  } finally {
-    window.clearTimeout(timeoutId);
-  }
+  const response = await nativeFetch(resolvedInput, {
+    ...init,
+  });
+
+  logDiagnostic(`[EcoleTrack] fetch status ${response.status} -> ${resolvedUrl}`);
+  return response;
+
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  logDiagnostic(`[EcoleTrack] fetch error ${message}`);
+  throw error;
+}
 };
 
 logDiagnostic(`[EcoleTrack] Resolved API = ${resolveApiBaseUrl()}`);
