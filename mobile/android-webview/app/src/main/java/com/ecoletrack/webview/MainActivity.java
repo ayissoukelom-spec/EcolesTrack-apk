@@ -64,7 +64,12 @@ public class MainActivity extends AppCompatActivity {
         }
 
         String escapedToken = token.replace("\\", "\\\\").replace("'", "\\'").replace("\"", "\\\"");
-        String script = "window.setFcmToken('" + escapedToken + "');";
+        String script =
+        "if (window.setFcmToken) {" +
+        " window.setFcmToken('" + escapedToken + "');" +
+        "} else {" +
+        " console.log('[FCM] setFcmToken not ready');" +
+        "}";
         webView.post(() -> {
             if (webView != null) {
                 webView.evaluateJavascript(script, null);
@@ -217,6 +222,11 @@ webView.setBackgroundColor(Color.parseColor("#0f172a"));
         // Charge l'application avec un paramètre de cache-busting
         String cachebustedUrl = APP_INDEX_URL + "?v=" + System.currentTimeMillis();
         webView.post(() -> webView.loadUrl(cachebustedUrl));
+        webView.postDelayed(() -> {
+    if (pendingFcmToken != null) {
+        dispatchFcmTokenToWebView(pendingFcmToken);
+    }
+}, 3000);
     }
 
     @Override

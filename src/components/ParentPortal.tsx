@@ -209,9 +209,10 @@ export default function ParentPortal({
       onLoginSuccess(data.token, data.parent);
       setEmail("");
       setPassword("");
-    } catch (err: any) {
-      setErrorMsg(err.message);
-    } finally {
+   } catch (err: any) {
+  console.error("[LOGIN ERROR]", err);
+  setErrorMsg(err.message || "Erreur de connexion");
+} finally {
       setIsLoading(false);
     }
   };

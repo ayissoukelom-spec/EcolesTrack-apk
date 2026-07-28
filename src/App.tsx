@@ -58,7 +58,36 @@ export default function App() {
   // Notifications and delivery audit logs loaded from Express
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [deliveryLogs, setDeliveryLogs] = useState<CompleteDeliveryLog[]>([]);
+  const registerPushToken = async (pushToken: string) => {
+    if (!token) return;
 
+    try {
+      const response = await fetch(
+        withApiBase("/api/mobile/parent/devices/register-push-token"),
+        {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${token}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            pushToken,
+            platform: "android",
+            appVersion: "1.0.0"
+          })
+        }
+      );
+
+      if (response.ok) {
+        console.log("[FCM] Token enregistré sur le serveur");
+      } else {
+        console.log("[FCM] Erreur d'enregistrement :", response.status);
+      }
+  } catch (e) {
+  console.error("[FCM] Impossible d'enregistrer le token", e);
+  console.error("[FCM] details:", JSON.stringify(e, null, 2));
+}
+  };
   // Fetch parent in-app notifications
   const fetchNotifications = async () => {
     if (!token) return;
@@ -106,10 +135,16 @@ export default function App() {
         setNotifications([]);
         alert("Historique des logs et des notifications effacé !");
       }
-    } catch (e) {
-      console.error(e);
-    }
-  };
+      } catch (e) {
+    console.error(e);
+  }
+};
+
+useEffect(() => {
+  if (token && receivedFcmToken) {
+    registerPushToken(receivedFcmToken);
+  }
+}, [token, receivedFcmToken]);
 
   // Poll for background notifications regularly when logged in
   useEffect(() => {
