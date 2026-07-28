@@ -4,6 +4,7 @@
  */
 
 import * as crypto from 'crypto';
+import { sendPushNotification } from './services/fcm';
 import { 
   Parent, Child, Absence, Grade, AppNotification, 
   ParentDevice, NotificationPreferences, ParentConsent, 
@@ -671,6 +672,7 @@ export class PostgresStore {
       WHERE parent_id = $1
       ORDER BY last_seen_at DESC
     `, [parentId]);
+    console.log("DEVICES FOUND :", rows);
 
     return rows.map((row) => ({
       id: String(row.id),
@@ -978,19 +980,47 @@ export async function triggerMultiChannelNotification(
     await store.updateNotificationDeliveryStatus(pushDelivery.id, { attempts: 1 });
 
     if (devices.length > 0) {
-      // Simulating FCM Cloud trigger
-      const hasAndroidDevice = devices.some(d => d.platform === 'android');
-      
-      // Let's mark as delivered!
-      await store.updateNotificationDeliveryStatus(pushDelivery.id, {
-        status: 'delivered',
-        providerMessageId: `fcm-msg-${crypto.randomUUID().slice(0, 8)}`,
-        sentAt: new Date().toISOString(),
-        deliveredAt: new Date().toISOString()
-      });
-      pushDelivered = true;
-      console.log(`[FCM PUSH] Delivered successfully to ${devices.length} registered devices.`);
-    } else {
+
+      let fcmSuccess = false;
+
+      for (const device of devices) {
+        try {
+          const messageId = await sendPushNotification(
+            device.token,
+            "ÉcoleTrack",
+            "Nouvelle notification concernant votre enfant"
+          );
+
+          await store.updateNotificationDeliveryStatus(pushDelivery.id, {
+            status: 'delivered',
+            providerMessageId: messageId,
+            sentAt: new Date().toISOString(),
+            deliveredAt: new Date().toISOString()
+          });
+
+          fcmSuccess = true;
+
+          console.log(
+            `[FCM PUSH] Delivered successfully to device ${device.id}`
+          );
+
+        } catch (error) {
+
+          console.error(
+            `[FCM PUSH] Failed for device ${device.id}`,
+            error
+          );
+
+          await store.updateNotificationDeliveryStatus(pushDelivery.id, {
+            status: 'failed',
+            errorCode: 'FCM_SEND_ERROR',
+            errorMessage: String(error)
+          });
+        }
+      }
+
+      pushDelivered = fcmSuccess;
+} else {
       // No devices registered, Push is "failed" due to no registered devices
       await store.updateNotificationDeliveryStatus(pushDelivery.id, {
         status: 'failed',

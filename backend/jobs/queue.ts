@@ -1,4 +1,5 @@
 import { Logger } from "../utils/logger";
+import { sendPushNotification } from "../services/fcm";
 
 const logger = new Logger("QueueProcessor");
 
@@ -132,14 +133,48 @@ export class QueueManager {
    * Logic execution based on job type
    */
   private static async executeJobLogic(job: QueueJob): Promise<void> {
-    // Simulate real networking/latency
-    await new Promise(resolve => setTimeout(resolve, 150));
+  await new Promise(resolve => setTimeout(resolve, 150));
 
-    // Force random mock failure on "test" jobs to demonstrate DLQ + retry mechanism
-    if (job.name === "test-failure-simulation") {
-      throw new Error("Network timeout: FCM Gateway failed to respond (Simulated Error).");
+  if (job.name.startsWith("send-notification-push")) {
+    const {
+      token,
+      title,
+      message
+    } = job.data;
+
+    if (!token) {
+      throw new Error("FCM token missing");
     }
+
+    await sendPushNotification(
+      token,
+      title,
+      message
+    );
+
+    logger.info("Push notification sent successfully", {
+      title
+    });
+
+    return;
   }
+
+  if (job.name.startsWith("send-notification-whatsapp")) {
+    logger.info("WhatsApp delivery placeholder");
+    return;
+  }
+
+  if (job.name.startsWith("send-notification-sms")) {
+    logger.info("SMS delivery placeholder");
+    return;
+  }
+
+  if (job.name === "test-failure-simulation") {
+    throw new Error(
+      "Network timeout: FCM Gateway failed to respond"
+    );
+  }
+}
 
   public static getDLQ(): QueueJob[] {
     return deadLetterQueue;

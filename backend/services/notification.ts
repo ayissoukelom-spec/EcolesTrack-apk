@@ -35,15 +35,30 @@ export class NotificationService {
     }
 
     // 3. Select Channels and Queue Jobs
+    const devices = await store.getDevicesOfParent(parentId);
+    logger.info("Devices found", { parentId, devices });
+ if (devices.length === 0 && isPushAuthorized) {
+  logger.warn(`No devices registered for parent: ${parentId}. Push skipped.`);
+}
     const channelsToDeliver: NotificationChannel[] = [];
-    if (isPushAuthorized) channelsToDeliver.push("push");
-    if (isWhatsappAuthorized) channelsToDeliver.push("whatsapp");
-    if (isSmsAuthorized) channelsToDeliver.push("sms");
+
+if (isPushAuthorized && devices.length > 0) {
+  channelsToDeliver.push("push");
+}
+
+if (isWhatsappAuthorized) {
+  channelsToDeliver.push("whatsapp");
+}
+
+if (isSmsAuthorized) {
+  channelsToDeliver.push("sms");
+}
 
     if (channelsToDeliver.length === 0) {
-      logger.warn(`No authorized notification channels for parent: ${parentId}. Fallback to in-app notification only.`);
-      channelsToDeliver.push("push"); // In-app / Push as fallback
-    }
+  logger.warn(
+    `No delivery channels available for parent: ${parentId}. In-app notification only.`
+  );
+}
 
     // Add delivery jobs to queue
     const jobsTriggered: string[] = [];
@@ -53,19 +68,20 @@ export class NotificationService {
       const jobDedupeKey = dedupeKey ? `${dedupeKey}-${channel}` : undefined;
 
       const jobId = QueueManager.addJob(jobName, {
-        parentId,
-        channel,
-        title,
-        message,
-        category,
-        metadata
-      }, {
-        priority,
-        dedupeKey: jobDedupeKey,
-        maxAttempts: 3
-      });
+  parentId,
+  channel,
+  title,
+  message,
+  category,
+  metadata,
+  token: channel === "push" ? devices[0]?.pushToken : undefined
+}, {
+  priority,
+  dedupeKey: jobDedupeKey,
+  maxAttempts: 3
+});
 
-      jobsTriggered.push(jobId);
+jobsTriggered.push(jobId);
     }
 
     // Also call existing store orchestrator to keep UI logs completely aligned and updated!

@@ -1,4 +1,5 @@
-import admin from "firebase-admin";
+import { initializeApp, cert } from "firebase-admin/app";
+import { getMessaging } from "firebase-admin/messaging";
 import fs from "fs";
 import path from "path";
 
@@ -8,23 +9,21 @@ const serviceAccountPath = path.join(
   "firebase-service-account.json"
 );
 
-if (!admin.apps.length) {
-  const serviceAccount = JSON.parse(
-    fs.readFileSync(serviceAccountPath, "utf8")
-  );
+const serviceAccount = JSON.parse(
+  fs.readFileSync(serviceAccountPath, "utf8")
+);
 
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
-  });
-}
+initializeApp({
+  credential: cert(serviceAccount),
+});
 
 export async function sendPushNotification(
   token: string,
   title: string,
   body: string
 ) {
-    console.log("[FCM TEST] Envoi vers token :", token);
-    
+  console.log("[FCM TEST] Envoi vers token :", token);
+
   const message = {
     token,
     notification: {
@@ -33,7 +32,7 @@ export async function sendPushNotification(
     },
   };
 
-  const response = await admin.messaging().send(message);
+  const response = await getMessaging().send(message);
 
   console.log("[FCM] Message envoyé :", response);
 
