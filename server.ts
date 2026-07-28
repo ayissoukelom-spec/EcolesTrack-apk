@@ -7,7 +7,7 @@ import express, { Request, Response, NextFunction } from "express";
 import path from "path";
 import crypto from "crypto";
 import { createServer as createViteServer } from "vite";
-import { store, triggerMultiChannelNotification } from "./backend/store";
+import { store } from "./backend/store";
 import { dbQuery } from "./backend/postgres";
 import { helmetHeaders, requestIdMiddleware, sanitizePayload } from "./backend/middlewares/security";
 import { Logger } from "./backend/utils/logger";
@@ -635,7 +635,7 @@ app.post("/api/dev/add-absence", async (req, res) => {
     const parentId = child.parentId;
     const dedupeKey = `absence-${child.id}-${Date.now()}`;
     const name = `${child.firstName} ${child.lastName}`;
-    triggerMultiChannelNotification(
+    await NotificationService.dispatchNotification(
       parentId,
       "Alerte Absence ÉcoleTrack",
       `Absence enregistrée pour ${name} le ${new Date(date).toLocaleDateString('fr-FR')}. Motif : ${reason}`,
@@ -672,7 +672,7 @@ app.post("/api/dev/add-grade", async (req, res) => {
     const parentId = child.parentId;
     const dedupeKey = `grade-${child.id}-${Date.now()}`;
     const name = `${child.firstName} ${child.lastName}`;
-    triggerMultiChannelNotification(
+    await NotificationService.dispatchNotification(
       parentId,
       "Nouvelle note disponible",
       `${name} a reçu un ${grade}/20 en ${subject} (${examName}).`,

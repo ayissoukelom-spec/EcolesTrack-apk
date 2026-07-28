@@ -888,3 +888,263 @@ export class PostgresStore {
 
 // Global store instance
 export const store = new PostgresStore();
+
+// ====================================================================
+// ORCHESTRATEUR DE NOTIFICATIONS MULTI-CANAUX (SIMULATION BULLMQ)
+// ====================================================================
+// This background worker processes notification events from our queue
+// and executes priorities, consent validation, and channel fallbacks.
+export async function triggerMultiChannelNotification(
+  parentId: string, 
+  title: string, 
+  message: string, 
+  eventType: 'absence' | 'grade' | 'general' | 'test',
+  payload: any,
+  dedupeKey: string
+) {
+  const appNotif = await store.addInAppNotification(parentId, title, message, payload.deepLink);
+
+  const event = await store.createNotificationEvent(parentId, eventType, payload, dedupeKey);
+  if (!event) {
+    return { status: 'deduplicated', reason: 'Deduplication key triggered' };
+  }
+
+  const prefs = await store.getNotificationPreferences(parentId);
+  const consents = await store.getConsentsOfParent(parentId);
+  const parentObj = await store.getParentById(parentId);
+
+  if (!parentObj) {
+    return { status: 'failed', reason: 'Parent not found' };
+  }
+
+  // Helper check: Is consent active for a channel?
+  const hasConsent = (channel: 'whatsapp' | 'sms') => {
+    const channelConsents = consents.filter(c => c.channel === channel);
+    if (channelConsents.length === 0) return false;
+    // Sorted by time, last active consent controls
+    const last = channelConsents[channelConsents.length - 1];
+    return last.consentGranted && !last.revokedAt;
+  };
+
+  // Helper check: Is quiet hours active?
+  const isQuietHours = () => {
+    const now = new Date();
+    const currentHours = now.getHours();
+    const currentMinutes = now.getMinutes();
+    const currentTimeInMinutes = currentHours * 60 + currentMinutes;
+
+    const parseTimeToMinutes = (timeStr: string) => {
+      const [h, m] = timeStr.split(':').map(Number);
+      return h * 60 + m;
+    };
+
+    const startMinutes = parseTimeToMinutes(prefs.quietHoursStart);
+    const endMinutes = parseTimeToMinutes(prefs.quietHoursEnd);
+
+    if (startMinutes > endMinutes) {
+      // Overnight e.g. 22:00 to 07:00
+      return currentTimeInMinutes >= startMinutes || currentTimeInMinutes <= endMinutes;
+    } else {
+      // Normal range e.g. 13:00 to 14:00
+      return currentTimeInMinutes >= startMinutes && currentTimeInMinutes <= endMinutes;
+    }
+  };
+
+  // 3. Initiate Notification Deliveries Queue Sequence
+  // Core logic:
+  // - Push is Priority 1.
+  // - Fallback to WhatsApp if Push is disabled or fails, and user gave WhatsApp consent.
+  // - Fallback to SMS if WhatsApp is disabled or fails, and user gave SMS consent.
+  // - If quiet hours is active, SMS and WhatsApp might be delayed/blocked, but we will process them as "failed (quiet hours)" or log it.
+
+  console.log(`[NOTIF ORCHESTRATOR] Processing notification for ${parentObj.name} (Event ID: ${event.id})`);
+
+  let pushDelivered = false;
+  let whatsappDelivered = false;
+  let smsDelivered = false;
+
+  // Track if quiet hours limits delivery
+  const isQuiet = isQuietHours();
+
+  // --- CHANNEL 1: PUSH (FCM) ---
+  const pushDelivery = await store.addNotificationDelivery({
+    eventId: event.id,
+    channel: 'push',
+    provider: 'fcm',
+    status: 'queued',
+    attempts: 0
+  });
+
+  if (prefs.pushEnabled) {
+    const devices = await store.getDevicesOfParent(parentId);
+    await store.updateNotificationDeliveryStatus(pushDelivery.id, { attempts: 1 });
+
+    if (devices.length > 0) {
+
+      let fcmSuccess = false;
+
+      for (const device of devices) {
+        try {
+          const messageId = await sendPushNotification(
+            device.token,
+            "ÉcoleTrack",
+            "Nouvelle notification concernant votre enfant"
+          );
+
+          await store.updateNotificationDeliveryStatus(pushDelivery.id, {
+            status: 'delivered',
+            providerMessageId: messageId,
+            sentAt: new Date().toISOString(),
+            deliveredAt: new Date().toISOString()
+          });
+
+          fcmSuccess = true;
+
+          console.log(
+            `[FCM PUSH] Delivered successfully to device ${device.id}`
+          );
+
+        } catch (error) {
+
+          console.error(
+            `[FCM PUSH] Failed for device ${device.id}`,
+            error
+          );
+
+          await store.updateNotificationDeliveryStatus(pushDelivery.id, {
+            status: 'failed',
+            errorCode: 'FCM_SEND_ERROR',
+            errorMessage: String(error)
+          });
+        }
+      }
+
+      pushDelivered = fcmSuccess;
+} else {
+      // No devices registered, Push is "failed" due to no registered devices
+      await store.updateNotificationDeliveryStatus(pushDelivery.id, {
+        status: 'failed',
+        errorCode: 'NO_DEVICES_REGISTERED',
+        errorMessage: 'Parent registered push but has no active session on device.'
+      });
+      console.log(`[FCM PUSH] Failed: No devices registered.`);
+    }
+  } else {
+    // Push is disabled by parent
+    await store.updateNotificationDeliveryStatus(pushDelivery.id, {
+      status: 'failed',
+      errorCode: 'PUSH_DISABLED',
+      errorMessage: 'Push notifications are disabled in parent preferences.'
+    });
+    console.log(`[FCM PUSH] Skipped: push is disabled by user.`);
+  }
+
+  // --- CHANNEL 2: FALLBACK TO WHATSAPP ---
+  // Triggered only if Push was not delivered and WhatsApp is preferred/enabled
+  if (!pushDelivered) {
+    const waDelivery = await store.addNotificationDelivery({
+      eventId: event.id,
+      channel: 'whatsapp',
+      provider: 'whatsapp_cloud_api',
+      status: 'queued',
+      attempts: 0
+    });
+
+    if (prefs.whatsappEnabled) {
+      await store.updateNotificationDeliveryStatus(waDelivery.id, { attempts: 1 });
+      
+      if (!hasConsent('whatsapp')) {
+        await store.updateNotificationDeliveryStatus(waDelivery.id, {
+          status: 'failed',
+          errorCode: 'CONSENT_MISSING',
+          errorMessage: 'WhatsApp consent not given or explicitly revoked.'
+        });
+        console.log(`[WHATSAPP] Failed: No active consent recorded.`);
+      } else if (isQuiet) {
+        await store.updateNotificationDeliveryStatus(waDelivery.id, {
+          status: 'failed',
+          errorCode: 'QUIET_HOURS_BLOCKED',
+          errorMessage: `Delivery blocked by Quiet Hours (${prefs.quietHoursStart} - ${prefs.quietHoursEnd}).`
+        });
+        console.log(`[WHATSAPP] Blocked: Quiet hours active.`);
+      } else {
+        // Successful simulation of WhatsApp Cloud Template API
+        await store.updateNotificationDeliveryStatus(waDelivery.id, {
+          status: 'delivered',
+          providerMessageId: `wa-msg-${crypto.randomUUID().slice(0, 8)}`,
+          sentAt: new Date().toISOString(),
+          deliveredAt: new Date().toISOString()
+        });
+        whatsappDelivered = true;
+        console.log(`[WHATSAPP] Template message delivered to ${parentObj.phoneNumber}.`);
+      }
+    } else {
+      await store.updateNotificationDeliveryStatus(waDelivery.id, {
+        status: 'failed',
+        errorCode: 'CHANNEL_DISABLED',
+        errorMessage: 'WhatsApp notifications are disabled in parent preferences.'
+      });
+      console.log(`[WHATSAPP] Skipped: Channel disabled.`);
+    }
+  }
+
+  // --- CHANNEL 3: FALLBACK TO SMS ---
+  // Triggered only if both Push AND WhatsApp failed to deliver, and SMS is preferred/enabled
+  if (!pushDelivered && !whatsappDelivered) {
+    const smsDelivery = await store.addNotificationDelivery({
+      eventId: event.id,
+      channel: 'sms',
+      provider: 'twilio_sms',
+      status: 'queued',
+      attempts: 0
+    });
+
+    if (prefs.smsEnabled) {
+      await store.updateNotificationDeliveryStatus(smsDelivery.id, { attempts: 1 });
+      
+      if (!hasConsent('sms')) {
+        await store.updateNotificationDeliveryStatus(smsDelivery.id, {
+          status: 'failed',
+          errorCode: 'CONSENT_MISSING',
+          errorMessage: 'SMS consent not given or explicitly revoked.'
+        });
+        console.log(`[SMS] Failed: No active consent recorded.`);
+      } else if (isQuiet) {
+        await store.updateNotificationDeliveryStatus(smsDelivery.id, {
+          status: 'failed',
+          errorCode: 'QUIET_HOURS_BLOCKED',
+          errorMessage: `Delivery blocked by Quiet Hours (${prefs.quietHoursStart} - ${prefs.quietHoursEnd}).`
+        });
+        console.log(`[SMS] Blocked: Quiet hours active.`);
+      } else {
+        // Successful simulation of SMS Gateway
+        await store.updateNotificationDeliveryStatus(smsDelivery.id, {
+          status: 'delivered',
+          providerMessageId: `sms-msg-${crypto.randomUUID().slice(0, 8)}`,
+          sentAt: new Date().toISOString(),
+          deliveredAt: new Date().toISOString()
+        });
+        smsDelivered = true;
+        console.log(`[SMS] Delivered SMS to ${parentObj.phoneNumber}.`);
+      }
+    } else {
+      await store.updateNotificationDeliveryStatus(smsDelivery.id, {
+        status: 'failed',
+        errorCode: 'CHANNEL_DISABLED',
+        errorMessage: 'SMS notifications are disabled in parent preferences.'
+      });
+      console.log(`[SMS] Skipped: Channel disabled.`);
+    }
+  }
+
+  return {
+    status: 'processed',
+    appNotificationId: appNotif.id,
+    eventId: event.id,
+    deliverySummary: {
+      push: pushDelivered ? 'delivered' : 'skipped_or_failed',
+      whatsapp: whatsappDelivered ? 'delivered' : 'skipped_or_failed',
+      sms: smsDelivered ? 'delivered' : 'skipped_or_failed'
+    }
+  };
+}

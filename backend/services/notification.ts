@@ -1,4 +1,4 @@
-import { store, triggerMultiChannelNotification } from "../store";
+import { store } from "../store";
 import { QueueManager } from "../jobs/queue";
 import { Logger } from "../utils/logger";
 import { NotificationChannel } from "../../src/types";
@@ -84,22 +84,11 @@ if (isSmsAuthorized) {
 jobsTriggered.push(jobId);
     }
 
-    // Also call existing store orchestrator to keep UI logs completely aligned and updated!
-    const legacyResult = await triggerMultiChannelNotification(
-      parentId,
-      title,
-      message,
-      category,
-      metadata,
-      dedupeKey
-    );
-
     return {
-      success: true,
-      channels: channelsToDeliver,
-      jobs: jobsTriggered,
-      legacyResult
-    };
+  success: true,
+  channels: channelsToDeliver,
+  jobs: jobsTriggered
+};
   }
 
   /**
