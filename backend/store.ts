@@ -642,12 +642,17 @@ export class PostgresStore {
     };
   }
 
-  public async registerPushToken(parentId: string, token: string, platform: 'android' | 'ios', appVersion: string): Promise<ParentDevice> {
-    const { rows } = await dbQuery<{ id: number }>(`
-      INSERT INTO mobile_parent_devices (parent_id, platform, push_token, app_version, last_seen_at)
-      VALUES ($1, $2, $3, $4, NOW())
-      RETURNING id
-    `, [parentId, platform, token, appVersion]);
+  public async registerPushToken(parentId, token, platform, appVersion) {
+  const { rows } = await dbQuery(`
+    INSERT INTO mobile_parent_devices 
+      (parent_id, platform, push_token, app_version, last_seen_at)
+    VALUES ($1, $2, $3, $4, NOW())
+    ON CONFLICT (parent_id, platform, push_token)
+    DO UPDATE SET
+      app_version = EXCLUDED.app_version,
+      last_seen_at = NOW()
+    RETURNING id
+  `, [parentId, platform, token, appVersion]);
 
     return {
       id: String(rows[0]?.id ?? 0),

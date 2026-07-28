@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "294824907998",
+    "project_id": "ecoles-track-notification",
+    "storage_bucket": "ecoles-track-notification.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:294824907998:android:dc4d248a972c81e7bf5e4f",
+        "android_client_info": {
+          "package_name": "com.ecoletrack.webview"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDc1kb9e_OU7aHZtpX6Txm1iv6n3OIsqtc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

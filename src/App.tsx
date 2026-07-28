@@ -62,6 +62,8 @@ export default function App() {
     if (!token) return;
 
     try {
+      console.log("[FCM] URL register:", withApiBase("/api/mobile/parent/devices/register-push-token"));
+    console.log("[FCM] token length:", pushToken.length);
       const response = await fetch(
         withApiBase("/api/mobile/parent/devices/register-push-token"),
         {

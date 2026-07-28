@@ -461,6 +461,8 @@ app.put("/api/mobile/parent/notifications/:id/read", requireAuth, requireParentR
 
 // 9. POST /api/mobile/parent/devices/register-push-token
 app.post("/api/mobile/parent/devices/register-push-token", requireAuth, requireParentRoleOnly, async (req: AuthenticatedRequest, res) => {
+   console.log("========== REGISTER PUSH TOKEN ==========");
+  console.log("Body reçu :", req.body);
   const parentId = req.parent!.id;
   const validation = RegisterPushTokenSchema.safeParse(req.body);
   
@@ -474,13 +476,34 @@ app.post("/api/mobile/parent/devices/register-push-token", requireAuth, requireP
   }
 
   const { pushToken, platform, appVersion } = validation.data;
-  const device = await store.registerPushToken(parentId, pushToken, platform, appVersion);
-  
-  logger.audit("REGISTER_PUSH_TOKEN", parentId, { platform, appVersion }, "SUCCESS");
-  return res.json({
-    success: true,
-    message: "Token de notification enregistré.",
-    device
+
+console.log("PUSH TOKEN RECU :", {
+  parentId,
+  pushToken,
+  platform,
+  appVersion
+});
+
+const device = await store.registerPushToken(
+  parentId,
+  pushToken,
+  platform,
+  appVersion
+);
+
+console.log("DEVICE ENREGISTRE :", device);
+
+logger.audit(
+  "REGISTER_PUSH_TOKEN",
+  parentId,
+  { platform, appVersion },
+  "SUCCESS"
+);
+
+return res.json({
+  success: true,
+  message: "Token de notification enregistré.",
+  device
   });
 });
 
