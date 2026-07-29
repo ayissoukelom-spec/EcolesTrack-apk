@@ -23,7 +23,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 
 // server.ts
 var import_express = __toESM(require("express"), 1);
-var import_path2 = __toESM(require("path"), 1);
+var import_path3 = __toESM(require("path"), 1);
 var import_vite = require("vite");
 
 // backend/store.ts
@@ -505,10 +505,15 @@ var PostgresStore = class {
   }
   async registerPushToken(parentId, token, platform, appVersion) {
     const { rows } = await dbQuery(`
-      INSERT INTO mobile_parent_devices (parent_id, platform, push_token, app_version, last_seen_at)
-      VALUES ($1, $2, $3, $4, NOW())
-      RETURNING id
-    `, [parentId, platform, token, appVersion]);
+    INSERT INTO mobile_parent_devices 
+      (parent_id, platform, push_token, app_version, last_seen_at)
+    VALUES ($1, $2, $3, $4, NOW())
+    ON CONFLICT (parent_id, platform, push_token)
+    DO UPDATE SET
+      app_version = EXCLUDED.app_version,
+      last_seen_at = NOW()
+    RETURNING id
+  `, [parentId, platform, token, appVersion]);
     return {
       id: String(rows[0]?.id ?? 0),
       parentId,
@@ -525,6 +530,7 @@ var PostgresStore = class {
       WHERE parent_id = $1
       ORDER BY last_seen_at DESC
     `, [parentId]);
+    console.log("DEVICES FOUND :", rows);
     return rows.map((row) => ({
       id: String(row.id),
       parentId,
@@ -712,179 +718,6 @@ var PostgresStore = class {
   }
 };
 var store = new PostgresStore();
-async function triggerMultiChannelNotification(parentId, title, message, eventType, payload, dedupeKey) {
-  const appNotif = await store.addInAppNotification(parentId, title, message, payload.deepLink);
-  const event = await store.createNotificationEvent(parentId, eventType, payload, dedupeKey);
-  if (!event) {
-    return { status: "deduplicated", reason: "Deduplication key triggered" };
-  }
-  const prefs = await store.getNotificationPreferences(parentId);
-  const consents = await store.getConsentsOfParent(parentId);
-  const parentObj = await store.getParentById(parentId);
-  if (!parentObj) {
-    return { status: "failed", reason: "Parent not found" };
-  }
-  const hasConsent = (channel) => {
-    const channelConsents = consents.filter((c) => c.channel === channel);
-    if (channelConsents.length === 0) return false;
-    const last = channelConsents[channelConsents.length - 1];
-    return last.consentGranted && !last.revokedAt;
-  };
-  const isQuietHours = () => {
-    const now = /* @__PURE__ */ new Date();
-    const currentHours = now.getHours();
-    const currentMinutes = now.getMinutes();
-    const currentTimeInMinutes = currentHours * 60 + currentMinutes;
-    const parseTimeToMinutes = (timeStr) => {
-      const [h, m] = timeStr.split(":").map(Number);
-      return h * 60 + m;
-    };
-    const startMinutes = parseTimeToMinutes(prefs.quietHoursStart);
-    const endMinutes = parseTimeToMinutes(prefs.quietHoursEnd);
-    if (startMinutes > endMinutes) {
-      return currentTimeInMinutes >= startMinutes || currentTimeInMinutes <= endMinutes;
-    } else {
-      return currentTimeInMinutes >= startMinutes && currentTimeInMinutes <= endMinutes;
-    }
-  };
-  console.log(`[NOTIF ORCHESTRATOR] Processing notification for ${parentObj.name} (Event ID: ${event.id})`);
-  let pushDelivered = false;
-  let whatsappDelivered = false;
-  let smsDelivered = false;
-  const isQuiet = isQuietHours();
-  const pushDelivery = await store.addNotificationDelivery({
-    eventId: event.id,
-    channel: "push",
-    provider: "fcm",
-    status: "queued",
-    attempts: 0
-  });
-  if (prefs.pushEnabled) {
-    const devices = await store.getDevicesOfParent(parentId);
-    await store.updateNotificationDeliveryStatus(pushDelivery.id, { attempts: 1 });
-    if (devices.length > 0) {
-      const hasAndroidDevice = devices.some((d) => d.platform === "android");
-      await store.updateNotificationDeliveryStatus(pushDelivery.id, {
-        status: "delivered",
-        providerMessageId: `fcm-msg-${crypto.randomUUID().slice(0, 8)}`,
-        sentAt: (/* @__PURE__ */ new Date()).toISOString(),
-        deliveredAt: (/* @__PURE__ */ new Date()).toISOString()
-      });
-      pushDelivered = true;
-      console.log(`[FCM PUSH] Delivered successfully to ${devices.length} registered devices.`);
-    } else {
-      await store.updateNotificationDeliveryStatus(pushDelivery.id, {
-        status: "failed",
-        errorCode: "NO_DEVICES_REGISTERED",
-        errorMessage: "Parent registered push but has no active session on device."
-      });
-      console.log(`[FCM PUSH] Failed: No devices registered.`);
-    }
-  } else {
-    await store.updateNotificationDeliveryStatus(pushDelivery.id, {
-      status: "failed",
-      errorCode: "PUSH_DISABLED",
-      errorMessage: "Push notifications are disabled in parent preferences."
-    });
-    console.log(`[FCM PUSH] Skipped: push is disabled by user.`);
-  }
-  if (!pushDelivered) {
-    const waDelivery = await store.addNotificationDelivery({
-      eventId: event.id,
-      channel: "whatsapp",
-      provider: "whatsapp_cloud_api",
-      status: "queued",
-      attempts: 0
-    });
-    if (prefs.whatsappEnabled) {
-      await store.updateNotificationDeliveryStatus(waDelivery.id, { attempts: 1 });
-      if (!hasConsent("whatsapp")) {
-        await store.updateNotificationDeliveryStatus(waDelivery.id, {
-          status: "failed",
-          errorCode: "CONSENT_MISSING",
-          errorMessage: "WhatsApp consent not given or explicitly revoked."
-        });
-        console.log(`[WHATSAPP] Failed: No active consent recorded.`);
-      } else if (isQuiet) {
-        await store.updateNotificationDeliveryStatus(waDelivery.id, {
-          status: "failed",
-          errorCode: "QUIET_HOURS_BLOCKED",
-          errorMessage: `Delivery blocked by Quiet Hours (${prefs.quietHoursStart} - ${prefs.quietHoursEnd}).`
-        });
-        console.log(`[WHATSAPP] Blocked: Quiet hours active.`);
-      } else {
-        await store.updateNotificationDeliveryStatus(waDelivery.id, {
-          status: "delivered",
-          providerMessageId: `wa-msg-${crypto.randomUUID().slice(0, 8)}`,
-          sentAt: (/* @__PURE__ */ new Date()).toISOString(),
-          deliveredAt: (/* @__PURE__ */ new Date()).toISOString()
-        });
-        whatsappDelivered = true;
-        console.log(`[WHATSAPP] Template message delivered to ${parentObj.phoneNumber}.`);
-      }
-    } else {
-      await store.updateNotificationDeliveryStatus(waDelivery.id, {
-        status: "failed",
-        errorCode: "CHANNEL_DISABLED",
-        errorMessage: "WhatsApp notifications are disabled in parent preferences."
-      });
-      console.log(`[WHATSAPP] Skipped: Channel disabled.`);
-    }
-  }
-  if (!pushDelivered && !whatsappDelivered) {
-    const smsDelivery = await store.addNotificationDelivery({
-      eventId: event.id,
-      channel: "sms",
-      provider: "twilio_sms",
-      status: "queued",
-      attempts: 0
-    });
-    if (prefs.smsEnabled) {
-      await store.updateNotificationDeliveryStatus(smsDelivery.id, { attempts: 1 });
-      if (!hasConsent("sms")) {
-        await store.updateNotificationDeliveryStatus(smsDelivery.id, {
-          status: "failed",
-          errorCode: "CONSENT_MISSING",
-          errorMessage: "SMS consent not given or explicitly revoked."
-        });
-        console.log(`[SMS] Failed: No active consent recorded.`);
-      } else if (isQuiet) {
-        await store.updateNotificationDeliveryStatus(smsDelivery.id, {
-          status: "failed",
-          errorCode: "QUIET_HOURS_BLOCKED",
-          errorMessage: `Delivery blocked by Quiet Hours (${prefs.quietHoursStart} - ${prefs.quietHoursEnd}).`
-        });
-        console.log(`[SMS] Blocked: Quiet hours active.`);
-      } else {
-        await store.updateNotificationDeliveryStatus(smsDelivery.id, {
-          status: "delivered",
-          providerMessageId: `sms-msg-${crypto.randomUUID().slice(0, 8)}`,
-          sentAt: (/* @__PURE__ */ new Date()).toISOString(),
-          deliveredAt: (/* @__PURE__ */ new Date()).toISOString()
-        });
-        smsDelivered = true;
-        console.log(`[SMS] Delivered SMS to ${parentObj.phoneNumber}.`);
-      }
-    } else {
-      await store.updateNotificationDeliveryStatus(smsDelivery.id, {
-        status: "failed",
-        errorCode: "CHANNEL_DISABLED",
-        errorMessage: "SMS notifications are disabled in parent preferences."
-      });
-      console.log(`[SMS] Skipped: Channel disabled.`);
-    }
-  }
-  return {
-    status: "processed",
-    appNotificationId: appNotif.id,
-    eventId: event.id,
-    deliverySummary: {
-      push: pushDelivered ? "delivered" : "skipped_or_failed",
-      whatsapp: whatsappDelivered ? "delivered" : "skipped_or_failed",
-      sms: smsDelivered ? "delivered" : "skipped_or_failed"
-    }
-  };
-}
 
 // backend/middlewares/security.ts
 var logger2 = new Logger("SecurityMiddleware");
@@ -1029,6 +862,36 @@ var AuthService = class {
   }
 };
 
+// backend/services/fcm.ts
+var import_app = require("firebase-admin/app");
+var import_messaging = require("firebase-admin/messaging");
+var import_fs2 = __toESM(require("fs"), 1);
+var import_path2 = __toESM(require("path"), 1);
+var serviceAccountPath = import_path2.default.join(
+  process.cwd(),
+  "config",
+  "firebase-service-account.json"
+);
+var serviceAccount = JSON.parse(
+  import_fs2.default.readFileSync(serviceAccountPath, "utf8")
+);
+(0, import_app.initializeApp)({
+  credential: (0, import_app.cert)(serviceAccount)
+});
+async function sendPushNotification(token, title, body) {
+  console.log("[FCM TEST] Envoi vers token :", token);
+  const message = {
+    token,
+    notification: {
+      title,
+      body
+    }
+  };
+  const response = await (0, import_messaging.getMessaging)().send(message);
+  console.log("[FCM] Message envoy\xE9 :", response);
+  return response;
+}
+
 // backend/jobs/queue.ts
 var logger4 = new Logger("QueueProcessor");
 var activeQueue = [];
@@ -1115,8 +978,37 @@ var QueueManager = class {
    */
   static async executeJobLogic(job) {
     await new Promise((resolve) => setTimeout(resolve, 150));
+    if (job.name.startsWith("send-notification-push")) {
+      const {
+        token,
+        title,
+        message
+      } = job.data;
+      if (!token) {
+        throw new Error("FCM token missing");
+      }
+      await sendPushNotification(
+        token,
+        title,
+        message
+      );
+      logger4.info("Push notification sent successfully", {
+        title
+      });
+      return;
+    }
+    if (job.name.startsWith("send-notification-whatsapp")) {
+      logger4.info("WhatsApp delivery placeholder");
+      return;
+    }
+    if (job.name.startsWith("send-notification-sms")) {
+      logger4.info("SMS delivery placeholder");
+      return;
+    }
     if (job.name === "test-failure-simulation") {
-      throw new Error("Network timeout: FCM Gateway failed to respond (Simulated Error).");
+      throw new Error(
+        "Network timeout: FCM Gateway failed to respond"
+      );
     }
   }
   static getDLQ() {
@@ -1144,13 +1036,25 @@ var NotificationService = class {
       logger5.info(`Quiet Hours active for parent ${parentId}. Scheduling notification with lower priority or buffering.`);
       metadata.quietHoursApplied = true;
     }
+    const devices = await store.getDevicesOfParent(parentId);
+    logger5.info("Devices found", { parentId, devices });
+    if (devices.length === 0 && isPushAuthorized) {
+      logger5.warn(`No devices registered for parent: ${parentId}. Push skipped.`);
+    }
     const channelsToDeliver = [];
-    if (isPushAuthorized) channelsToDeliver.push("push");
-    if (isWhatsappAuthorized) channelsToDeliver.push("whatsapp");
-    if (isSmsAuthorized) channelsToDeliver.push("sms");
-    if (channelsToDeliver.length === 0) {
-      logger5.warn(`No authorized notification channels for parent: ${parentId}. Fallback to in-app notification only.`);
+    if (isPushAuthorized && devices.length > 0) {
       channelsToDeliver.push("push");
+    }
+    if (isWhatsappAuthorized) {
+      channelsToDeliver.push("whatsapp");
+    }
+    if (isSmsAuthorized) {
+      channelsToDeliver.push("sms");
+    }
+    if (channelsToDeliver.length === 0) {
+      logger5.warn(
+        `No delivery channels available for parent: ${parentId}. In-app notification only.`
+      );
     }
     const jobsTriggered = [];
     for (const channel of channelsToDeliver) {
@@ -1163,7 +1067,8 @@ var NotificationService = class {
         title,
         message,
         category,
-        metadata
+        metadata,
+        token: channel === "push" ? devices[0]?.pushToken : void 0
       }, {
         priority,
         dedupeKey: jobDedupeKey,
@@ -1171,19 +1076,10 @@ var NotificationService = class {
       });
       jobsTriggered.push(jobId);
     }
-    const legacyResult = await triggerMultiChannelNotification(
-      parentId,
-      title,
-      message,
-      category,
-      metadata,
-      dedupeKey
-    );
     return {
       success: true,
       channels: channelsToDeliver,
-      jobs: jobsTriggered,
-      legacyResult
+      jobs: jobsTriggered
     };
   }
   /**
@@ -1571,6 +1467,8 @@ app.put("/api/mobile/parent/notifications/:id/read", requireAuth, requireParentR
   return res.json({ success: true, message: "Notification marqu\xE9e comme lue." });
 });
 app.post("/api/mobile/parent/devices/register-push-token", requireAuth, requireParentRoleOnly, async (req, res) => {
+  console.log("========== REGISTER PUSH TOKEN ==========");
+  console.log("Body re\xE7u :", req.body);
   const parentId = req.parent.id;
   const validation = RegisterPushTokenSchema.safeParse(req.body);
   if (!validation.success) {
@@ -1582,8 +1480,25 @@ app.post("/api/mobile/parent/devices/register-push-token", requireAuth, requireP
     });
   }
   const { pushToken, platform, appVersion } = validation.data;
-  const device = await store.registerPushToken(parentId, pushToken, platform, appVersion);
-  logger6.audit("REGISTER_PUSH_TOKEN", parentId, { platform, appVersion }, "SUCCESS");
+  console.log("PUSH TOKEN RECU :", {
+    parentId,
+    pushToken,
+    platform,
+    appVersion
+  });
+  const device = await store.registerPushToken(
+    parentId,
+    pushToken,
+    platform,
+    appVersion
+  );
+  console.log("DEVICE ENREGISTRE :", device);
+  logger6.audit(
+    "REGISTER_PUSH_TOKEN",
+    parentId,
+    { platform, appVersion },
+    "SUCCESS"
+  );
   return res.json({
     success: true,
     message: "Token de notification enregistr\xE9.",
@@ -1692,7 +1607,7 @@ app.post("/api/dev/add-absence", async (req, res) => {
     const parentId = child.parentId;
     const dedupeKey = `absence-${child.id}-${Date.now()}`;
     const name = `${child.firstName} ${child.lastName}`;
-    triggerMultiChannelNotification(
+    await NotificationService.dispatchNotification(
       parentId,
       "Alerte Absence \xC9coleTrack",
       `Absence enregistr\xE9e pour ${name} le ${new Date(date).toLocaleDateString("fr-FR")}. Motif : ${reason}`,
@@ -1723,7 +1638,7 @@ app.post("/api/dev/add-grade", async (req, res) => {
     const parentId = child.parentId;
     const dedupeKey = `grade-${child.id}-${Date.now()}`;
     const name = `${child.firstName} ${child.lastName}`;
-    triggerMultiChannelNotification(
+    await NotificationService.dispatchNotification(
       parentId,
       "Nouvelle note disponible",
       `${name} a re\xE7u un ${grade}/20 en ${subject} (${examName}).`,
@@ -1742,6 +1657,40 @@ app.post("/api/dev/clear-logs", (req, res) => {
   store.clearAllLogs();
   return res.json({ success: true });
 });
+app.post("/api/internal/absence-notification", async (req, res) => {
+  try {
+    const {
+      parentId,
+      title,
+      message,
+      category = "absence",
+      metadata = {},
+      dedupeKey
+    } = req.body;
+    if (!parentId || !title || !message) {
+      return res.status(400).json({
+        error: "Missing notification parameters"
+      });
+    }
+    const result = await NotificationService.dispatchNotification(
+      String(parentId),
+      title,
+      message,
+      category,
+      metadata,
+      dedupeKey
+    );
+    return res.json({
+      success: true,
+      result
+    });
+  } catch (err) {
+    logger6.error("Internal absence notification failed", err);
+    return res.status(500).json({
+      error: "Notification dispatch failed"
+    });
+  }
+});
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     const vite = await (0, import_vite.createServer)({
@@ -1750,10 +1699,10 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = import_path2.default.join(process.cwd(), "dist");
+    const distPath = import_path3.default.join(process.cwd(), "dist");
     app.use(import_express.default.static(distPath));
     app.get("*", (req, res) => {
-      res.sendFile(import_path2.default.join(distPath, "index.html"));
+      res.sendFile(import_path3.default.join(distPath, "index.html"));
     });
   }
   app.listen(PORT, "0.0.0.0", () => {

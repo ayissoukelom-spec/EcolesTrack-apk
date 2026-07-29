@@ -1,0 +1,17 @@
+{
+  "name": "ecoletrack-mobile",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "android": "cd android && gradlew.bat assembleDebug"
+  },
+  "dependencies": {
+    "react": "19.2.3",
+    "react-native": "0.86.2",
+    "@react-native-firebase/app": "^25.1.0",
+    "@react-native-firebase/messaging": "^25.1.0"
+  },
+  "devDependencies": {
+    "@react-native-community/cli": "latest"
+  }
+}

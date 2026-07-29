@@ -70,7 +70,7 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
 
         NotificationCompat.Builder builder =
                 new NotificationCompat.Builder(this, CHANNEL_ID)
-                        .setSmallIcon(android.R.drawable.ic_dialog_info)
+                        .setSmallIcon(com.ecoletrack.webview.R.drawable.ic_notification)
                         .setContentTitle(title)
                         .setContentText(message)
                         .setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -78,6 +78,12 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
                         .setContentIntent(pendingIntent);
 
 
-        manager.notify(1001, builder.build());
+    manager.notify(1001, builder.build());
+    }
+    @Override
+    public void onNewToken(String token) {
+         super.onNewToken(token);
+
+         System.out.println("TOKEN FCM : " + token);
     }
 }

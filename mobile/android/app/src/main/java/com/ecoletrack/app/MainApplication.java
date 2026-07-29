@@ -1,6 +1,7 @@
 package com.ecoletrack.app;
 
 import android.app.Application;
+import com.google.firebase.FirebaseApp;
 import com.facebook.react.PackageList;
 import com.facebook.react.ReactApplication;
 import com.facebook.react.ReactNativeHost;
@@ -53,6 +54,7 @@ public class MainApplication extends Application implements ReactApplication {
   public void onCreate() {
     super.onCreate();
     SoLoader.init(this, OpenSourceMergedSoMapping.class);
+    FirebaseApp.initializeApp(this);
     if (BuildConfig.IS_NEW_ARCHITECTURE_ENABLED) {
       // If you opted-in to the New Architecture, we load the native entry point class.
       DefaultNewArchitectureEntryPoint.load();
