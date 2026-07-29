@@ -22,7 +22,7 @@ export async function sendPushNotification(
   title: string,
   body: string
 ) {
-  console.log("[FCM TEST] Envoi vers token :", token);
+  console.log("[FCM] Token :", token);
 
   const message = {
     token,
@@ -32,9 +32,14 @@ export async function sendPushNotification(
     },
   };
 
-  const response = await getMessaging().send(message);
+  try {
+    const response = await getMessaging().send(message);
 
-  console.log("[FCM] Message envoyé :", response);
+    console.log("[FCM] Succès :", response);
 
-  return response;
+    return response;
+  } catch (error) {
+    console.error("[FCM] Erreur :", error);
+    throw error;
+  }
 }

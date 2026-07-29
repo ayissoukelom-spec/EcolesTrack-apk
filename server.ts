@@ -667,11 +667,26 @@ app.post("/api/dev/add-grade", async (req, res) => {
   const children = await store.getChildrenOfParent("parent-jean-dupont");
   const backupChildren = await store.getChildrenOfParent("parent-marie-martin");
   const child = children.find(c => c.id === childId) || backupChildren.find(c => c.id === childId);
-  
-  if (child) {
+
+console.log("GRADE SEARCH DEBUG", {
+  childId,
+  childrenFound: children.length,
+  backupChildrenFound: backupChildren.length,
+  childFound: !!child
+});
+
+if (child) {
     const parentId = child.parentId;
     const dedupeKey = `grade-${child.id}-${Date.now()}`;
+    const isModification = false;
     const name = `${child.firstName} ${child.lastName}`;
+
+    console.log("GRADE CHILD FOUND", {
+      childId,
+      parentId,
+      childName: name
+    });
+
     await NotificationService.dispatchNotification(
       parentId,
       "Nouvelle note disponible",
@@ -680,7 +695,7 @@ app.post("/api/dev/add-grade", async (req, res) => {
       { childId, childName: name, subject, grade, examName },
       dedupeKey
     );
-  }
+}
 
   return res.json({ success: true, grade: gradeObj });
 });
@@ -733,6 +748,46 @@ app.post("/api/internal/absence-notification", async (req: Request, res: Respons
 
   } catch (err: any) {
     logger.error("Internal absence notification failed", err);
+
+    return res.status(500).json({
+      error: "Notification dispatch failed"
+    });
+  }
+});
+
+app.post("/api/internal/grade-notification", async (req: Request, res: Response) => {
+  try {
+    const {
+      parentId,
+      title,
+      message,
+      category = "grade",
+      metadata = {},
+      dedupeKey
+    } = req.body;
+
+    if (!parentId || !title || !message) {
+      return res.status(400).json({
+        error: "Missing notification parameters"
+      });
+    }
+
+    const result = await NotificationService.dispatchNotification(
+      String(parentId),
+      title,
+      message,
+      category,
+      metadata,
+      dedupeKey
+    );
+
+    return res.json({
+      success: true,
+      result
+    });
+
+  } catch (err: any) {
+    logger.error("Internal grade notification failed", err);
 
     return res.status(500).json({
       error: "Notification dispatch failed"
