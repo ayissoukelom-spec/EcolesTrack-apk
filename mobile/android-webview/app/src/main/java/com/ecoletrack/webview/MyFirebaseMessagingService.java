@@ -5,6 +5,7 @@ import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.Intent;
 import android.os.Build;
+import android.graphics.BitmapFactory;
 
 import androidx.core.app.NotificationCompat;
 
@@ -71,6 +72,7 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
         NotificationCompat.Builder builder =
                 new NotificationCompat.Builder(this, CHANNEL_ID)
                         .setSmallIcon(com.ecoletrack.webview.R.drawable.ic_notification)
+                        .setLargeIcon(BitmapFactory.decodeResource(getResources(), R.drawable.ic_launcher))
                         .setContentTitle(title)
                         .setContentText(message)
                         .setPriority(NotificationCompat.PRIORITY_HIGH)
