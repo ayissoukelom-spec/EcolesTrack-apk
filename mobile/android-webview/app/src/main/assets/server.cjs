@@ -362,6 +362,28 @@ var PostgresStore = class {
       justificationText: row.justification_reason ?? void 0
     }));
   }
+  async justifyAbsence(absenceId, parentId, justificationReason) {
+    const { rows } = await dbQuery(`
+      UPDATE absences AS a
+      SET justified = true,
+          justification_text = $1
+      FROM children AS c
+      WHERE a.id = $2
+        AND a.child_id = c.id
+        AND c.parent_id = $3
+      RETURNING a.id, a.child_id, a.date, a.reason, a.justified, a.justification_text
+    `, [justificationReason, absenceId, parentId]);
+    if (rows.length === 0) return null;
+    const row = rows[0];
+    return {
+      id: String(row.id),
+      childId: String(row.child_id),
+      date: row.date,
+      reason: row.reason,
+      justified: row.justified,
+      justificationText: row.justification_text ?? void 0
+    };
+  }
   async addGrade(grade) {
     const childIdNum = Number(grade.childId);
     if (!Number.isInteger(childIdNum)) {
@@ -505,15 +527,15 @@ var PostgresStore = class {
   }
   async registerPushToken(parentId, token, platform, appVersion) {
     const { rows } = await dbQuery(`
-    INSERT INTO mobile_parent_devices 
-      (parent_id, platform, push_token, app_version, last_seen_at)
-    VALUES ($1, $2, $3, $4, NOW())
-    ON CONFLICT (parent_id, platform, push_token)
-    DO UPDATE SET
-      app_version = EXCLUDED.app_version,
-      last_seen_at = NOW()
-    RETURNING id
-  `, [parentId, platform, token, appVersion]);
+      INSERT INTO mobile_parent_devices 
+        (parent_id, platform, push_token, app_version, last_seen_at)
+      VALUES ($1, $2, $3, $4, NOW())
+      ON CONFLICT (parent_id, platform, push_token)
+      DO UPDATE SET
+        app_version = EXCLUDED.app_version,
+        last_seen_at = NOW()
+      RETURNING id
+    `, [parentId, platform, token, appVersion]);
     return {
       id: String(rows[0]?.id ?? 0),
       parentId,
@@ -879,7 +901,7 @@ var serviceAccount = JSON.parse(
   credential: (0, import_app.cert)(serviceAccount)
 });
 async function sendPushNotification(token, title, body) {
-  console.log("[FCM TEST] Envoi vers token :", token);
+  console.log("[FCM] Token :", token);
   const message = {
     token,
     notification: {
@@ -887,9 +909,14 @@ async function sendPushNotification(token, title, body) {
       body
     }
   };
-  const response = await (0, import_messaging.getMessaging)().send(message);
-  console.log("[FCM] Message envoy\xE9 :", response);
-  return response;
+  try {
+    const response = await (0, import_messaging.getMessaging)().send(message);
+    console.log("[FCM] Succ\xE8s :", response);
+    return response;
+  } catch (error) {
+    console.error("[FCM] Erreur :", error);
+    throw error;
+  }
 }
 
 // backend/jobs/queue.ts
@@ -1061,6 +1088,8 @@ var NotificationService = class {
       const priority = category === "absence" ? 10 : 5;
       const jobName = `send-notification-${channel}`;
       const jobDedupeKey = dedupeKey ? `${dedupeKey}-${channel}` : void 0;
+      console.log("\u{1F680} PASSAGE AVANT CREATION JOB PUSH");
+      console.log("\u{1F4F1} DEVICES POUR PUSH :", devices);
       const jobId = QueueManager.addJob(jobName, {
         parentId,
         channel,
@@ -1352,6 +1381,33 @@ app.get("/api/mobile/parent/children/:childId/absences", requireAuth, requirePar
   const absences = await store.getAbsencesOfChild(childId);
   return res.json(absences);
 });
+app.put("/api/absences/:absenceId/justify", requireAuth, requireParentRoleOnly, async (req, res) => {
+  const { absenceId } = req.params;
+  const { justificationReason } = req.body;
+  const parentId = req.parent.id;
+  if (typeof justificationReason !== "string" || !justificationReason.trim()) {
+    return res.status(400).json({
+      error: "Veuillez fournir un motif de justification.",
+      code: "JUSTIFICATION_REQUIRED"
+    });
+  }
+  try {
+    const updatedAbsence = await store.justifyAbsence(absenceId, parentId, justificationReason.trim());
+    if (!updatedAbsence) {
+      return res.status(404).json({
+        error: "Absence introuvable ou non rattach\xE9e \xE0 ce parent.",
+        code: "ABSENCE_NOT_FOUND"
+      });
+    }
+    return res.json(updatedAbsence);
+  } catch (err) {
+    console.error("Failed to justify absence:", err);
+    return res.status(500).json({
+      error: "Impossible de justifier l'absence pour le moment.",
+      code: "INTERNAL_ERROR"
+    });
+  }
+});
 app.get("/api/mobile/parent/children/:childId/grades", requireAuth, requireParentRoleOnly, async (req, res) => {
   const { childId } = req.params;
   const parentId = req.parent.id;
@@ -1536,8 +1592,8 @@ app.put("/api/mobile/parent/notification-preferences", requireAuth, requireParen
     pushEnabled,
     whatsappEnabled,
     smsEnabled,
-    quietHoursStart,
-    quietHoursEnd
+    quietHoursStart: quietHoursStart ?? void 0,
+    quietHoursEnd: quietHoursEnd ?? void 0
   });
   logger6.audit("UPDATE_PREFERENCES", parentId, { pushEnabled, whatsappEnabled, smsEnabled }, "SUCCESS");
   return res.json({
@@ -1634,10 +1690,22 @@ app.post("/api/dev/add-grade", async (req, res) => {
   const children = await store.getChildrenOfParent("parent-jean-dupont");
   const backupChildren = await store.getChildrenOfParent("parent-marie-martin");
   const child = children.find((c) => c.id === childId) || backupChildren.find((c) => c.id === childId);
+  console.log("GRADE SEARCH DEBUG", {
+    childId,
+    childrenFound: children.length,
+    backupChildrenFound: backupChildren.length,
+    childFound: !!child
+  });
   if (child) {
     const parentId = child.parentId;
     const dedupeKey = `grade-${child.id}-${Date.now()}`;
+    const isModification = false;
     const name = `${child.firstName} ${child.lastName}`;
+    console.log("GRADE CHILD FOUND", {
+      childId,
+      parentId,
+      childName: name
+    });
     await NotificationService.dispatchNotification(
       parentId,
       "Nouvelle note disponible",
@@ -1686,6 +1754,110 @@ app.post("/api/internal/absence-notification", async (req, res) => {
     });
   } catch (err) {
     logger6.error("Internal absence notification failed", err);
+    return res.status(500).json({
+      error: "Notification dispatch failed"
+    });
+  }
+});
+app.post("/api/internal/grade-notification", async (req, res) => {
+  try {
+    const {
+      parentId,
+      title,
+      message,
+      category = "grade",
+      metadata = {},
+      dedupeKey
+    } = req.body;
+    if (!parentId || !title || !message) {
+      return res.status(400).json({
+        error: "Missing notification parameters"
+      });
+    }
+    const result = await NotificationService.dispatchNotification(
+      String(parentId),
+      title,
+      message,
+      category,
+      metadata,
+      dedupeKey
+    );
+    return res.json({
+      success: true,
+      result
+    });
+  } catch (err) {
+    logger6.error("Internal grade notification failed", err);
+    return res.status(500).json({
+      error: "Notification dispatch failed"
+    });
+  }
+});
+app.post("/api/internal/evaluation-notification", async (req, res) => {
+  console.log("\u{1F4E2} EVALUATION NOTIFICATION RECUE", req.body);
+  try {
+    const {
+      parentId,
+      title,
+      message,
+      category = "evaluation",
+      metadata = {},
+      dedupeKey
+    } = req.body;
+    if (!parentId || !title || !message) {
+      return res.status(400).json({
+        error: "Missing notification parameters"
+      });
+    }
+    const result = await NotificationService.dispatchNotification(
+      String(parentId),
+      title,
+      message,
+      category,
+      metadata,
+      dedupeKey
+    );
+    return res.json({
+      success: true,
+      result
+    });
+  } catch (err) {
+    logger6.error("Internal evaluation notification failed", err);
+    return res.status(500).json({
+      error: "Notification dispatch failed"
+    });
+  }
+});
+app.post("/api/internal/info-notification", async (req, res) => {
+  console.log("\u{1F4E2} INFO NOTIFICATION RECUE", req.body);
+  try {
+    const {
+      parentId,
+      title,
+      message,
+      category = "info",
+      metadata = {},
+      dedupeKey
+    } = req.body;
+    if (!parentId || !title || !message) {
+      return res.status(400).json({
+        error: "Missing notification parameters"
+      });
+    }
+    const result = await NotificationService.dispatchNotification(
+      String(parentId),
+      title,
+      message,
+      category,
+      metadata,
+      dedupeKey
+    );
+    return res.json({
+      success: true,
+      result
+    });
+  } catch (err) {
+    logger6.error("Internal info notification failed", err);
     return res.status(500).json({
       error: "Notification dispatch failed"
     });

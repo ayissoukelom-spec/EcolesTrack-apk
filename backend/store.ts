@@ -406,6 +406,23 @@ export class PostgresStore {
     }));
   }
 
+  public async getParentIdsForChildren(childIds: Array<string | number>): Promise<string[]> {
+    const numericChildIds = childIds
+      .map((childId) => Number(childId))
+      .filter((childId): childId is number => Number.isInteger(childId) && childId > 0);
+
+    if (numericChildIds.length === 0) return [];
+
+    const { rows } = await dbQuery<{ parent_user_id: number }>(`
+      SELECT DISTINCT p.user_id AS parent_user_id
+      FROM students s
+      JOIN parents p ON p.id = s.parent_id
+      WHERE s.id = ANY($1::int[])
+    `, [numericChildIds]);
+
+    return rows.map((row) => String(row.parent_user_id)).filter(Boolean);
+  }
+
   public async createSimulatedChildForParent(parentId: string): Promise<Child | null> {
     const parent = await this.getParentById(parentId);
     if (!parent) {
@@ -479,13 +496,53 @@ export class PostgresStore {
     }));
   }
 
+  public async justifyAbsence(absenceId: string, parentId: string, justificationReason: string): Promise<Absence | null> {
+    const { rows } = await dbQuery<{
+      id: string;
+      child_id: string;
+      date: string;
+      reason: string;
+      justified: boolean;
+      justification_text: string | null;
+    }>(`
+      UPDATE absences AS a
+      SET justified = true,
+          justification_text = $1
+      FROM children AS c
+      WHERE a.id = $2
+        AND a.child_id = c.id
+        AND c.parent_id = $3
+      RETURNING a.id, a.child_id, a.date, a.reason, a.justified, a.justification_text
+    `, [justificationReason, absenceId, parentId]);
+
+    if (rows.length === 0) return null;
+
+    const row = rows[0];
+    return {
+      id: String(row.id),
+      childId: String(row.child_id),
+      date: row.date,
+      reason: row.reason,
+      justified: row.justified,
+      justificationText: row.justification_text ?? undefined,
+    };
+  }
+
   public async addGrade(grade: Omit<Grade, 'id'>): Promise<Grade> {
-    const childIdNum = Number(grade.childId);
-    if (!Number.isInteger(childIdNum)) {
+    const childIds = Array.isArray((grade as any).childIds)
+      ? (grade as any).childIds
+      : [grade.childId];
+
+    const normalizedChildIds = childIds
+      .map((childId) => Number(childId))
+      .filter((childId): childId is number => Number.isInteger(childId) && childId > 0);
+
+    if (normalizedChildIds.length === 0) {
       throw new Error('Invalid child id for grade insertion');
     }
 
-    const studentRow = await dbQuery<{ class_id: number | null }>(`SELECT class_id FROM students WHERE id = $1`, [childIdNum]);
+    const firstChildIdNum = normalizedChildIds[0];
+    const studentRow = await dbQuery<{ class_id: number | null }>(`SELECT class_id FROM students WHERE id = $1`, [firstChildIdNum]);
     const classId = studentRow.rows[0]?.class_id ?? null;
     const teacherRow = await dbQuery<{ id: number }>(`SELECT id FROM teachers LIMIT 1`);
     const teacherId = teacherRow.rows[0]?.id ?? 1;
@@ -501,14 +558,19 @@ export class PostgresStore {
       throw new Error('Failed to create evaluation record for grade insertion');
     }
 
-    const { rows } = await dbQuery<{ id: number }>(`
-      INSERT INTO grades (evaluation_id, student_id, score, remarks, edit_count, created_at, updated_at)
-      VALUES ($1, $2, $3, $4, 0, NOW(), NOW())
-      RETURNING id
-    `, [evaluationId, childIdNum, String(grade.grade), '', 0]);
+    const insertedGradeIds: string[] = [];
+    for (const childIdNum of normalizedChildIds) {
+      const { rows } = await dbQuery<{ id: number }>(`
+        INSERT INTO grades (evaluation_id, student_id, score, remarks, edit_count, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, 0, NOW(), NOW())
+        RETURNING id
+      `, [evaluationId, childIdNum, String(grade.grade), '', 0]);
+
+      insertedGradeIds.push(String(rows[0]?.id ?? 0));
+    }
 
     return {
-      id: String(rows[0]?.id ?? 0),
+      id: insertedGradeIds[0] ?? '0',
       ...grade,
     };
   }
@@ -643,17 +705,17 @@ export class PostgresStore {
     };
   }
 
-  public async registerPushToken(parentId, token, platform, appVersion) {
-  const { rows } = await dbQuery(`
-    INSERT INTO mobile_parent_devices 
-      (parent_id, platform, push_token, app_version, last_seen_at)
-    VALUES ($1, $2, $3, $4, NOW())
-    ON CONFLICT (parent_id, platform, push_token)
-    DO UPDATE SET
-      app_version = EXCLUDED.app_version,
-      last_seen_at = NOW()
-    RETURNING id
-  `, [parentId, platform, token, appVersion]);
+  public async registerPushToken(parentId: string, token: string, platform: 'android' | 'ios', appVersion: string) {
+    const { rows } = await dbQuery(`
+      INSERT INTO mobile_parent_devices 
+        (parent_id, platform, push_token, app_version, last_seen_at)
+      VALUES ($1, $2, $3, $4, NOW())
+      ON CONFLICT (parent_id, platform, push_token)
+      DO UPDATE SET
+        app_version = EXCLUDED.app_version,
+        last_seen_at = NOW()
+      RETURNING id
+    `, [parentId, platform, token, appVersion]);
 
     return {
       id: String(rows[0]?.id ?? 0),

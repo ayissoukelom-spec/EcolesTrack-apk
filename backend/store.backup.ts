@@ -986,10 +986,10 @@ export async function triggerMultiChannelNotification(
       for (const device of devices) {
         try {
           const messageId = await sendPushNotification(
-  device.token,
-  "🚨 TEST UNIQUE",
-  "SI TU VOIS CE TEXTE, C'EST LE BON FICHIER"
-);
+            device.pushToken,
+            "🚨 TEST UNIQUE",
+            "SI TU VOIS CE TEXTE, C'EST LE BON FICHIER"
+          );
 
           await store.updateNotificationDeliveryStatus(pushDelivery.id, {
             status: 'delivered',

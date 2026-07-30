@@ -10,86 +10,149 @@ export class NotificationService {
    * Orchestrates multi-channel delivery based on parent consents and quiet hours
    */
   public static async dispatchNotification(
-    parentId: string,
+    parentId: string | string[],
     title: string,
     message: string,
     category: 'absence' | 'grade' | 'test',
     metadata: any = {},
     dedupeKey?: string
   ) {
-    logger.info(`Orchestrating notification for Parent ID: ${parentId}`, { category, dedupeKey });
+    const effectiveParentIds = await this.resolveParentIds(parentId, metadata);
+    logger.info(`Orchestrating notification for Parent IDs: ${effectiveParentIds.join(", ") || "<none>"}`, { category, dedupeKey });
 
-    // 1. Fetch parent preferences and consent from DB
-    const preferences = await store.getNotificationPreferences(parentId);
-    const consents = await store.getConsentsOfParent(parentId);
-
-    const isPushAuthorized = preferences.pushEnabled;
-    const isSmsAuthorized = preferences.smsEnabled && consents.some(c => c.channel === "sms" && c.consentGranted);
-    const isWhatsappAuthorized = preferences.whatsappEnabled && consents.some(c => c.channel === "whatsapp" && c.consentGranted);
-
-    // 2. Check Quiet Hours Window
-    if (this.isWithinQuietHours(preferences.quietHoursStart, preferences.quietHoursEnd)) {
-      logger.info(`Quiet Hours active for parent ${parentId}. Scheduling notification with lower priority or buffering.`);
-      // In a real system, we'd buffer. For demonstration, we'll process with low priority and log a quiet-hours warning
-      metadata.quietHoursApplied = true;
+    if (effectiveParentIds.length === 0) {
+      logger.warn("No parent IDs resolved for notification dispatch.");
+      return {
+        success: true,
+        channels: [],
+        jobs: []
+      };
     }
 
-    // 3. Select Channels and Queue Jobs
-    const devices = await store.getDevicesOfParent(parentId);
-    logger.info("Devices found", { parentId, devices });
- if (devices.length === 0 && isPushAuthorized) {
-  logger.warn(`No devices registered for parent: ${parentId}. Push skipped.`);
-}
+    const jobsTriggered: string[] = [];
     const channelsToDeliver: NotificationChannel[] = [];
 
-if (isPushAuthorized && devices.length > 0) {
-  channelsToDeliver.push("push");
-}
+    for (const effectiveParentId of effectiveParentIds) {
+      // 1. Fetch parent preferences and consent from DB
+      const preferences = await store.getNotificationPreferences(effectiveParentId);
+      const consents = await store.getConsentsOfParent(effectiveParentId);
 
-if (isWhatsappAuthorized) {
-  channelsToDeliver.push("whatsapp");
-}
+      const isPushAuthorized = preferences.pushEnabled;
+      const isSmsAuthorized = preferences.smsEnabled && consents.some(c => c.channel === "sms" && c.consentGranted);
+      const isWhatsappAuthorized = preferences.whatsappEnabled && consents.some(c => c.channel === "whatsapp" && c.consentGranted);
 
-if (isSmsAuthorized) {
-  channelsToDeliver.push("sms");
-}
+      // 2. Check Quiet Hours Window
+      if (this.isWithinQuietHours(preferences.quietHoursStart, preferences.quietHoursEnd)) {
+        logger.info(`Quiet Hours active for parent ${effectiveParentId}. Scheduling notification with lower priority or buffering.`);
+        metadata.quietHoursApplied = true;
+      }
 
-    if (channelsToDeliver.length === 0) {
-  logger.warn(
-    `No delivery channels available for parent: ${parentId}. In-app notification only.`
-  );
-}
+      // 3. Select Channels and Queue Jobs
+      const devices = await store.getDevicesOfParent(effectiveParentId);
+      const pushTokens = Array.from(new Set(
+        devices
+          .map((device) => device.pushToken)
+          .filter((token): token is string => Boolean(token))
+      ));
 
-    // Add delivery jobs to queue
-    const jobsTriggered: string[] = [];
-    for (const channel of channelsToDeliver) {
-      const priority = category === "absence" ? 10 : 5; // Absences have higher priority
-      const jobName = `send-notification-${channel}`;
-      const jobDedupeKey = dedupeKey ? `${dedupeKey}-${channel}` : undefined;
-    console.log("🚀 PASSAGE AVANT CREATION JOB PUSH");  
-console.log("📱 DEVICES POUR PUSH :", devices);
-      const jobId = QueueManager.addJob(jobName, {
-  parentId,
-  channel,
-  title,
-  message,
-  category,
-  metadata,
-  token: channel === "push" ? devices[0]?.pushToken : undefined
-}, {
-  priority,
-  dedupeKey: jobDedupeKey,
-  maxAttempts: 3
-});
+      logger.info("Devices found", { parentId: effectiveParentId, devices });
+      if (pushTokens.length === 0 && isPushAuthorized) {
+        logger.warn(`No devices registered for parent: ${effectiveParentId}. Push skipped.`);
+      }
 
-jobsTriggered.push(jobId);
+      const parentChannelsToDeliver: NotificationChannel[] = [];
+
+      if (isPushAuthorized && pushTokens.length > 0) {
+        parentChannelsToDeliver.push("push");
+      }
+
+      if (isWhatsappAuthorized) {
+        parentChannelsToDeliver.push("whatsapp");
+      }
+
+      if (isSmsAuthorized) {
+        parentChannelsToDeliver.push("sms");
+      }
+
+      if (parentChannelsToDeliver.length === 0) {
+        logger.warn(
+          `No delivery channels available for parent: ${effectiveParentId}. In-app notification only.`
+        );
+      }
+
+      for (const channel of parentChannelsToDeliver) {
+        const priority = category === "absence" ? 10 : 5;
+        const jobName = `send-notification-${channel}`;
+
+        if (channel === "push") {
+          for (const token of pushTokens) {
+            const jobDedupeKey = dedupeKey ? `${dedupeKey}-${channel}-${token}` : undefined;
+            const jobId = QueueManager.addJob(jobName, {
+              parentId: effectiveParentId,
+              channel,
+              title,
+              message,
+              category,
+              metadata,
+              token
+            }, {
+              priority,
+              dedupeKey: jobDedupeKey,
+              maxAttempts: 3
+            });
+
+            jobsTriggered.push(jobId);
+          }
+        } else {
+          const jobDedupeKey = dedupeKey ? `${dedupeKey}-${channel}` : undefined;
+          const jobId = QueueManager.addJob(jobName, {
+            parentId: effectiveParentId,
+            channel,
+            title,
+            message,
+            category,
+            metadata,
+            token: undefined
+          }, {
+            priority,
+            dedupeKey: jobDedupeKey,
+            maxAttempts: 3
+          });
+
+          jobsTriggered.push(jobId);
+        }
+      }
+
+      parentChannelsToDeliver.forEach((channel) => channelsToDeliver.push(channel));
     }
 
     return {
-  success: true,
-  channels: channelsToDeliver,
-  jobs: jobsTriggered
-};
+      success: true,
+      channels: Array.from(new Set(channelsToDeliver)),
+      jobs: jobsTriggered
+    };
+  }
+
+  private static async resolveParentIds(parentId: string | string[] | undefined, metadata: any = {}): Promise<string[]> {
+    if (Array.isArray(parentId)) {
+      return parentId.filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+    }
+
+    if (typeof parentId === "string" && parentId.trim().length > 0) {
+      return [parentId];
+    }
+
+    if (Array.isArray(metadata?.parentIds)) {
+      return metadata.parentIds
+        .map((value: unknown) => (typeof value === "string" ? value : String(value)))
+        .filter((value: string) => value.trim().length > 0);
+    }
+
+    if (Array.isArray(metadata?.childIds) && metadata.childIds.length > 0) {
+      return store.getParentIdsForChildren(metadata.childIds);
+    }
+
+    return [];
   }
 
   /**

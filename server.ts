@@ -302,6 +302,38 @@ app.get("/api/mobile/parent/children/:childId/absences", requireAuth, requirePar
   return res.json(absences);
 });
 
+// 5b. PUT /api/absences/:absenceId/justify
+app.put("/api/absences/:absenceId/justify", requireAuth, requireParentRoleOnly, async (req: AuthenticatedRequest, res) => {
+  const { absenceId } = req.params;
+  const { justificationReason } = req.body;
+  const parentId = req.parent!.id;
+
+  if (typeof justificationReason !== "string" || !justificationReason.trim()) {
+    return res.status(400).json({
+      error: "Veuillez fournir un motif de justification.",
+      code: "JUSTIFICATION_REQUIRED"
+    });
+  }
+
+  try {
+    const updatedAbsence = await store.justifyAbsence(absenceId, parentId, justificationReason.trim());
+    if (!updatedAbsence) {
+      return res.status(404).json({
+        error: "Absence introuvable ou non rattachée à ce parent.",
+        code: "ABSENCE_NOT_FOUND"
+      });
+    }
+
+    return res.json(updatedAbsence);
+  } catch (err: any) {
+    console.error("Failed to justify absence:", err);
+    return res.status(500).json({
+      error: "Impossible de justifier l'absence pour le moment.",
+      code: "INTERNAL_ERROR"
+    });
+  }
+});
+
 // 6. GET /api/mobile/parent/children/:childId/grades
 app.get("/api/mobile/parent/children/:childId/grades", requireAuth, requireParentRoleOnly, async (req: AuthenticatedRequest, res) => {
   const { childId } = req.params;
@@ -545,8 +577,8 @@ app.put("/api/mobile/parent/notification-preferences", requireAuth, requireParen
     pushEnabled,
     whatsappEnabled,
     smsEnabled,
-    quietHoursStart,
-    quietHoursEnd
+    quietHoursStart: quietHoursStart ?? undefined,
+    quietHoursEnd: quietHoursEnd ?? undefined
   });
 
   logger.audit("UPDATE_PREFERENCES", parentId, { pushEnabled, whatsappEnabled, smsEnabled }, "SUCCESS");
@@ -650,52 +682,52 @@ app.post("/api/dev/add-absence", async (req, res) => {
 
 // Add grade via backend simulator
 app.post("/api/dev/add-grade", async (req, res) => {
-  const { childId, subject, grade, coefficient, examName, date } = req.body;
-  if (!childId || !subject || grade === undefined || !examName) {
+  const { childId, childIds, subject, grade, coefficient, examName, date } = req.body;
+  const requestedChildIds = Array.isArray(childIds)
+    ? childIds.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    : childId ? [String(childId)] : [];
+
+  if (requestedChildIds.length === 0 || !subject || grade === undefined || !examName) {
     return res.status(400).json({ error: "Missing required grade properties" });
   }
 
   const gradeObj = await store.addGrade({
-    childId,
+    childId: requestedChildIds[0],
     subject,
     grade: parseFloat(grade),
     coefficient: coefficient ? parseFloat(coefficient) : 1,
     examName,
     date: date || new Date().toISOString().split('T')[0]
-  });
+  } as any);
 
   const children = await store.getChildrenOfParent("parent-jean-dupont");
   const backupChildren = await store.getChildrenOfParent("parent-marie-martin");
-  const child = children.find(c => c.id === childId) || backupChildren.find(c => c.id === childId);
+  const primaryChild = children.find(c => c.id === requestedChildIds[0]) || backupChildren.find(c => c.id === requestedChildIds[0]);
 
-console.log("GRADE SEARCH DEBUG", {
-  childId,
-  childrenFound: children.length,
-  backupChildrenFound: backupChildren.length,
-  childFound: !!child
-});
+  const resolvedParentIds = await store.getParentIdsForChildren(requestedChildIds);
+  const notificationParentIds = resolvedParentIds.length > 0 ? resolvedParentIds : primaryChild ? [primaryChild.parentId] : [];
 
-if (child) {
-    const parentId = child.parentId;
-    const dedupeKey = `grade-${child.id}-${Date.now()}`;
-    const isModification = false;
-    const name = `${child.firstName} ${child.lastName}`;
-
-    console.log("GRADE CHILD FOUND", {
-      childId,
-      parentId,
-      childName: name
-    });
+  if (primaryChild) {
+    const dedupeKey = `grade-${requestedChildIds[0]}-${Date.now()}`;
+    const name = `${primaryChild.firstName} ${primaryChild.lastName}`;
 
     await NotificationService.dispatchNotification(
-      parentId,
+      notificationParentIds,
       "Nouvelle note disponible",
       `${name} a reçu un ${grade}/20 en ${subject} (${examName}).`,
       'grade',
-      { childId, childName: name, subject, grade, examName },
+      {
+        childId: requestedChildIds[0],
+        childIds: requestedChildIds,
+        parentIds: notificationParentIds,
+        childName: name,
+        subject,
+        grade,
+        examName
+      },
       dedupeKey
     );
-}
+  }
 
   return res.json({ success: true, grade: gradeObj });
 });
@@ -772,12 +804,29 @@ app.post("/api/internal/grade-notification", async (req: Request, res: Response)
       });
     }
 
+    const childIds = Array.isArray(metadata?.childIds)
+      ? metadata.childIds.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      : [];
+    const parentIds = Array.isArray(metadata?.parentIds)
+      ? metadata.parentIds.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      : [];
+
+    const resolvedParentIds = parentIds.length > 0
+      ? parentIds
+      : childIds.length > 0
+        ? await store.getParentIdsForChildren(childIds)
+        : [String(parentId)];
+
     const result = await NotificationService.dispatchNotification(
-      String(parentId),
+      resolvedParentIds,
       title,
       message,
       category,
-      metadata,
+      {
+        ...metadata,
+        childIds,
+        parentIds: resolvedParentIds
+      },
       dedupeKey
     );
 
