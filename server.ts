@@ -834,6 +834,47 @@ app.post("/api/internal/evaluation-notification", async (req: Request, res: Resp
     });
   }
 });
+
+app.post("/api/internal/info-notification", async (req: Request, res: Response) => {
+  console.log("📢 INFO NOTIFICATION RECUE", req.body);
+  try {
+    const {
+      parentId,
+      title,
+      message,
+      category = "info",
+      metadata = {},
+      dedupeKey
+    } = req.body;
+
+    if (!parentId || !title || !message) {
+      return res.status(400).json({
+        error: "Missing notification parameters"
+      });
+    }
+
+    const result = await NotificationService.dispatchNotification(
+      String(parentId),
+      title,
+      message,
+      category,
+      metadata,
+      dedupeKey
+    );
+
+    return res.json({
+      success: true,
+      result
+    });
+
+  } catch (err: any) {
+    logger.error("Internal info notification failed", err);
+
+    return res.status(500).json({
+      error: "Notification dispatch failed"
+    });
+  }
+});
 // ====================================================================
 // VITE OR STATIC FILE HOSTING (FULL-STACK CONFIG)
 // ====================================================================

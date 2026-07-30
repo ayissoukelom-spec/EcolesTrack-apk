@@ -66,7 +66,8 @@ if (isSmsAuthorized) {
       const priority = category === "absence" ? 10 : 5; // Absences have higher priority
       const jobName = `send-notification-${channel}`;
       const jobDedupeKey = dedupeKey ? `${dedupeKey}-${channel}` : undefined;
-
+    console.log("🚀 PASSAGE AVANT CREATION JOB PUSH");  
+console.log("📱 DEVICES POUR PUSH :", devices);
       const jobId = QueueManager.addJob(jobName, {
   parentId,
   channel,
