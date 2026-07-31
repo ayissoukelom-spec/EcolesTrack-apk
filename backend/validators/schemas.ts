@@ -14,7 +14,8 @@ export const LoginSchema = z.object({
 export const RegisterPushTokenSchema = z.object({
   pushToken: z.string().min(10, { message: "Le token push est trop court." }),
   platform: z.enum(["android", "ios"], { message: "Plateforme invalide (android ou ios uniquement)." }),
-  appVersion: z.string().min(1, { message: "La version de l'application est requise." })
+  appVersion: z.string().min(1, { message: "La version de l'application est requise." }),
+  deviceId: z.string().min(10, { message: "L'identifiant du device est requis." })
 });
 
 // 3. Notification Preferences schema

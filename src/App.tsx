@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { 
   Terminal, ShieldCheck, Play, RefreshCw, Trash2, Smartphone, 
   BookOpen, HelpCircle, Code, HelpCircle as HelpIcon 
@@ -21,21 +21,83 @@ import { Parent, Child, AppNotification, CompleteDeliveryLog } from "./types";
 import { parseJsonSafe, withApiBase } from "./utils/http";
 
 export default function App() {
-  const [fcmToken, setFcmToken] = useState<string | null>(null);
+  const [token, setToken] = useState<string | null>(() => localStorage.getItem("ecoletrack_token"));
+  const [parent, setParent] = useState<Parent | null>(() => {
+    const saved = localStorage.getItem("ecoletrack_parent");
+    return saved ? JSON.parse(saved) : null;
+  });
+  const [fcmToken, setFcmToken] = useState<string | null>(() => {
+    if (typeof window === "undefined") {
+      return null;
+    }
+    return window.localStorage.getItem("fcm_token");
+  });
+  const lastRegisteredPushTokenRef = useRef<string | null>(null);
+  const registeringPushTokenRef = useRef<string | null>(null);
+  const deviceIdRef = useRef<string | null>(null);
 
-useEffect(() => {
-  window.setFcmToken = (token: string) => {
-    console.log("TOKEN FCM reçu depuis Android :", token);
-    setFcmToken(token);
+  const getDeviceId = () => {
+    if (deviceIdRef.current) {
+      return deviceIdRef.current;
+    }
 
-    // Sauvegarde locale temporaire
-    localStorage.setItem("fcm_token", token);
+    if (typeof window === "undefined") {
+      return null;
+    }
+
+    const storageKey = "ecoletrack_device_id";
+    let deviceId = window.localStorage.getItem(storageKey);
+    if (!deviceId) {
+      deviceId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `device-${Math.random().toString(36).slice(2)}-${Date.now()}`;
+      window.localStorage.setItem(storageKey, deviceId);
+    }
+
+    deviceIdRef.current = deviceId;
+    return deviceId;
   };
 
-  return () => {
-    delete window.setFcmToken;
-  };
-}, []);
+  useEffect(() => {
+    const runtime = window as Window & typeof globalThis & {
+      setFcmToken?: (token: string) => void;
+    };
+
+    runtime.setFcmToken = (token: string) => {
+      console.log("[FCM] token received", token);
+      setFcmToken(token);
+      window.localStorage.setItem("fcm_token", token);
+    };
+
+    return () => {
+      delete runtime.setFcmToken;
+    };
+  }, []);
+
+  useEffect(() => {
+    const pushToken = fcmToken;
+    if (!token || !pushToken) {
+      return;
+    }
+
+    if (lastRegisteredPushTokenRef.current === pushToken || registeringPushTokenRef.current === pushToken) {
+      return;
+    }
+
+    registeringPushTokenRef.current = pushToken;
+    void registerPushToken(pushToken)
+      .then((success) => {
+        if (success) {
+          lastRegisteredPushTokenRef.current = pushToken;
+        }
+      })
+      .finally(() => {
+        if (registeringPushTokenRef.current === pushToken) {
+          registeringPushTokenRef.current = null;
+        }
+      });
+  }, [token, fcmToken]);
+
   const isMobileProductionMode = (() => {
     const envFlag = (import.meta as any)?.env?.VITE_MOBILE_PRODUCTION === "true";
     const isAndroidWebViewHost = typeof window !== "undefined" && (
@@ -50,28 +112,6 @@ useEffect(() => {
   })();
   
   // Persistent parent session state
-  const [token, setToken] = useState<string | null>(() => localStorage.getItem("ecoletrack_token"));
-  const [parent, setParent] = useState<Parent | null>(() => {
-    const saved = localStorage.getItem("ecoletrack_parent");
-    return saved ? JSON.parse(saved) : null;
-  });
-  const [receivedFcmToken, setReceivedFcmToken] = useState<string | null>(null);
-
-  useEffect(() => {
-    const runtime = window as Window & typeof globalThis & {
-      setFcmToken?: (token: string) => void;
-    };
-
-    runtime.setFcmToken = (token: string) => {
-      console.log("[FCM] token received", token);
-      setReceivedFcmToken(token);
-    };
-
-    return () => {
-      delete runtime.setFcmToken;
-    };
-  }, []);
-
   // Navigation states
   const [activeTab, setActiveTab] = useState("children");
   const [selectedChild, setSelectedChild] = useState<Child | null>(null);
@@ -79,12 +119,19 @@ useEffect(() => {
   // Notifications and delivery audit logs loaded from Express
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [deliveryLogs, setDeliveryLogs] = useState<CompleteDeliveryLog[]>([]);
+
   const registerPushToken = async (pushToken: string) => {
-    if (!token) return;
+    if (!token) return false;
+
+    const deviceId = getDeviceId();
+    if (!deviceId) {
+      console.error("[FCM] Impossible de générer un deviceId");
+      return false;
+    }
 
     try {
       console.log("[FCM] URL register:", withApiBase("/api/mobile/parent/devices/register-push-token"));
-    console.log("[FCM] token length:", pushToken.length);
+      console.log("[FCM] token length:", pushToken.length);
       const response = await fetch(
         withApiBase("/api/mobile/parent/devices/register-push-token"),
         {
@@ -96,20 +143,24 @@ useEffect(() => {
           body: JSON.stringify({
             pushToken,
             platform: "android",
-            appVersion: "1.0.0"
+            appVersion: "1.0.0",
+            deviceId
           })
         }
       );
 
       if (response.ok) {
         console.log("[FCM] Token enregistré sur le serveur");
-      } else {
-        console.log("[FCM] Erreur d'enregistrement :", response.status);
+        return true;
       }
-  } catch (e) {
-  console.error("[FCM] Impossible d'enregistrer le token", e);
-  console.error("[FCM] details:", JSON.stringify(e, null, 2));
-}
+
+      console.log("[FCM] Erreur d'enregistrement :", response.status);
+      return false;
+    } catch (e) {
+      console.error("[FCM] Impossible d'enregistrer le token", e);
+      console.error("[FCM] details:", JSON.stringify(e, null, 2));
+      return false;
+    }
   };
   // Fetch parent in-app notifications
   const fetchNotifications = async () => {
@@ -162,17 +213,6 @@ useEffect(() => {
     console.error(e);
   }
 };
-
-useEffect(() => {
-  console.log("[FCM] useEffect", {
-    token: !!token,
-    receivedFcmToken,
-  });
-
-  if (token && receivedFcmToken) {
-    registerPushToken(receivedFcmToken);
-  }
-}, [token, receivedFcmToken]);
 
   // Poll for background notifications regularly when logged in
   useEffect(() => {

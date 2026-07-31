@@ -705,25 +705,87 @@ export class PostgresStore {
     };
   }
 
-  public async registerPushToken(parentId: string, token: string, platform: 'android' | 'ios', appVersion: string) {
-    const { rows } = await dbQuery(`
-      INSERT INTO mobile_parent_devices 
-        (parent_id, platform, push_token, app_version, last_seen_at)
-      VALUES ($1, $2, $3, $4, NOW())
-      ON CONFLICT (parent_id, platform, push_token)
-      DO UPDATE SET
-        app_version = EXCLUDED.app_version,
-        last_seen_at = NOW()
-      RETURNING id
-    `, [parentId, platform, token, appVersion]);
+  public async registerPushToken(parentId: string, deviceId: string, token: string, platform: 'android' | 'ios', appVersion: string) {
+    const { rows: existingRows } = await dbQuery<{ id: number; push_token: string }>(`
+      SELECT id, push_token
+      FROM mobile_parent_devices
+      WHERE parent_id = $1
+        AND platform = $2
+        AND device_id = $3
+    `, [parentId, platform, deviceId]);
+
+    let rowId: number | null = null;
+    const now = new Date().toISOString();
+
+    if (existingRows.length > 0) {
+      const existingRow = existingRows[0];
+      if (existingRow.push_token !== token) {
+        logger.info('Replacing existing FCM token for parent/device', { parentId, deviceId, platform, oldToken: existingRow.push_token, newToken: token });
+      } else {
+        logger.info('Refreshing existing FCM token metadata for parent/device', { parentId, deviceId, platform, token });
+      }
+
+      const updateResult = await dbQuery<{ id: number }>(`
+        UPDATE mobile_parent_devices
+        SET push_token = $1,
+            app_version = $2,
+            last_seen_at = NOW()
+        WHERE id = $3
+        RETURNING id
+      `, [token, appVersion, existingRow.id]);
+
+      rowId = updateResult.rows[0]?.id ?? existingRow.id;
+    } else {
+      logger.info('Registering new FCM token for parent/device', { parentId, deviceId, platform, token });
+      const insertResult = await dbQuery<{ id: number }>(`
+        INSERT INTO mobile_parent_devices 
+          (parent_id, device_id, platform, push_token, app_version, last_seen_at)
+        VALUES ($1, $2, $3, $4, $5, NOW())
+        RETURNING id
+      `, [parentId, deviceId, platform, token, appVersion]);
+
+      rowId = insertResult.rows[0]?.id ?? null;
+    }
+
+    const duplicateTokenDeleteResult = await dbQuery(`
+      DELETE FROM mobile_parent_devices
+      WHERE parent_id = $1
+        AND platform = $2
+        AND push_token = $3
+        AND device_id IS DISTINCT FROM $4
+    `, [parentId, platform, token, deviceId]);
+    if (duplicateTokenDeleteResult.rowCount > 0) {
+      logger.info('Removed duplicate push token entries for same token on another device', {
+        parentId,
+        platform,
+        token,
+        deviceId,
+        deleted: duplicateTokenDeleteResult.rowCount,
+      });
+    }
+
+    const staleAndroidDeleteResult = await dbQuery(`
+      DELETE FROM mobile_parent_devices
+      WHERE parent_id = $1
+        AND platform = 'android'
+        AND device_id IS DISTINCT FROM $2
+        AND last_seen_at < NOW() - INTERVAL '60 days'
+    `, [parentId, deviceId]);
+    if (staleAndroidDeleteResult.rowCount > 0) {
+      logger.info('Cleaned up stale Android push tokens', {
+        parentId,
+        deviceId,
+        deleted: staleAndroidDeleteResult.rowCount,
+      });
+    }
 
     return {
-      id: String(rows[0]?.id ?? 0),
+      id: String(rowId ?? 0),
       parentId,
       platform,
       pushToken: token,
       appVersion,
-      lastSeenAt: new Date().toISOString(),
+      lastSeenAt: now,
     };
   }
 
@@ -747,10 +809,16 @@ export class PostgresStore {
   }
 
   public async deletePushToken(parentId: string, token: string): Promise<void> {
-    await dbQuery(
+    const result = await dbQuery(
       `DELETE FROM mobile_parent_devices WHERE parent_id = $1 AND push_token = $2`,
       [parentId, token]
     );
+
+    if (result.rowCount > 0) {
+      logger.info('Deleted invalid push token', { parentId, token, deleted: result.rowCount });
+    } else {
+      logger.warn('Attempted to delete push token but no matching row was found', { parentId, token });
+    }
   }
 
   public async getNotificationPreferences(parentId: string): Promise<NotificationPreferences> {

@@ -3,6 +3,11 @@ package com.ecoletrack.webview;
 import android.annotation.SuppressLint;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.os.Bundle;
@@ -19,7 +24,9 @@ import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
 import androidx.core.app.NotificationCompat;
+import androidx.core.content.ContextCompat;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
@@ -30,6 +37,7 @@ import com.google.firebase.messaging.FirebaseMessaging;
 public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "EcoleTrackAndroid";
+    private static final int REQUEST_POST_NOTIFICATIONS = 1001;
     private String apiServerUrl;
     private static final String APP_INDEX_URL = "file:///android_asset/index.html";
     private static final String LOADING_HTML = "<!doctype html><html lang='fr'><head><meta charset='utf-8' />" +
@@ -51,6 +59,22 @@ public class MainActivity extends AppCompatActivity {
     private WebView webView;
     private String pendingFcmToken;
 
+    private final BroadcastReceiver fcmTokenReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (intent == null) {
+                return;
+            }
+            String token = intent.getStringExtra(FcmTokenHelper.EXTRA_FCM_TOKEN);
+            if (token == null || token.isEmpty()) {
+                return;
+            }
+            Log.i(TAG, "[FCM] broadcast received token: " + token);
+            pendingFcmToken = token;
+            dispatchFcmTokenToWebView(token);
+        }
+    };
+
     private String readIndexHtmlFromAssets() throws java.io.IOException {
         try (java.io.InputStream inputStream = getAssets().open("index.html")) {
             return new String(inputStream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
@@ -63,18 +87,7 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        String escapedToken = token.replace("\\", "\\\\").replace("'", "\\'").replace("\"", "\\\"");
-        String script =
-        "if (window.setFcmToken) {" +
-        " window.setFcmToken('" + escapedToken + "');" +
-        "} else {" +
-        " console.log('[FCM] setFcmToken not ready');" +
-        "}";
-        webView.post(() -> {
-            if (webView != null) {
-                webView.evaluateJavascript(script, null);
-            }
-        });
+        FcmTokenHelper.dispatchTokenToWebView(webView, token);
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -126,6 +139,14 @@ public class MainActivity extends AppCompatActivity {
                 Log.i(TAG, message);
             }
         }, "AndroidBridge");
+
+        ensureNotificationPermission();
+        createNotificationChannel();
+        registerReceiver(fcmTokenReceiver, new IntentFilter(FcmTokenHelper.ACTION_FCM_TOKEN_UPDATED), Context.RECEIVER_NOT_EXPORTED);
+        String savedFcmToken = FcmTokenHelper.getSavedToken(this);
+        if (savedFcmToken != null && !savedFcmToken.isEmpty()) {
+            pendingFcmToken = savedFcmToken;
+        }
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
@@ -186,7 +207,7 @@ public class MainActivity extends AppCompatActivity {
                             "window.AndroidBridge && window.AndroidBridge.log('[EcoleTrack] API base set: ' + '" + apiServerUrl + "');";
                 view.evaluateJavascript(js, null);
 
-                if (pendingFcmToken != null) {
+                        if (pendingFcmToken != null) {
                     dispatchFcmTokenToWebView(pendingFcmToken);
                     pendingFcmToken = null;
                 }
@@ -215,28 +236,70 @@ public class MainActivity extends AppCompatActivity {
         Log.i(TAG, "API base URL configured: " + apiServerUrl);
         webView.setWebChromeClient(new WebChromeClient());
 
-FirebaseMessaging.getInstance().getToken()
-        .addOnCompleteListener(task -> {
-            if (!task.isSuccessful()) {
-                Log.w(TAG, "Impossible de récupérer le token Firebase", task.getException());
-                return;
-            }
+        FirebaseMessaging.getInstance().getToken()
+            .addOnCompleteListener(task -> {
+                if (!task.isSuccessful()) {
+                    Log.w(TAG, "Impossible de récupérer le token Firebase", task.getException());
+                    return;
+                }
 
-            String token = task.getResult();
-            Log.i(TAG, "TOKEN_FCM_PARENT = " + token);
-            dispatchFcmTokenToWebView(token);
-        });
+                String token = task.getResult();
+                Log.i(TAG, "TOKEN_FCM_PARENT = " + token);
+                FcmTokenHelper.savePendingToken(MainActivity.this, token);
+                dispatchFcmTokenToWebView(token);
+            });
 
-webView.setBackgroundColor(Color.parseColor("#0f172a"));
+        webView.setBackgroundColor(Color.parseColor("#0f172a"));
         webView.loadDataWithBaseURL(null, LOADING_HTML, "text/html", "UTF-8", null);
         // Charge l'application avec un paramètre de cache-busting
         String cachebustedUrl = APP_INDEX_URL + "?v=" + System.currentTimeMillis();
         webView.post(() -> webView.loadUrl(cachebustedUrl));
-        webView.postDelayed(() -> {
-    if (pendingFcmToken != null) {
-        dispatchFcmTokenToWebView(pendingFcmToken);
     }
-}, 3000);
+
+    private void ensureNotificationPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            return;
+        }
+
+        if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
+            Log.i(TAG, "POST_NOTIFICATIONS permission already granted");
+            return;
+        }
+
+        Log.i(TAG, "Requesting POST_NOTIFICATIONS runtime permission");
+        ActivityCompat.requestPermissions(
+                this,
+                new String[]{android.Manifest.permission.POST_NOTIFICATIONS},
+                REQUEST_POST_NOTIFICATIONS
+        );
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQUEST_POST_NOTIFICATIONS) {
+            boolean granted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+            Log.i(TAG, "POST_NOTIFICATIONS permission result=" + granted);
+        }
+    }
+
+    private void createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (manager == null) {
+                Log.e(TAG, "NotificationManager unavailable while creating channel");
+                return;
+            }
+
+            NotificationChannel channel = new NotificationChannel(
+                    "ecoletrack_notifications",
+                    "Notifications EcoleTrack",
+                    NotificationManager.IMPORTANCE_HIGH
+            );
+            channel.setDescription("Alertes parents");
+            manager.createNotificationChannel(channel);
+            Log.i(TAG, "NotificationChannel created: ecoletrack_notifications");
+        }
     }
 
     @Override
@@ -260,6 +323,7 @@ webView.setBackgroundColor(Color.parseColor("#0f172a"));
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        unregisterReceiver(fcmTokenReceiver);
         Log.d(TAG, "[MainActivity] onDestroy ts=" + System.currentTimeMillis() + " url=" + (webView != null ? webView.getUrl() : "null"));
     }
 

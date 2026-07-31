@@ -507,17 +507,19 @@ app.post("/api/mobile/parent/devices/register-push-token", requireAuth, requireP
     });
   }
 
-  const { pushToken, platform, appVersion } = validation.data;
+  const { pushToken, platform, appVersion, deviceId } = validation.data;
 
 console.log("PUSH TOKEN RECU :", {
   parentId,
   pushToken,
   platform,
-  appVersion
+  appVersion,
+  deviceId
 });
 
 const device = await store.registerPushToken(
   parentId,
+  deviceId,
   pushToken,
   platform,
   appVersion

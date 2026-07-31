@@ -83,7 +83,20 @@ export async function sendPushNotification(
       title,
       body,
     },
-  };
+    data: {
+      title,
+      body,
+    },
+    android: {
+      priority: "high" as const,
+      notification: {
+        channelId: "ecoletrack_notifications",
+        defaultSound: true,
+        defaultVibrateTimings: true,
+        visibility: "public" as const,
+      },
+    },
+  } as const;
 
   try {
     const response = await getMessaging().send(message);

@@ -41,12 +41,16 @@ export async function initializeMobileTables() {
     CREATE TABLE IF NOT EXISTS mobile_parent_devices (
       id SERIAL PRIMARY KEY,
       parent_id TEXT NOT NULL,
+      device_id TEXT,
       platform TEXT NOT NULL,
       push_token TEXT NOT NULL,
       app_version TEXT NOT NULL,
       last_seen_at TIMESTAMP DEFAULT now()
     );
-    CREATE UNIQUE INDEX IF NOT EXISTS mobile_parent_devices_unique_idx ON mobile_parent_devices (parent_id, platform, push_token);
+    ALTER TABLE mobile_parent_devices ADD COLUMN IF NOT EXISTS device_id TEXT;
+    DROP INDEX IF EXISTS mobile_parent_devices_unique_idx;
+    CREATE UNIQUE INDEX IF NOT EXISTS mobile_parent_devices_device_idx ON mobile_parent_devices (parent_id, platform, device_id);
+    CREATE INDEX IF NOT EXISTS mobile_parent_devices_parent_platform_push_token_idx ON mobile_parent_devices (parent_id, platform, push_token);
   `);
 
   await pool.query(`
