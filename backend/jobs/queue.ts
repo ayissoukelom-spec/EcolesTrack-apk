@@ -1,5 +1,6 @@
 import { Logger } from "../utils/logger";
-import { sendPushNotification } from "../services/fcm";
+import { sendPushNotification, InvalidFcmTokenError } from "../services/fcm";
+import { store } from "../store";
 
 const logger = new Logger("QueueProcessor");
 
@@ -99,6 +100,33 @@ export class QueueManager {
         timestamp: new Date().toISOString(),
         message: errorMessage
       });
+
+      if (err instanceof InvalidFcmTokenError) {
+        const invalidToken = err.token;
+        const parentId = (job.data as any)?.parentId;
+
+        logger.warn(`Invalid FCM token detected, removing it and not retrying job: ${job.name} [ID: ${job.id}]`, {
+          jobId: job.id,
+          token: invalidToken,
+          parentId,
+          error: err.originalError,
+        });
+
+        if (parentId) {
+          try {
+            await store.deletePushToken(parentId, invalidToken);
+            logger.info(`Invalid FCM token removed from database`, { parentId, token: invalidToken });
+          } catch (deleteError) {
+            logger.error(`Failed to delete invalid FCM token from database`, deleteError, { parentId, token: invalidToken });
+          }
+        }
+
+        if (job.dedupeKey) {
+          completedJobIds.add(job.dedupeKey);
+        }
+
+        return;
+      }
 
       logger.error(`Job execution failed: ${job.name} [ID: ${job.id}]`, err);
 

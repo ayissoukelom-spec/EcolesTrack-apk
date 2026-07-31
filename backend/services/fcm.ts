@@ -1,7 +1,7 @@
 import { initializeApp, cert } from "firebase-admin/app";
 import { getMessaging } from "firebase-admin/messaging";
-import fs from "fs";
-import path from "path";
+import * as fs from "fs";
+import * as path from "path";
 
 const serviceAccountPath = path.join(
   process.cwd(),
@@ -16,6 +16,59 @@ const serviceAccount = JSON.parse(
 initializeApp({
   credential: cert(serviceAccount),
 });
+
+export class InvalidFcmTokenError extends Error {
+  public token: string;
+  public originalError: unknown;
+
+  constructor(token: string, originalError: unknown) {
+    super(`Invalid FCM registration token: ${token}`);
+    this.token = token;
+    this.originalError = originalError;
+    Object.setPrototypeOf(this, InvalidFcmTokenError.prototype);
+  }
+}
+
+export function isInvalidFcmTokenError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const rawCode = (error as any).code ?? (error as any)?.errorInfo?.code ?? "";
+  const code = typeof rawCode === "string" ? rawCode.toLowerCase() : "";
+  const message = String((error as any).message ?? "").toLowerCase();
+
+  const invalidCodes = new Set([
+    "messaging/registration-token-not-registered",
+    "messaging/invalid-registration-token",
+    "registration-token-not-registered",
+    "invalid-registration-token",
+    "notregistered",
+    "unregistered",
+  ]);
+
+  if (invalidCodes.has(code)) {
+    return true;
+  }
+
+  if (message.includes("invalid-registration-token")) {
+    return true;
+  }
+
+  if (message.includes("registration-token-not-registered")) {
+    return true;
+  }
+
+  if (message.includes("registration token") && message.includes("not registered")) {
+    return true;
+  }
+
+  if (message.includes("notregistered")) {
+    return true;
+  }
+
+  return false;
+}
 
 export async function sendPushNotification(
   token: string,
@@ -39,6 +92,11 @@ export async function sendPushNotification(
 
     return response;
   } catch (error) {
+    if (isInvalidFcmTokenError(error)) {
+      console.error("[FCM] Invalid token detected:", { token, error });
+      throw new InvalidFcmTokenError(token, error);
+    }
+
     console.error("[FCM] Erreur :", error);
     throw error;
   }

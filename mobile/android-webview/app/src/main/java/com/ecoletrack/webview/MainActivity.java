@@ -98,6 +98,7 @@ public class MainActivity extends AppCompatActivity {
 
         rootLayout.addView(webView);
         setContentView(rootLayout);
+        Log.d(TAG, "[MainActivity] onCreate ts=" + System.currentTimeMillis() + " url=" + (webView != null ? webView.getUrl() : "null"));
 
         ViewCompat.setOnApplyWindowInsetsListener(rootLayout, (view, insets) -> {
             Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
@@ -127,6 +128,13 @@ public class MainActivity extends AppCompatActivity {
         }, "AndroidBridge");
 
         webView.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                String requestedUrl = request != null && request.getUrl() != null ? request.getUrl().toString() : "null";
+                Log.d(TAG, "[WebViewClient] shouldOverrideUrlLoading ts=" + System.currentTimeMillis() + " requestedUrl=" + requestedUrl + " currentUrl=" + view.getUrl());
+                return false;
+            }
+
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                 if (request == null || request.getUrl() == null) {
@@ -158,11 +166,13 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
+                Log.d(TAG, "[WebViewClient] onPageStarted ts=" + System.currentTimeMillis() + " url=" + url + " currentUrl=" + view.getUrl());
                 view.setBackgroundColor(Color.parseColor("#0f172a"));
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
+                Log.d(TAG, "[WebViewClient] onPageFinished ts=" + System.currentTimeMillis() + " url=" + url + " currentUrl=" + view.getUrl());
                 view.setBackgroundColor(Color.TRANSPARENT);
 
                 if (url == null || (!url.startsWith("file:///android_asset/") && !url.contains("appassets.androidplatform.net"))) {
@@ -227,6 +237,30 @@ webView.setBackgroundColor(Color.parseColor("#0f172a"));
         dispatchFcmTokenToWebView(pendingFcmToken);
     }
 }, 3000);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        Log.d(TAG, "[MainActivity] onResume ts=" + System.currentTimeMillis() + " url=" + (webView != null ? webView.getUrl() : "null"));
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        Log.d(TAG, "[MainActivity] onPause ts=" + System.currentTimeMillis() + " url=" + (webView != null ? webView.getUrl() : "null"));
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        Log.d(TAG, "[MainActivity] onStop ts=" + System.currentTimeMillis() + " url=" + (webView != null ? webView.getUrl() : "null"));
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        Log.d(TAG, "[MainActivity] onDestroy ts=" + System.currentTimeMillis() + " url=" + (webView != null ? webView.getUrl() : "null"));
     }
 
     @Override

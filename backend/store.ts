@@ -746,6 +746,13 @@ export class PostgresStore {
     }));
   }
 
+  public async deletePushToken(parentId: string, token: string): Promise<void> {
+    await dbQuery(
+      `DELETE FROM mobile_parent_devices WHERE parent_id = $1 AND push_token = $2`,
+      [parentId, token]
+    );
+  }
+
   public async getNotificationPreferences(parentId: string): Promise<NotificationPreferences> {
     const { rows } = await dbQuery<{ push_enabled: boolean; whatsapp_enabled: boolean; sms_enabled: boolean; quiet_hours_start: string; quiet_hours_end: string }>(`
       SELECT push_enabled, whatsapp_enabled, sms_enabled, quiet_hours_start, quiet_hours_end
