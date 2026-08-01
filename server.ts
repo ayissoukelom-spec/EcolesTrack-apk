@@ -223,9 +223,9 @@ app.post("/api/mobile/parent/refresh-token", (req, res) => {
 });
 
 // 2. POST /api/mobile/parent/logout
-app.post("/api/mobile/parent/logout", requireAuth, requireParentRoleOnly, (req: AuthenticatedRequest, res) => {
+app.post("/api/mobile/parent/logout", requireAuth, requireParentRoleOnly, async (req: AuthenticatedRequest, res) => {
   const parentId = req.parent!.id;
-  const { refreshToken } = req.body;
+  const { refreshToken, deviceId, pushToken } = req.body ?? {};
 
   if (refreshToken) {
     AuthService.revokeSession(parentId, refreshToken);
@@ -233,7 +233,11 @@ app.post("/api/mobile/parent/logout", requireAuth, requireParentRoleOnly, (req: 
     AuthService.revokeAllSessions(parentId);
   }
 
-  logger.audit("PARENT_LOGOUT", parentId, { parentId }, "SUCCESS");
+  if (pushToken || deviceId) {
+    await store.deletePushToken(parentId, typeof pushToken === 'string' ? pushToken : undefined, typeof deviceId === 'string' ? deviceId : undefined);
+  }
+
+  logger.audit("PARENT_LOGOUT", parentId, { parentId, deviceId: typeof deviceId === 'string' ? deviceId : undefined }, "SUCCESS");
   return res.json({
     success: true,
     message: "Déconnexion réussie avec succès."

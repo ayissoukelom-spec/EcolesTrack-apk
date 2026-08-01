@@ -706,87 +706,82 @@ export class PostgresStore {
   }
 
   public async registerPushToken(parentId: string, deviceId: string, token: string, platform: 'android' | 'ios', appVersion: string) {
-    const { rows: existingRows } = await dbQuery<{ id: number; push_token: string }>(`
-      SELECT id, push_token
-      FROM mobile_parent_devices
-      WHERE parent_id = $1
-        AND platform = $2
-        AND device_id = $3
-    `, [parentId, platform, deviceId]);
+    const client = await pool.connect();
 
-    let rowId: number | null = null;
-    const now = new Date().toISOString();
+    try {
+      await client.query('BEGIN');
 
-    if (existingRows.length > 0) {
-      const existingRow = existingRows[0];
-      if (existingRow.push_token !== token) {
-        logger.info('Replacing existing FCM token for parent/device', { parentId, deviceId, platform, oldToken: existingRow.push_token, newToken: token });
-      } else {
-        logger.info('Refreshing existing FCM token metadata for parent/device', { parentId, deviceId, platform, token });
+      const { rows: existingRows } = await client.query<{ id: number; push_token: string }>(`
+        SELECT id, push_token
+        FROM mobile_parent_devices
+        WHERE parent_id = $1
+          AND platform = $2
+          AND device_id = $3
+      `, [parentId, platform, deviceId]);
+
+      let rowId: number | null = null;
+      const now = new Date().toISOString();
+
+      const oldAssociationsDeleteResult = await client.query(`
+        DELETE FROM mobile_parent_devices
+        WHERE push_token = $1
+          AND parent_id IS DISTINCT FROM $2
+      `, [token, parentId]);
+
+      if (oldAssociationsDeleteResult.rowCount > 0) {
+        logger.info('Removed stale FCM token associations for other parents', {
+          parentId,
+          token,
+          deleted: oldAssociationsDeleteResult.rowCount,
+        });
       }
 
-      const updateResult = await dbQuery<{ id: number }>(`
-        UPDATE mobile_parent_devices
-        SET push_token = $1,
-            app_version = $2,
-            last_seen_at = NOW()
-        WHERE id = $3
-        RETURNING id
-      `, [token, appVersion, existingRow.id]);
+      if (existingRows.length > 0) {
+        const existingRow = existingRows[0];
+        if (existingRow.push_token !== token) {
+          logger.info('Replacing existing FCM token for parent/device', { parentId, deviceId, platform, oldToken: existingRow.push_token, newToken: token });
+        } else {
+          logger.info('Refreshing existing FCM token metadata for parent/device', { parentId, deviceId, platform, token });
+        }
 
-      rowId = updateResult.rows[0]?.id ?? existingRow.id;
-    } else {
-      logger.info('Registering new FCM token for parent/device', { parentId, deviceId, platform, token });
-      const insertResult = await dbQuery<{ id: number }>(`
-        INSERT INTO mobile_parent_devices 
-          (parent_id, device_id, platform, push_token, app_version, last_seen_at)
-        VALUES ($1, $2, $3, $4, $5, NOW())
-        RETURNING id
-      `, [parentId, deviceId, platform, token, appVersion]);
+        const updateResult = await client.query<{ id: number }>(`
+          UPDATE mobile_parent_devices
+          SET push_token = $1,
+              app_version = $2,
+              last_seen_at = NOW()
+          WHERE id = $3
+          RETURNING id
+        `, [token, appVersion, existingRow.id]);
 
-      rowId = insertResult.rows[0]?.id ?? null;
-    }
+        rowId = updateResult.rows[0]?.id ?? existingRow.id;
+      } else {
+        logger.info('Registering new FCM token for parent/device', { parentId, deviceId, platform, token });
+        const insertResult = await client.query<{ id: number }>(`
+          INSERT INTO mobile_parent_devices 
+            (parent_id, device_id, platform, push_token, app_version, last_seen_at)
+          VALUES ($1, $2, $3, $4, $5, NOW())
+          RETURNING id
+        `, [parentId, deviceId, platform, token, appVersion]);
 
-    const duplicateTokenDeleteResult = await dbQuery(`
-      DELETE FROM mobile_parent_devices
-      WHERE parent_id = $1
-        AND platform = $2
-        AND push_token = $3
-        AND device_id IS DISTINCT FROM $4
-    `, [parentId, platform, token, deviceId]);
-    if (duplicateTokenDeleteResult.rowCount > 0) {
-      logger.info('Removed duplicate push token entries for same token on another device', {
+        rowId = insertResult.rows[0]?.id ?? null;
+      }
+
+      await client.query('COMMIT');
+
+      return {
+        id: String(rowId ?? 0),
         parentId,
         platform,
-        token,
-        deviceId,
-        deleted: duplicateTokenDeleteResult.rowCount,
-      });
+        pushToken: token,
+        appVersion,
+        lastSeenAt: now,
+      };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
     }
-
-    const staleAndroidDeleteResult = await dbQuery(`
-      DELETE FROM mobile_parent_devices
-      WHERE parent_id = $1
-        AND platform = 'android'
-        AND device_id IS DISTINCT FROM $2
-        AND last_seen_at < NOW() - INTERVAL '60 days'
-    `, [parentId, deviceId]);
-    if (staleAndroidDeleteResult.rowCount > 0) {
-      logger.info('Cleaned up stale Android push tokens', {
-        parentId,
-        deviceId,
-        deleted: staleAndroidDeleteResult.rowCount,
-      });
-    }
-
-    return {
-      id: String(rowId ?? 0),
-      parentId,
-      platform,
-      pushToken: token,
-      appVersion,
-      lastSeenAt: now,
-    };
   }
 
   public async getDevicesOfParent(parentId: string): Promise<ParentDevice[]> {
@@ -808,16 +803,33 @@ export class PostgresStore {
     }));
   }
 
-  public async deletePushToken(parentId: string, token: string): Promise<void> {
+  public async deletePushToken(parentId: string, token?: string, deviceId?: string): Promise<void> {
+    if (!token && !deviceId) {
+      return;
+    }
+
+    const conditions: string[] = ['parent_id = $1'];
+    const values: any[] = [parentId];
+
+    if (token) {
+      conditions.push(`push_token = $${values.length + 1}`);
+      values.push(token);
+    }
+
+    if (deviceId) {
+      conditions.push(`device_id = $${values.length + 1}`);
+      values.push(deviceId);
+    }
+
     const result = await dbQuery(
-      `DELETE FROM mobile_parent_devices WHERE parent_id = $1 AND push_token = $2`,
-      [parentId, token]
+      `DELETE FROM mobile_parent_devices WHERE ${conditions.join(' AND ')}`,
+      values
     );
 
     if (result.rowCount > 0) {
-      logger.info('Deleted invalid push token', { parentId, token, deleted: result.rowCount });
+      logger.info('Deleted FCM token association', { parentId, token, deviceId, deleted: result.rowCount });
     } else {
-      logger.warn('Attempted to delete push token but no matching row was found', { parentId, token });
+      logger.warn('Attempted to delete FCM token association but no matching row was found', { parentId, token, deviceId });
     }
   }
 

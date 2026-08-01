@@ -244,6 +244,8 @@ export default function App() {
 
   const handleLogout = () => {
     const currentToken = token;
+    const currentFcmToken = fcmToken ?? (typeof window !== "undefined" ? window.localStorage.getItem("fcm_token") : null);
+    const currentDeviceId = typeof window !== "undefined" ? window.localStorage.getItem("ecoletrack_device_id") : null;
 
     localStorage.removeItem("ecoletrack_token");
     localStorage.removeItem("ecoletrack_parent");
@@ -256,9 +258,21 @@ export default function App() {
       return;
     }
 
+    const logoutPayload: Record<string, string> = {};
+    if (currentFcmToken) {
+      logoutPayload.pushToken = currentFcmToken;
+    }
+    if (currentDeviceId) {
+      logoutPayload.deviceId = currentDeviceId;
+    }
+
     void fetch(withApiBase("/api/mobile/parent/logout"), {
       method: "POST",
-      headers: { "Authorization": `Bearer ${currentToken}` }
+      headers: {
+        "Authorization": `Bearer ${currentToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(logoutPayload)
     }).catch(() => undefined);
   };
 
