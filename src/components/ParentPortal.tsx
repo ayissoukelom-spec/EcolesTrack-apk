@@ -6,7 +6,7 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { 
   Lock, Mail, LogOut, User, Award, Calendar, Bell, Shield, 
-  CheckCircle2, XCircle, ChevronRight, School, Eye, AlertTriangle 
+  CheckCircle2, XCircle, ChevronRight, School, Eye, EyeOff, AlertTriangle 
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import logoImage from "../assets/logo.png";
@@ -50,6 +50,9 @@ export default function ParentPortal({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [childrenLoadError, setChildrenLoadError] = useState<string | null>(null);
   const [passwordResetRequired, setPasswordResetRequired] = useState(false);
   const [pendingResetEmail, setPendingResetEmail] = useState("");
@@ -839,7 +842,7 @@ export default function ParentPortal({
                   <div className="relative">
                     <Lock className="absolute left-3 top-3 h-4 w-4 text-slate-500 dark:text-slate-400" />
                     <input
-                      type={showPassword ? "text" : "password"}
+                      type={showCurrentPassword ? "text" : "password"}
                       value={pendingResetCurrentPassword}
                       onChange={(e) => setPendingResetCurrentPassword(e.target.value)}
                       placeholder="••••••••"
@@ -848,37 +851,59 @@ export default function ParentPortal({
                     />
                     <button
                       type="button"
-                      onClick={() => setShowPassword(!showPassword)}
+                      onClick={() => setShowCurrentPassword((prev) => !prev)}
                       className="absolute right-3 top-3 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
-                      aria-label={showPassword ? "Masquer le mot de passe" : "Afficher le mot de passe"}
+                      aria-label={showCurrentPassword ? "Masquer le mot de passe actuel" : "Afficher le mot de passe actuel"}
                     >
-                      <Eye className="h-4 w-4" />
+                      {showCurrentPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                     </button>
                   </div>
                 </div>
 
                 <div>
                   <label className="block text-xs font-semibold uppercase tracking-[0.15em] text-slate-700 dark:text-slate-300 mb-2">Nouveau mot de passe</label>
-                  <input
-                    type={showPassword ? "text" : "password"}
-                    value={pendingResetNewPassword}
-                    onChange={(e) => setPendingResetNewPassword(e.target.value)}
-                    placeholder="••••••••"
-                    className="w-full rounded-2xl border theme-border theme-input py-3 pl-4 pr-4 text-sm theme-text-primary shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                    required
-                  />
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-3 h-4 w-4 text-slate-500 dark:text-slate-400" />
+                    <input
+                      type={showNewPassword ? "text" : "password"}
+                      value={pendingResetNewPassword}
+                      onChange={(e) => setPendingResetNewPassword(e.target.value)}
+                      placeholder="••••••••"
+                      className="w-full rounded-2xl border theme-border theme-input py-3 pl-11 pr-11 text-sm theme-text-primary shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                      required
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowNewPassword((prev) => !prev)}
+                      className="absolute right-3 top-3 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+                      aria-label={showNewPassword ? "Masquer le nouveau mot de passe" : "Afficher le nouveau mot de passe"}
+                    >
+                      {showNewPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
                 </div>
 
                 <div>
                   <label className="block text-xs font-semibold uppercase tracking-[0.15em] text-slate-700 dark:text-slate-300 mb-2">Confirmer le nouveau mot de passe</label>
-                  <input
-                    type={showPassword ? "text" : "password"}
-                    value={pendingResetConfirmPassword}
-                    onChange={(e) => setPendingResetConfirmPassword(e.target.value)}
-                    placeholder="••••••••"
-                    className="w-full rounded-2xl border theme-border theme-input py-3 pl-4 pr-4 text-sm theme-text-primary shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                    required
-                  />
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-3 h-4 w-4 text-slate-500 dark:text-slate-400" />
+                    <input
+                      type={showConfirmPassword ? "text" : "password"}
+                      value={pendingResetConfirmPassword}
+                      onChange={(e) => setPendingResetConfirmPassword(e.target.value)}
+                      placeholder="••••••••"
+                      className="w-full rounded-2xl border theme-border theme-input py-3 pl-11 pr-11 text-sm theme-text-primary shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                      required
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowConfirmPassword((prev) => !prev)}
+                      className="absolute right-3 top-3 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+                      aria-label={showConfirmPassword ? "Masquer la confirmation du mot de passe" : "Afficher la confirmation du mot de passe"}
+                    >
+                      {showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
                 </div>
 
                 {(passwordResetError || errorMsg) && (
