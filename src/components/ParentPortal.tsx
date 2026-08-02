@@ -788,10 +788,10 @@ export default function ParentPortal({
   // Screen A: LOGIN SCREEN
   if (!token || !parent) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center min-h-screen px-4 py-8 theme-bg theme-text" id="login-screen">
+      <div className="flex-1 flex flex-col items-center justify-center min-h-screen px-4 py-4 sm:py-8 theme-bg theme-text overflow-y-auto" id="login-screen">
         <div className="w-full max-w-md">
-          <div className="rounded-[2rem] border theme-border theme-card p-7 shadow-2xl shadow-indigo-900/20">
-            <div className="flex flex-col items-center gap-4 mb-7 text-center">
+          <div className="rounded-[2rem] border theme-border theme-card p-6 sm:p-7 shadow-2xl shadow-indigo-900/20 max-h-[calc(100vh-2rem)] overflow-y-auto">
+            <div className="flex flex-col items-center gap-4 mb-6 text-center">
               <img
                 src={logoImage}
                 alt="Ecoles Track"
@@ -809,7 +809,7 @@ export default function ParentPortal({
               </div>
             </div>
 
-            <div className="space-y-2 mb-8">
+            <div className="space-y-2 mb-6">
               <h1 className="text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white">
                 {passwordResetRequired ? 'Changement de mot de passe requis' : 'Connexion parentale'}
               </h1>
@@ -821,7 +821,7 @@ export default function ParentPortal({
             </div>
 
             {passwordResetRequired ? (
-              <form onSubmit={handlePasswordReset} className="space-y-5">
+              <form onSubmit={handlePasswordReset} className="space-y-4">
                 <div>
                   <label className="block text-xs font-semibold uppercase tracking-[0.15em] text-slate-700 dark:text-slate-300 mb-2">Adresse email</label>
                   <input
