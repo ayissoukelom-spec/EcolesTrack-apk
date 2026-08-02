@@ -185,6 +185,18 @@ app.post("/api/mobile/parent/login", rateLimit(15, 60000), async (req, res) => {
     });
   }
 
+  let localMustReset = false;
+  if (typeof user.mustReset !== "undefined" && user.mustReset !== null) {
+    localMustReset = Boolean(user.mustReset);
+  } else if (user.passwordHash && user.salt) {
+    try {
+      const defaultHash = crypto.pbkdf2Sync("123456", user.salt, 310000, 64, "sha512").toString("hex");
+      localMustReset = user.passwordHash === defaultHash;
+    } catch {
+      localMustReset = false;
+    }
+  }
+
   const session = AuthService.createSession(user.id, user.role);
   const parentDetails = {
     id: user.id,
@@ -195,12 +207,60 @@ app.post("/api/mobile/parent/login", rateLimit(15, 60000), async (req, res) => {
     schools: user.schools
   };
 
-  logger.audit("PARENT_LOGIN_SUCCESS", user.id, { email }, "SUCCESS");
+  logger.audit("PARENT_LOGIN_SUCCESS", user.id, { email, mustReset: localMustReset }, "SUCCESS");
   return res.json({
     parent: parentDetails,
     token: session.accessToken,
-    refreshToken: session.refreshToken
+    refreshToken: session.refreshToken,
+    mustReset: localMustReset
   });
+});
+
+app.post("/api/mobile/parent/change-password", rateLimit(15, 60000), async (req, res) => {
+  const { email, currentPassword, newPassword } = req.body ?? {};
+  if (!email || !currentPassword || !newPassword) {
+    return res.status(400).json({
+      error: "Email, mot de passe actuel et nouveau mot de passe sont requis.",
+      code: "BAD_REQUEST"
+    });
+  }
+
+  if (newPassword === "123456") {
+    return res.status(400).json({
+      error: "Le nouveau mot de passe ne peut pas être le mot de passe par défaut.",
+      code: "INVALID_PASSWORD"
+    });
+  }
+
+  const user = await store.findParentByEmail(email);
+  if (!user) {
+    return res.status(401).json({
+      error: "Identifiants de connexion incorrects.",
+      code: "BAD_CREDENTIALS"
+    });
+  }
+
+  const currentPasswordValid = await store.verifyParentPassword(email, currentPassword);
+  if (!currentPasswordValid) {
+    return res.status(401).json({
+      error: "Mot de passe actuel incorrect.",
+      code: "BAD_CREDENTIALS"
+    });
+  }
+
+  if (!user.salt) {
+    return res.status(500).json({
+      error: "Impossible de changer le mot de passe pour ce compte.",
+      code: "INTERNAL_ERROR"
+    });
+  }
+
+  const newSalt = crypto.randomBytes(16).toString("hex");
+  const newHash = crypto.pbkdf2Sync(newPassword, newSalt, 310000, 64, "sha512").toString("hex");
+  await dbQuery(`UPDATE local_auths SET password_hash = $1, salt = $2, must_reset = false WHERE user_id = $3`, [newHash, newSalt, Number(user.id)]);
+
+  logger.audit("PARENT_CHANGE_PASSWORD", user.id, { email }, "SUCCESS");
+  return res.json({ success: true });
 });
 
 // 1b. POST /api/mobile/parent/refresh-token (Refresh Token Rotation - RTR)

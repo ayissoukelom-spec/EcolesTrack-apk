@@ -321,9 +321,9 @@ export class PostgresStore {
     }) as Parent;
   }
 
-  private async getParentByEmail(email: string): Promise<(Parent & { passwordHash: string; role: string; salt?: string }) | null> {
-    const { rows } = await dbQuery<{ user_id: number; email: string; name: string; role: string; phone: string | null; school_id: number | null; password_hash: string | null; salt: string | null }>(`
-      SELECT u.id AS user_id, u.email, u.name, u.role, p.phone, u.school_id, la.password_hash, la.salt
+  private async getParentByEmail(email: string): Promise<(Parent & { passwordHash: string; role: string; salt?: string; mustReset?: boolean }) | null> {
+    const { rows } = await dbQuery<{ user_id: number; email: string; name: string; role: string; phone: string | null; school_id: number | null; password_hash: string | null; salt: string | null; must_reset: boolean | null }>(`
+      SELECT u.id AS user_id, u.email, u.name, u.role, p.phone, u.school_id, la.password_hash, la.salt, la.must_reset
       FROM users u
       LEFT JOIN parents p ON p.user_id = u.id
       LEFT JOIN local_auths la ON la.user_id = u.id
@@ -341,7 +341,7 @@ export class PostgresStore {
       WHERE us.user_id = $1 AND us.is_active = true
     `, [row.user_id]);
 
-    const parent: Parent & { passwordHash: string; role: string; salt?: string } = {
+    const parent: Parent & { passwordHash: string; role: string; salt?: string; mustReset?: boolean } = {
       ...(mapWebParentToMobileParent({
         userId: row.user_id,
         userEmail: row.email,
@@ -354,6 +354,7 @@ export class PostgresStore {
       passwordHash: row.password_hash ?? '',
       role: row.role,
       salt: row.salt ?? undefined,
+      mustReset: row.must_reset == null ? undefined : Boolean(row.must_reset),
     };
 
     return parent;

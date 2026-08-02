@@ -24,6 +24,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 // server.ts
 var import_express = __toESM(require("express"), 1);
 var import_path2 = __toESM(require("path"), 1);
+var import_crypto2 = __toESM(require("crypto"), 1);
 var import_vite = require("vite");
 
 // backend/store.ts
@@ -235,7 +236,7 @@ var PostgresStore = class {
   }
   async getParentByEmail(email) {
     const { rows } = await dbQuery(`
-      SELECT u.id AS user_id, u.email, u.name, u.role, p.phone, u.school_id, la.password_hash, la.salt
+      SELECT u.id AS user_id, u.email, u.name, u.role, p.phone, u.school_id, la.password_hash, la.salt, la.must_reset
       FROM users u
       LEFT JOIN parents p ON p.user_id = u.id
       LEFT JOIN local_auths la ON la.user_id = u.id
@@ -262,7 +263,8 @@ var PostgresStore = class {
       }),
       passwordHash: row.password_hash ?? "",
       role: row.role,
-      salt: row.salt ?? void 0
+      salt: row.salt ?? void 0,
+      mustReset: row.must_reset == null ? void 0 : Boolean(row.must_reset)
     };
     return parent;
   }
@@ -1516,6 +1518,17 @@ app.post("/api/mobile/parent/login", rateLimit(15, 6e4), async (req, res) => {
       details: { role: user.role }
     });
   }
+  let localMustReset = false;
+  if (typeof user.mustReset !== "undefined" && user.mustReset !== null) {
+    localMustReset = Boolean(user.mustReset);
+  } else if (user.passwordHash && user.salt) {
+    try {
+      const defaultHash = import_crypto2.default.pbkdf2Sync("123456", user.salt, 31e4, 64, "sha512").toString("hex");
+      localMustReset = user.passwordHash === defaultHash;
+    } catch {
+      localMustReset = false;
+    }
+  }
   const session = AuthService.createSession(user.id, user.role);
   const parentDetails = {
     id: user.id,
@@ -1525,12 +1538,53 @@ app.post("/api/mobile/parent/login", rateLimit(15, 6e4), async (req, res) => {
     activeSchoolId: user.activeSchoolId,
     schools: user.schools
   };
-  logger6.audit("PARENT_LOGIN_SUCCESS", user.id, { email }, "SUCCESS");
+  logger6.audit("PARENT_LOGIN_SUCCESS", user.id, { email, mustReset: localMustReset }, "SUCCESS");
   return res.json({
     parent: parentDetails,
     token: session.accessToken,
-    refreshToken: session.refreshToken
+    refreshToken: session.refreshToken,
+    mustReset: localMustReset
   });
+});
+app.post("/api/mobile/parent/change-password", rateLimit(15, 6e4), async (req, res) => {
+  const { email, currentPassword, newPassword } = req.body ?? {};
+  if (!email || !currentPassword || !newPassword) {
+    return res.status(400).json({
+      error: "Email, mot de passe actuel et nouveau mot de passe sont requis.",
+      code: "BAD_REQUEST"
+    });
+  }
+  if (newPassword === "123456") {
+    return res.status(400).json({
+      error: "Le nouveau mot de passe ne peut pas \xEAtre le mot de passe par d\xE9faut.",
+      code: "INVALID_PASSWORD"
+    });
+  }
+  const user = await store.findParentByEmail(email);
+  if (!user) {
+    return res.status(401).json({
+      error: "Identifiants de connexion incorrects.",
+      code: "BAD_CREDENTIALS"
+    });
+  }
+  const currentPasswordValid = await store.verifyParentPassword(email, currentPassword);
+  if (!currentPasswordValid) {
+    return res.status(401).json({
+      error: "Mot de passe actuel incorrect.",
+      code: "BAD_CREDENTIALS"
+    });
+  }
+  if (!user.salt) {
+    return res.status(500).json({
+      error: "Impossible de changer le mot de passe pour ce compte.",
+      code: "INTERNAL_ERROR"
+    });
+  }
+  const newSalt = import_crypto2.default.randomBytes(16).toString("hex");
+  const newHash = import_crypto2.default.pbkdf2Sync(newPassword, newSalt, 31e4, 64, "sha512").toString("hex");
+  await dbQuery(`UPDATE local_auths SET password_hash = $1, salt = $2, must_reset = false WHERE user_id = $3`, [newHash, newSalt, Number(user.id)]);
+  logger6.audit("PARENT_CHANGE_PASSWORD", user.id, { email }, "SUCCESS");
+  return res.json({ success: true });
 });
 app.post("/api/mobile/parent/refresh-token", (req, res) => {
   const { refreshToken } = req.body;

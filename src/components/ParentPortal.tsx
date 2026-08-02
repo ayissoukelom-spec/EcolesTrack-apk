@@ -51,6 +51,13 @@ export default function ParentPortal({
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [childrenLoadError, setChildrenLoadError] = useState<string | null>(null);
+  const [passwordResetRequired, setPasswordResetRequired] = useState(false);
+  const [pendingResetEmail, setPendingResetEmail] = useState("");
+  const [pendingResetCurrentPassword, setPendingResetCurrentPassword] = useState("");
+  const [pendingResetNewPassword, setPendingResetNewPassword] = useState("");
+  const [pendingResetConfirmPassword, setPendingResetConfirmPassword] = useState("");
+  const [passwordResetError, setPasswordResetError] = useState<string | null>(null);
+  const [isResettingPassword, setIsResettingPassword] = useState(false);
 
   // Parent app active state loaded from endpoints
   const [children, setChildren] = useState<Child[]>([]);
@@ -234,7 +241,7 @@ export default function ParentPortal({
         body: JSON.stringify({ email: loginEmail, password: loginPass })
       });
 
-      const data = await parseJsonSafe<{ token?: string; parent?: Parent; refreshToken?: string; error?: string }>(response);
+      const data = await parseJsonSafe<{ token?: string; parent?: Parent; refreshToken?: string; error?: string; mustReset?: boolean; }>(response);
 
       if (!response.ok) {
         throw new Error(getApiErrorMessage(data, "Une erreur est survenue lors de la connexion."));
@@ -244,15 +251,78 @@ export default function ParentPortal({
         throw new Error("Le serveur a renvoye une reponse incomplete. Verifiez la connexion API.");
       }
 
+      if (data.mustReset) {
+        setPasswordResetRequired(true);
+        setPendingResetEmail(loginEmail);
+        setPendingResetCurrentPassword("");
+        setPendingResetNewPassword("");
+        setPendingResetConfirmPassword("");
+        setErrorMsg("Votre compte nécessite un changement de mot de passe avant de continuer.");
+        return;
+      }
+
       // Success
       onLoginSuccess(data.token, data.parent, data.refreshToken);
       setEmail("");
       setPassword("");
-   } catch (err: any) {
-  console.error("[LOGIN ERROR]", err);
-  setErrorMsg(err.message || "Erreur de connexion");
-} finally {
+    } catch (err: any) {
+      console.error("[LOGIN ERROR]", err);
+      setErrorMsg(err.message || "Erreur de connexion");
+    } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handlePasswordReset = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setPasswordResetError(null);
+
+    if (!pendingResetEmail || !pendingResetCurrentPassword) {
+      setPasswordResetError("Les informations de connexion sont manquantes.");
+      return;
+    }
+
+    if (!pendingResetNewPassword.trim()) {
+      setPasswordResetError("Veuillez saisir un nouveau mot de passe.");
+      return;
+    }
+
+    if (pendingResetNewPassword !== pendingResetConfirmPassword) {
+      setPasswordResetError("Les mots de passe ne correspondent pas.");
+      return;
+    }
+
+    setIsResettingPassword(true);
+    try {
+      const response = await fetch(withApiBase("/api/mobile/parent/change-password"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: pendingResetEmail,
+          currentPassword: pendingResetCurrentPassword,
+          newPassword: pendingResetNewPassword
+        })
+      });
+
+      const data = await parseJsonSafe<{ success?: boolean; error?: string }>(response);
+      if (!response.ok || !data?.success) {
+        throw new Error(getApiErrorMessage(data, "Impossible de changer le mot de passe."));
+      }
+
+      setPasswordResetRequired(false);
+      setErrorMsg(null);
+      setPasswordResetError(null);
+      setPassword("");
+      setPendingResetCurrentPassword("");
+      setPendingResetNewPassword("");
+      setPendingResetConfirmPassword("");
+
+      await handleLogin(undefined, pendingResetEmail, pendingResetNewPassword);
+    } catch (err: any) {
+      console.error("[PASSWORD RESET ERROR]", err);
+      setPasswordResetError(err.message || "Impossible de changer le mot de passe.");
+    } finally {
+      setIsResettingPassword(false);
     }
   };
 
@@ -740,70 +810,178 @@ export default function ParentPortal({
             </div>
 
             <div className="space-y-2 mb-8">
-              <h1 className="text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white">Connexion parentale</h1>
-              <p className="text-sm leading-6 text-slate-600 dark:text-slate-400">Utilisez votre email et mot de passe fournis par l&apos;école pour accéder aux notes, absences et messages.</p>
+              <h1 className="text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white">
+                {passwordResetRequired ? 'Changement de mot de passe requis' : 'Connexion parentale'}
+              </h1>
+              <p className="text-sm leading-6 text-slate-600 dark:text-slate-400">
+                {passwordResetRequired
+                  ? 'Pour continuer, veuillez définir un nouveau mot de passe sécurisé.'
+                  : 'Utilisez votre email et mot de passe fournis par l\'école pour accéder aux notes, absences et messages.'}
+              </p>
             </div>
 
-            <form onSubmit={handleLogin} className="space-y-5">
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-[0.15em] text-slate-700 dark:text-slate-300 mb-2">Adresse email</label>
-                <div className="relative">
-                  <Mail className="absolute left-3 top-3 h-4 w-4 text-slate-500 dark:text-slate-400" />
+            {passwordResetRequired ? (
+              <form onSubmit={handlePasswordReset} className="space-y-5">
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-[0.15em] text-slate-700 dark:text-slate-300 mb-2">Adresse email</label>
                   <input
                     type="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
+                    value={pendingResetEmail}
+                    onChange={(e) => setPendingResetEmail(e.target.value)}
                     placeholder="nom@email.com"
-                    className="w-full rounded-2xl border theme-border theme-input py-3 pl-11 pr-4 text-sm theme-text-primary shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                    className="w-full rounded-2xl border theme-border theme-input py-3 px-4 text-sm theme-text-primary shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                     required
                   />
                 </div>
-              </div>
 
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-[0.15em] text-slate-700 dark:text-slate-300 mb-2">Mot de passe</label>
-                <div className="relative">
-                  <Lock className="absolute left-3 top-3 h-4 w-4 text-slate-500 dark:text-slate-400" />
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-[0.15em] text-slate-700 dark:text-slate-300 mb-2">Mot de passe actuel</label>
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-3 h-4 w-4 text-slate-500 dark:text-slate-400" />
+                    <input
+                      type={showPassword ? "text" : "password"}
+                      value={pendingResetCurrentPassword}
+                      onChange={(e) => setPendingResetCurrentPassword(e.target.value)}
+                      placeholder="••••••••"
+                      className="w-full rounded-2xl border theme-border theme-input py-3 pl-11 pr-11 text-sm theme-text-primary shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                      required
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-3 top-3 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+                      aria-label={showPassword ? "Masquer le mot de passe" : "Afficher le mot de passe"}
+                    >
+                      <Eye className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-[0.15em] text-slate-700 dark:text-slate-300 mb-2">Nouveau mot de passe</label>
                   <input
                     type={showPassword ? "text" : "password"}
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
+                    value={pendingResetNewPassword}
+                    onChange={(e) => setPendingResetNewPassword(e.target.value)}
                     placeholder="••••••••"
-                    className="w-full rounded-2xl border theme-border theme-input py-3 pl-11 pr-11 text-sm theme-text-primary shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                    className="w-full rounded-2xl border theme-border theme-input py-3 pl-4 pr-4 text-sm theme-text-primary shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                     required
                   />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-[0.15em] text-slate-700 dark:text-slate-300 mb-2">Confirmer le nouveau mot de passe</label>
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    value={pendingResetConfirmPassword}
+                    onChange={(e) => setPendingResetConfirmPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full rounded-2xl border theme-border theme-input py-3 pl-4 pr-4 text-sm theme-text-primary shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                    required
+                  />
+                </div>
+
+                {(passwordResetError || errorMsg) && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -5 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="rounded-2xl border border-rose-300/80 bg-rose-50/90 p-3 text-sm text-rose-700 dark:border-rose-800/70 dark:bg-rose-950/50 dark:text-rose-200"
+                  >
+                    <div className="flex items-start gap-2">
+                      <XCircle className="h-4 w-4 text-rose-600 dark:text-rose-300 mt-0.5" />
+                      <span>{passwordResetError || errorMsg}</span>
+                    </div>
+                  </motion.div>
+                )}
+
+                <div className="flex flex-col gap-3">
+                  <button
+                    type="submit"
+                    disabled={isResettingPassword}
+                    className="w-full rounded-2xl bg-gradient-to-r from-indigo-600 via-violet-600 to-emerald-500 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-indigo-900/20 transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {isResettingPassword ? "Mise à jour..." : "Changer le mot de passe"}
+                  </button>
                   <button
                     type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-3 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
-                    aria-label={showPassword ? "Masquer le mot de passe" : "Afficher le mot de passe"}
+                    onClick={() => {
+                      setPasswordResetRequired(false);
+                      setPendingResetEmail("");
+                      setPendingResetCurrentPassword("");
+                      setPendingResetNewPassword("");
+                      setPendingResetConfirmPassword("");
+                      setPassword("");
+                      setErrorMsg(null);
+                      setPasswordResetError(null);
+                    }}
+                    className="w-full rounded-2xl border border-slate-300/80 bg-slate-100 text-slate-900 px-5 py-3 text-sm font-bold transition hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    <Eye className="h-4 w-4" />
+                    Annuler
                   </button>
                 </div>
-              </div>
-
-              {errorMsg && (
-                <motion.div
-                  initial={{ opacity: 0, y: -5 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="rounded-2xl border border-rose-300/80 bg-rose-50/90 p-3 text-sm text-rose-700 dark:border-rose-800/70 dark:bg-rose-950/50 dark:text-rose-200"
-                >
-                  <div className="flex items-start gap-2">
-                    <XCircle className="h-4 w-4 text-rose-600 dark:text-rose-300 mt-0.5" />
-                    <span>{errorMsg}</span>
+              </form>
+            ) : (
+              <form onSubmit={handleLogin} className="space-y-5">
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-[0.15em] text-slate-700 dark:text-slate-300 mb-2">Adresse email</label>
+                  <div className="relative">
+                    <Mail className="absolute left-3 top-3 h-4 w-4 text-slate-500 dark:text-slate-400" />
+                    <input
+                      type="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="nom@email.com"
+                      className="w-full rounded-2xl border theme-border theme-input py-3 pl-11 pr-4 text-sm theme-text-primary shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                      required
+                    />
                   </div>
-                </motion.div>
-              )}
+                </div>
 
-              <button
-                type="submit"
-                disabled={isLoading}
-                className="w-full rounded-2xl bg-gradient-to-r from-indigo-600 via-violet-600 to-emerald-500 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-indigo-900/20 transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {isLoading ? "Connexion..." : "Se connecter"}
-              </button>
-            </form>
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-[0.15em] text-slate-700 dark:text-slate-300 mb-2">Mot de passe</label>
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-3 h-4 w-4 text-slate-500 dark:text-slate-400" />
+                    <input
+                      type={showPassword ? "text" : "password"}
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="••••••••"
+                      className="w-full rounded-2xl border theme-border theme-input py-3 pl-11 pr-11 text-sm theme-text-primary shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                      required
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-3 top-3 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+                      aria-label={showPassword ? "Masquer le mot de passe" : "Afficher le mot de passe"}
+                    >
+                      <Eye className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+
+                {errorMsg && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -5 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="rounded-2xl border border-rose-300/80 bg-rose-50/90 p-3 text-sm text-rose-700 dark:border-rose-800/70 dark:bg-rose-950/50 dark:text-rose-200"
+                  >
+                    <div className="flex items-start gap-2">
+                      <XCircle className="h-4 w-4 text-rose-600 dark:text-rose-300 mt-0.5" />
+                      <span>{errorMsg}</span>
+                    </div>
+                  </motion.div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={isLoading}
+                  className="w-full rounded-2xl bg-gradient-to-r from-indigo-600 via-violet-600 to-emerald-500 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-indigo-900/20 transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isLoading ? "Connexion..." : "Se connecter"}
+                </button>
+              </form>
+            )}
 
             <p className="mt-6 text-center text-xs text-slate-600 dark:text-slate-400">Connexion sécurisée pour les parents d&apos;élèves d&apos;Ecoles Track.</p>
           </div>
