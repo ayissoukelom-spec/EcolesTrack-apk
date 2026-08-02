@@ -97,7 +97,9 @@ function rateLimit(limit: number, windowMs: number) {
 // Authentication check
 const requireAuth = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   const authHeader = req.headers.authorization;
+  console.log("[AUTH_DEBUG] requireAuth Authorization header:", authHeader);
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    console.log("[AUTH_DEBUG] requireAuth missing or invalid Bearer header");
     return res.status(401).json({
       error: "Authentification requise. Jeton de session manquant.",
       code: "UNAUTHORIZED"
@@ -108,6 +110,7 @@ const requireAuth = (req: AuthenticatedRequest, res: Response, next: NextFunctio
   const decoded = verifyToken(token);
   
   if (!decoded) {
+    console.log("[AUTH_DEBUG] requireAuth token verification failed", { tokenLength: token?.length });
     return res.status(401).json({
       error: "Session invalide ou expirée. Veuillez vous reconnecter.",
       code: "INVALID_SESSION"
@@ -125,6 +128,7 @@ const requireAuth = (req: AuthenticatedRequest, res: Response, next: NextFunctio
 
 // Strict parental check
 const requireParentRoleOnly = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  console.log("[AUTH_DEBUG] requireParentRoleOnly parent role:", req.parent?.role, "url:", req.originalUrl);
   if (!req.parent || req.parent.role !== "parent") {
     // Audit trace logging
     console.warn(`[SECURITY VIOLATION] Attempted access with non-parent role: ${req.parent?.role || 'none'} on URL: ${req.originalUrl}`);
@@ -609,7 +613,7 @@ app.post("/api/mobile/parent/notifications/test", requireAuth, requireParentRole
     });
   }
 
-  const { title, message } = validation.data;
+  const { title, message, target } = validation.data;
 
   // Generate unique deduplication key for test triggers
   const dedupeKey = `test-${parentId}-${Date.now()}`;
@@ -618,7 +622,10 @@ app.post("/api/mobile/parent/notifications/test", requireAuth, requireParentRole
     title,
     message,
     'test',
-    { deepLink: 'ecoletrack://dashboard' },
+    {
+      deepLink: 'ecoletrack://dashboard',
+      ...(target ? { target } : {})
+    },
     dedupeKey
   );
 

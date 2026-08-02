@@ -58,6 +58,8 @@ public class MainActivity extends AppCompatActivity {
             "<div class='card'><h1>ÉcoleTrack</h1><p>Le chargement a échoué.</p><p><code>{DETAIL}</code></p></div></body></html>";
     private WebView webView;
     private String pendingFcmToken;
+    private String pendingTarget;
+    private static final String EXTRA_TARGET = "target";
 
     private final BroadcastReceiver fcmTokenReceiver = new BroadcastReceiver() {
         @Override
@@ -69,11 +71,33 @@ public class MainActivity extends AppCompatActivity {
             if (token == null || token.isEmpty()) {
                 return;
             }
-            Log.i(TAG, "[FCM] broadcast received token: " + token);
+            Log.i(TAG, "[FCM_DEBUG] Broadcast received token: " + token);
             pendingFcmToken = token;
             dispatchFcmTokenToWebView(token);
         }
     };
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        Log.d(TAG, "[MainActivity] onNewIntent ts=" + System.currentTimeMillis() + " intent=" + intent);
+        setIntent(intent);
+        handleIncomingIntent(intent);
+    }
+
+    private void handleIncomingIntent(Intent intent) {
+        if (intent == null) {
+            return;
+        }
+
+        String target = intent.getStringExtra(EXTRA_TARGET);
+        if (target != null && !target.trim().isEmpty()) {
+            pendingTarget = target;
+            Log.i(TAG, "[MainActivity] received target extra from intent: " + target);
+        } else {
+            Log.i(TAG, "[MainActivity] no target extra received; keeping default behavior");
+        }
+    }
 
     private String readIndexHtmlFromAssets() throws java.io.IOException {
         try (java.io.InputStream inputStream = getAssets().open("index.html")) {
@@ -87,13 +111,26 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
+        Log.i(TAG, "[FCM_DEBUG] dispatchFcmTokenToWebView called with token: " + token);
         FcmTokenHelper.dispatchTokenToWebView(webView, token);
+    }
+
+    private void dispatchTargetToWebView(String target) {
+        if (webView == null || target == null || target.trim().isEmpty()) {
+            return;
+        }
+
+        String escapedTarget = target.replace("\\", "\\\\").replace("'", "\\'");
+        String js = "window.setNotificationTarget && window.setNotificationTarget('" + escapedTarget + "');";
+        Log.i(TAG, "[MainActivity] dispatching target to WebView: " + target);
+        webView.evaluateJavascript(js, null);
     }
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        handleIncomingIntent(getIntent());
 
         WindowCompat.setDecorFitsSystemWindows(getWindow(), true);
 
@@ -145,7 +182,10 @@ public class MainActivity extends AppCompatActivity {
         registerReceiver(fcmTokenReceiver, new IntentFilter(FcmTokenHelper.ACTION_FCM_TOKEN_UPDATED), Context.RECEIVER_NOT_EXPORTED);
         String savedFcmToken = FcmTokenHelper.getSavedToken(this);
         if (savedFcmToken != null && !savedFcmToken.isEmpty()) {
+            Log.i(TAG, "[FCM_DEBUG] Recovered saved FCM token from SharedPreferences: " + savedFcmToken);
             pendingFcmToken = savedFcmToken;
+        } else {
+            Log.i(TAG, "[FCM_DEBUG] No saved FCM token found in SharedPreferences");
         }
 
         webView.setWebViewClient(new WebViewClient() {
@@ -207,9 +247,14 @@ public class MainActivity extends AppCompatActivity {
                             "window.AndroidBridge && window.AndroidBridge.log('[EcoleTrack] API base set: ' + '" + apiServerUrl + "');";
                 view.evaluateJavascript(js, null);
 
-                        if (pendingFcmToken != null) {
+                if (pendingFcmToken != null) {
                     dispatchFcmTokenToWebView(pendingFcmToken);
                     pendingFcmToken = null;
+                }
+
+                if (pendingTarget != null && !pendingTarget.trim().isEmpty()) {
+                    dispatchTargetToWebView(pendingTarget);
+                    pendingTarget = null;
                 }
             }
 
@@ -244,7 +289,7 @@ public class MainActivity extends AppCompatActivity {
                 }
 
                 String token = task.getResult();
-                Log.i(TAG, "TOKEN_FCM_PARENT = " + token);
+                Log.i(TAG, "[FCM_DEBUG] Firebase token fetched: " + token);
                 FcmTokenHelper.savePendingToken(MainActivity.this, token);
                 dispatchFcmTokenToWebView(token);
             });
@@ -325,6 +370,12 @@ public class MainActivity extends AppCompatActivity {
         super.onDestroy();
         unregisterReceiver(fcmTokenReceiver);
         Log.d(TAG, "[MainActivity] onDestroy ts=" + System.currentTimeMillis() + " url=" + (webView != null ? webView.getUrl() : "null"));
+    }
+
+    @Override
+    protected void onRestart() {
+        super.onRestart();
+        Log.d(TAG, "[MainActivity] onRestart ts=" + System.currentTimeMillis() + " url=" + (webView != null ? webView.getUrl() : "null"));
     }
 
     @Override

@@ -15,6 +15,7 @@ public class FcmTokenHelper {
     public static void savePendingToken(Context context, String token) {
         SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
         prefs.edit().putString(PREF_FCM_TOKEN, token).apply();
+        android.util.Log.i("EcoleTrackAndroid", "[FCM_DEBUG] Saved FCM token to SharedPreferences: " + token);
     }
 
     public static String getSavedToken(Context context) {
@@ -42,9 +43,12 @@ public class FcmTokenHelper {
         String script =
                 "if (window.setFcmToken) {" +
                 " window.setFcmToken('" + escapedToken + "');" +
+                " console.log('[FCM_DEBUG] window.setFcmToken called with token');" +
                 "} else {" +
-                " console.log('[FCM] setFcmToken not ready');" +
+                " console.log('[FCM_DEBUG] window.setFcmToken not ready');" +
                 "}";
+
+        android.util.Log.i("EcoleTrackAndroid", "[FCM_DEBUG] dispatchTokenToWebView sending token to JS: " + token);
 
         webView.post(() -> {
             if (webView != null) {

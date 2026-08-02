@@ -12,6 +12,7 @@ import {
 declare global {
   interface Window {
     setFcmToken?: (token: string) => void;
+    setNotificationTarget?: (target: string) => void;
   }
 }
 import ParentPortal from "./components/ParentPortal";
@@ -32,6 +33,170 @@ export default function App() {
     }
     return window.localStorage.getItem("fcm_token");
   });
+  const [refreshToken, setRefreshToken] = useState<string | null>(() => {
+    if (typeof window === "undefined") {
+      return null;
+    }
+    return window.localStorage.getItem("ecoletrack_refresh_token");
+  });
+  const refreshPromiseRef = useRef<Promise<string | null> | null>(null);
+
+  const decodeJwtPayload = (jwt: string): { exp?: number } | null => {
+    try {
+      const payloadPart = jwt.split(".")[1];
+      if (!payloadPart) return null;
+      const base64 = payloadPart
+        .replace(/-/g, "+")
+        .replace(/_/g, "/");
+      const padded = base64 + "==".slice((2 - base64.length * 3) & 3);
+      const decoded = atob(padded);
+      return JSON.parse(decoded) as { exp?: number };
+    } catch {
+      return null;
+    }
+  };
+
+  const isTokenExpiringSoon = (tokenToCheck: string) => {
+    const payload = decodeJwtPayload(tokenToCheck);
+    if (!payload?.exp) return false;
+    return Date.now() + 60_000 >= payload.exp;
+  };
+
+  const refreshAccessToken = async (): Promise<string | null> => {
+    if (refreshPromiseRef.current) {
+      return refreshPromiseRef.current;
+    }
+
+    if (!refreshToken) {
+      return null;
+    }
+
+    const promise = (async () => {
+      try {
+        const response = await fetch(withApiBase("/api/mobile/parent/refresh-token"), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ refreshToken })
+        });
+
+        if (!response.ok) {
+          return null;
+        }
+
+        const data = await parseJsonSafe<{ accessToken?: string; refreshToken?: string }>(response);
+        if (!data?.accessToken || !data?.refreshToken) {
+          return null;
+        }
+
+        window.localStorage.setItem("ecoletrack_token", data.accessToken);
+        window.localStorage.setItem("ecoletrack_refresh_token", data.refreshToken);
+        setToken(data.accessToken);
+        setRefreshToken(data.refreshToken);
+
+        return data.accessToken;
+      } catch {
+        return null;
+      } finally {
+        refreshPromiseRef.current = null;
+      }
+    })();
+
+    refreshPromiseRef.current = promise;
+    return promise;
+  };
+
+  const ensureValidAccessToken = async (): Promise<string | null> => {
+    if (!refreshToken) {
+      return token;
+    }
+
+    if (!token || isTokenExpiringSoon(token)) {
+      return await refreshAccessToken();
+    }
+
+    return token;
+  };
+
+  const performProtectedRequest = async (requestFactory: (authToken: string) => Promise<Response>) => {
+    let authToken = token;
+    if (!authToken) {
+      authToken = await refreshAccessToken();
+      if (!authToken) {
+        return null;
+      }
+    }
+
+    try {
+      let response = await requestFactory(authToken);
+      if (response.status === 401) {
+        const refreshedToken = await refreshAccessToken();
+        if (refreshedToken) {
+          authToken = refreshedToken;
+          response = await requestFactory(authToken);
+        }
+      }
+      return response;
+    } catch (e) {
+      throw e;
+    }
+  };
+
+  useEffect(() => {
+    console.log("[LIFECYCLE] App mounted", { tokenPresent: !!token, tokenLength: token?.length, parentPresent: !!parent });
+
+    const logTokenState = (label: string) => {
+      console.log("[LIFECYCLE] " + label, {
+        tokenPresent: !!token,
+        tokenLength: token?.length,
+        parentPresent: !!parent,
+        documentHidden: document.hidden
+      });
+    };
+
+    const handleVisibilityChange = () => {
+      logTokenState("visibilitychange");
+      if (document.visibilityState === "visible") {
+        void ensureValidAccessToken();
+      }
+    };
+    const handlePageShow = () => {
+      logTokenState("pageshow");
+      void ensureValidAccessToken();
+    };
+    const handlePageHide = () => logTokenState("pagehide");
+    const handleWindowFocus = () => {
+      logTokenState("window focus");
+      void ensureValidAccessToken();
+    };
+    const handleWindowBlur = () => logTokenState("window blur");
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("pageshow", handlePageShow);
+    window.addEventListener("pagehide", handlePageHide);
+    window.addEventListener("focus", handleWindowFocus);
+    window.addEventListener("blur", handleWindowBlur);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("pageshow", handlePageShow);
+      window.removeEventListener("pagehide", handlePageHide);
+      window.removeEventListener("focus", handleWindowFocus);
+      window.removeEventListener("blur", handleWindowBlur);
+    };
+  }, [token, parent]);
+
+  useEffect(() => {
+    console.log("[LIFECYCLE] token state changed", { tokenPresent: !!token, tokenLength: token?.length });
+  }, [token]);
+
+  useEffect(() => {
+    if (refreshToken && !token) {
+      void refreshAccessToken();
+    }
+  }, [refreshToken, token]);
+  const [notificationTarget, setNotificationTarget] = useState<string | null>(null);
   const lastRegisteredPushTokenRef = useRef<string | null>(null);
   const registeringPushTokenRef = useRef<string | null>(null);
   const deviceIdRef = useRef<string | null>(null);
@@ -63,28 +228,47 @@ export default function App() {
       setFcmToken?: (token: string) => void;
     };
 
+    console.log("[LIFECYCLE] App useEffect install JS bridges", { url: window.location.href, documentHidden: document.hidden });
+
     runtime.setFcmToken = (token: string) => {
-      console.log("[FCM] token received", token);
+      console.log("[FCM_DEBUG] React received token via window.setFcmToken", token);
       setFcmToken(token);
       window.localStorage.setItem("fcm_token", token);
+      console.log("[FCM_DEBUG] React stored fcm_token in localStorage");
+    };
+
+    runtime.setNotificationTarget = (target: string) => {
+      console.log("[FCM] notification target received", target);
+      setNotificationTarget(target);
     };
 
     return () => {
       delete runtime.setFcmToken;
+      delete runtime.setNotificationTarget;
     };
   }, []);
 
   useEffect(() => {
+    if (notificationTarget) {
+      console.log("[FCM] notification target state updated", notificationTarget);
+    }
+  }, [notificationTarget]);
+
+  useEffect(() => {
     const pushToken = fcmToken;
     if (!token || !pushToken) {
+      console.log("[FCM_DEBUG] registerPushToken skipped because token or pushToken missing", { token: !!token, pushToken: !!pushToken });
       return;
     }
+
+    console.log("[FCM_DEBUG] useEffect triggering registerPushToken", { token: !!token, pushTokenLength: pushToken.length });
 
     if (lastRegisteredPushTokenRef.current === pushToken || registeringPushTokenRef.current === pushToken) {
       return;
     }
 
     registeringPushTokenRef.current = pushToken;
+    console.log("[FCM_DEBUG] Calling registerPushToken from App.tsx");
     void registerPushToken(pushToken)
       .then((success) => {
         if (success) {
@@ -121,8 +305,6 @@ export default function App() {
   const [deliveryLogs, setDeliveryLogs] = useState<CompleteDeliveryLog[]>([]);
 
   const registerPushToken = async (pushToken: string) => {
-    if (!token) return false;
-
     const deviceId = getDeviceId();
     if (!deviceId) {
       console.error("[FCM] Impossible de générer un deviceId");
@@ -131,59 +313,59 @@ export default function App() {
 
     try {
       console.log("[FCM] URL register:", withApiBase("/api/mobile/parent/devices/register-push-token"));
-      console.log("[FCM] token length:", pushToken.length);
-      const response = await fetch(
-        withApiBase("/api/mobile/parent/devices/register-push-token"),
-        {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${token}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            pushToken,
-            platform: "android",
-            appVersion: "1.0.0",
-            deviceId
-          })
-        }
-      );
+      const response = await performProtectedRequest((authToken) => fetch(withApiBase("/api/mobile/parent/devices/register-push-token"), {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${authToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          pushToken,
+          platform: "android",
+          appVersion: "1.0.0",
+          deviceId
+        })
+      }));
 
-      if (response.ok) {
-        console.log("[FCM] Token enregistré sur le serveur");
-        return true;
+      if (!response) {
+        return false;
       }
 
-      console.log("[FCM] Erreur d'enregistrement :", response.status);
-      return false;
+      if (response.status === 403) {
+        handleLogout();
+        return false;
+      }
+
+      return response.ok;
     } catch (e) {
-      console.error("[FCM] Impossible d'enregistrer le token", e);
-      console.error("[FCM] details:", JSON.stringify(e, null, 2));
+      console.error("[FCM_DEBUG] registerPushToken threw", e);
       return false;
     }
   };
   // Fetch parent in-app notifications
-  const fetchNotifications = async () => {
-    if (!token) return;
-    try {
-      const response = await fetch(withApiBase("/api/mobile/parent/notifications"), {
-        headers: { "Authorization": `Bearer ${token}` }
-      });
-      if (response.status === 401 || response.status === 403) {
-        setNotifications([]);
-        handleLogout();
-        return;
-      }
-      if (response.ok) {
-        const raw = await response.clone().text();
-        console.log('[APK DEBUG] GET response', raw);
-        const data = await parseJsonSafe<AppNotification[]>(response.clone());
-        const mapped = Array.isArray(data) ? data : [];
-        console.log('[APK DEBUG] mapped notifications', mapped);
-        setNotifications(mapped);
-      }
-    } catch (e) {
-      console.error("Failed to fetch notifications", e);
+  const fetchNotifications = async (activeToken?: string) => {
+    const response = await performProtectedRequest((authToken) => fetch(withApiBase("/api/mobile/parent/notifications"), {
+      headers: { "Authorization": `Bearer ${authToken}` }
+    }));
+
+    if (!response) {
+      console.log("[AUTH_DEBUG] fetchNotifications skipped because token refresh failed or request failed");
+      return;
+    }
+
+    if (response.status === 403) {
+      setNotifications([]);
+      handleLogout();
+      return;
+    }
+
+    if (response.ok) {
+      const raw = await response.clone().text();
+      console.log('[APK DEBUG] GET response', raw);
+      const data = await parseJsonSafe<AppNotification[]>(response.clone());
+      const mapped = Array.isArray(data) ? data : [];
+      console.log('[APK DEBUG] mapped notifications', mapped);
+      setNotifications(mapped);
     }
   };
 
@@ -232,14 +414,21 @@ export default function App() {
   }, []);
 
   // Handlers for session authentication
-  const handleLoginSuccess = (newToken: string, newParent: Parent) => {
+  const handleLoginSuccess = (newToken: string, newParent: Parent, newRefreshToken: string) => {
+    console.log("[AUTH_DEBUG] handleLoginSuccess new session stored", {
+      hasToken: !!newToken,
+      tokenLength: newToken.length,
+      hasRefreshToken: !!newRefreshToken
+    });
     localStorage.setItem("ecoletrack_token", newToken);
+    localStorage.setItem("ecoletrack_refresh_token", newRefreshToken);
     localStorage.setItem("ecoletrack_parent", JSON.stringify(newParent));
     setToken(newToken);
+    setRefreshToken(newRefreshToken);
     setParent(newParent);
     setActiveTab("children");
     setSelectedChild(null);
-    fetchNotifications();
+    fetchNotifications(newToken);
   };
 
   const handleLogout = () => {
@@ -247,9 +436,21 @@ export default function App() {
     const currentFcmToken = fcmToken ?? (typeof window !== "undefined" ? window.localStorage.getItem("fcm_token") : null);
     const currentDeviceId = typeof window !== "undefined" ? window.localStorage.getItem("ecoletrack_device_id") : null;
 
+    console.log("[AUTH_DEBUG] handleLogout called", {
+      tokenPresent: !!currentToken,
+      tokenLength: currentToken?.length,
+      fcmTokenPresent: !!currentFcmToken,
+      deviceId: currentDeviceId,
+      documentHidden: typeof document !== "undefined" ? document.hidden : null,
+      url: typeof window !== "undefined" ? window.location.href : null
+    });
+
     localStorage.removeItem("ecoletrack_token");
+    localStorage.removeItem("ecoletrack_refresh_token");
     localStorage.removeItem("ecoletrack_parent");
     setToken(null);
+    setRefreshToken(null);
+    refreshPromiseRef.current = null;
     setParent(null);
     setNotifications([]);
     setSelectedChild(null);
@@ -301,6 +502,7 @@ export default function App() {
           parent={parent}
           onLoginSuccess={handleLoginSuccess}
           onLogout={handleLogout}
+          refreshAccessToken={refreshAccessToken}
           activeTab={activeTab}
           setActiveTab={setActiveTab}
           selectedChild={selectedChild}
@@ -407,6 +609,7 @@ export default function App() {
             parent={parent}
             onLoginSuccess={handleLoginSuccess}
             onLogout={handleLogout}
+            refreshAccessToken={refreshAccessToken}
             activeTab={activeTab}
             setActiveTab={setActiveTab}
             selectedChild={selectedChild}

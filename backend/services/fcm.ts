@@ -73,7 +73,8 @@ export function isInvalidFcmTokenError(error: unknown): boolean {
 export async function sendPushNotification(
   token: string,
   title: string,
-  body: string
+  body: string,
+  target: string = "home"
 ) {
   console.log("[FCM] Token :", token);
 
@@ -86,6 +87,7 @@ export async function sendPushNotification(
     data: {
       title,
       body,
+      target,
     },
     android: {
       priority: "high" as const,

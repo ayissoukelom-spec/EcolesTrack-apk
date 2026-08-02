@@ -66,6 +66,10 @@ export class NotificationService {
         parentChannelsToDeliver.push("push");
       }
 
+      const target = typeof metadata?.target === "string" && metadata.target.trim().length > 0
+        ? metadata.target
+        : "home";
+
       if (isWhatsappAuthorized) {
         parentChannelsToDeliver.push("whatsapp");
       }
@@ -94,6 +98,7 @@ export class NotificationService {
               message,
               category,
               metadata,
+              target,
               token
             }, {
               priority,

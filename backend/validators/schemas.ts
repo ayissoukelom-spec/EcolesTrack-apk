@@ -32,7 +32,8 @@ export const NotificationPreferencesSchema = z.object({
 // 4. Test Notification schema
 export const TestNotificationSchema = z.object({
   title: z.string().min(1, { message: "Le titre est requis." }),
-  message: z.string().min(1, { message: "Le message est requis." })
+  message: z.string().min(1, { message: "Le message est requis." }),
+  target: z.string().min(1).optional()
 });
 
 // 5. Simulation Add Absence schema

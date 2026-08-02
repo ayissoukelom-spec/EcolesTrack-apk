@@ -167,7 +167,8 @@ export class QueueManager {
     const {
       token,
       title,
-      message
+      message,
+      target = "home"
     } = job.data;
 
     if (!token) {
@@ -177,7 +178,8 @@ export class QueueManager {
     await sendPushNotification(
       token,
       title,
-      message
+      message,
+      target
     );
 
     logger.info("Push notification sent successfully", {

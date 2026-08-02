@@ -43,6 +43,7 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
 
         String title = "EcoleTrack";
         String message = "Vous avez une nouvelle notification";
+        String target = null;
 
         if (notificationTitle != null && !notificationTitle.isEmpty()) {
             title = notificationTitle;
@@ -61,13 +62,19 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
             if (remoteMessage.getData().containsKey("message")) {
                 message = remoteMessage.getData().get("message");
             }
+            if (remoteMessage.getData().containsKey("target")) {
+                target = remoteMessage.getData().get("target");
+                Log.i(TAG, "[FCM] received target from payload: " + target);
+            } else {
+                Log.i(TAG, "[FCM] no target in payload; keeping default behavior");
+            }
         }
 
         Log.i(TAG, "final notification title=" + title + " body=" + message);
-        showNotification(title, message);
+        showNotification(title, message, target);
     }
 
-    private void showNotification(String title, String message) {
+    private void showNotification(String title, String message, String target) {
         NotificationManager manager =
                 (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
 
@@ -80,20 +87,24 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
 
 
         Intent intent = new Intent(this, MainActivity.class);
+        if (target != null && !target.trim().isEmpty()) {
+            intent.putExtra("target", target);
+            Log.i(TAG, "[FCM] attaching target to notification intent: " + target);
+        }
 
         PendingIntent pendingIntent =
                 PendingIntent.getActivity(
                         this,
                         0,
                         intent,
-                        PendingIntent.FLAG_IMMUTABLE
+                        PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
                 );
 
 
         NotificationCompat.Builder builder =
                 new NotificationCompat.Builder(this, CHANNEL_ID)
                         .setSmallIcon(com.ecoletrack.webview.R.drawable.ic_notification)
-                        .setLargeIcon(BitmapFactory.decodeResource(getResources(), R.drawable.ic_launcher))
+                        // .setLargeIcon(BitmapFactory.decodeResource(getResources(), R.drawable.ic_launcher))
                         .setContentTitle(title)
                         .setContentText(message)
                         .setStyle(new NotificationCompat.BigTextStyle().bigText(message))

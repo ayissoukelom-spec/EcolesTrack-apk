@@ -22,7 +22,7 @@ function logDiagnostic(message: string): void {
   console.log(message);
 }
 
-const FALLBACK_API_BASE_URL = "http://10.125.24.124:3001";
+const FALLBACK_API_BASE_URL = "http://10.102.212.124:3001";
 
 function readApiBaseFromUrl(): string | null {
   if (typeof window === "undefined") {

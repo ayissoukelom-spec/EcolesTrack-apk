@@ -17,8 +17,9 @@ import { getApiErrorMessage, parseJsonSafe, withApiBase } from "../utils/http";
 interface ParentPortalProps {
   token: string | null;
   parent: Parent | null;
-  onLoginSuccess: (token: string, parent: Parent) => void;
+  onLoginSuccess: (token: string, parent: Parent, refreshToken: string) => void;
   onLogout: () => void;
+  refreshAccessToken: () => Promise<string | null>;
   activeTab: string;
   setActiveTab: (tab: string) => void;
   selectedChild: Child | null;
@@ -32,6 +33,7 @@ export default function ParentPortal({
   parent,
   onLoginSuccess,
   onLogout,
+  refreshAccessToken,
   activeTab,
   setActiveTab,
   selectedChild,
@@ -93,6 +95,39 @@ export default function ParentPortal({
     setTermAverageApi(null);
     setChildrenLoadError(null);
     onLogout();
+  };
+
+  const performProtectedRequest = async (requestFactory: (authToken: string) => Promise<Response>) => {
+    let authToken = token;
+    if (!authToken) {
+      authToken = await refreshAccessToken();
+      if (!authToken) {
+        handleSessionExpired();
+        return null;
+      }
+    }
+
+    try {
+      let response = await requestFactory(authToken);
+      if (response.status === 401) {
+        const refreshedToken = await refreshAccessToken();
+        if (!refreshedToken) {
+          handleSessionExpired();
+          return null;
+        }
+
+        authToken = refreshedToken;
+        response = await requestFactory(authToken);
+      }
+      if (response.status === 403) {
+        handleSessionExpired();
+        return null;
+      }
+      return response;
+    } catch (e) {
+      console.error("[AUTH_DEBUG] Protected request failed", e);
+      return null;
+    }
   };
 
   // Load children list when authenticated
@@ -199,18 +234,18 @@ export default function ParentPortal({
         body: JSON.stringify({ email: loginEmail, password: loginPass })
       });
 
-      const data = await parseJsonSafe<{ token?: string; parent?: Parent; error?: string }>(response);
+      const data = await parseJsonSafe<{ token?: string; parent?: Parent; refreshToken?: string; error?: string }>(response);
 
       if (!response.ok) {
         throw new Error(getApiErrorMessage(data, "Une erreur est survenue lors de la connexion."));
       }
 
-      if (!data?.token || !data?.parent) {
+      if (!data?.token || !data?.parent || !data?.refreshToken) {
         throw new Error("Le serveur a renvoye une reponse incomplete. Verifiez la connexion API.");
       }
 
       // Success
-      onLoginSuccess(data.token, data.parent);
+      onLoginSuccess(data.token, data.parent, data.refreshToken);
       setEmail("");
       setPassword("");
    } catch (err: any) {
@@ -225,11 +260,11 @@ export default function ParentPortal({
   const fetchChildren = async () => {
     setChildrenLoadError(null);
     try {
-      const response = await fetch(withApiBase("/api/mobile/parent/children"), {
-        headers: { "Authorization": `Bearer ${token}` }
-      });
-      if (response.status === 401 || response.status === 403) {
-        handleSessionExpired();
+      console.log("[AUTH_DEBUG] fetchChildren starting", { tokenPresent: !!token, tokenLength: token?.length });
+      const response = await performProtectedRequest((authToken) => fetch(withApiBase("/api/mobile/parent/children"), {
+        headers: { "Authorization": `Bearer ${authToken}` }
+      }));
+      if (!response) {
         return;
       }
       const data = await parseJsonSafe<Child[] | { error?: string }>(response);
@@ -257,10 +292,14 @@ export default function ParentPortal({
 
   const handleSimulateChild = async () => {
     try {
-      const response = await fetch(withApiBase("/api/mobile/parent/children/simulate"), {
+      console.log("[AUTH_DEBUG] handleSimulateChild starting", { tokenPresent: !!token, tokenLength: token?.length });
+      const response = await performProtectedRequest((authToken) => fetch(withApiBase("/api/mobile/parent/children/simulate"), {
         method: "POST",
-        headers: { "Authorization": `Bearer ${token}` }
-      });
+        headers: { "Authorization": `Bearer ${authToken}` }
+      }));
+      if (!response) {
+        return;
+      }
       if (response.ok) {
         fetchChildren();
       }
@@ -297,15 +336,18 @@ export default function ParentPortal({
     setJustificationError(null);
 
     try {
-      const response = await fetch(withApiBase(`/api/absences/${showJustificationModal.id}/justify`), {
+      const response = await performProtectedRequest((authToken) => fetch(withApiBase(`/api/absences/${showJustificationModal.id}/justify`), {
         method: "PUT",
         headers: {
-          "Authorization": `Bearer ${token}`,
+          "Authorization": `Bearer ${authToken}`,
           "Content-Type": "application/json"
         },
         body: JSON.stringify({ justificationReason: justificationReason.trim() })
-      });
+      }));
 
+      if (!response) {
+        throw new Error("Impossible de justifier l'absence pour le moment.");
+      }
       const data = await parseJsonSafe(response);
       if (!response.ok) {
         throw new Error(getApiErrorMessage(data, "Impossible de justifier l'absence."));
@@ -324,11 +366,11 @@ export default function ParentPortal({
   // API Call: Fetch Child Absences
   const fetchChildAbsences = async (childId: string) => {
     try {
-      const response = await fetch(withApiBase(`/api/mobile/parent/children/${childId}/absences`), {
-        headers: { "Authorization": `Bearer ${token}` }
-      });
-      if (response.status === 401 || response.status === 403) {
-        handleSessionExpired();
+      console.log("[AUTH_DEBUG] fetchChildAbsences starting", { childId, tokenPresent: !!token, tokenLength: token?.length });
+      const response = await performProtectedRequest((authToken) => fetch(withApiBase(`/api/mobile/parent/children/${childId}/absences`), {
+        headers: { "Authorization": `Bearer ${authToken}` }
+      }));
+      if (!response) {
         return;
       }
       if (response.ok) {
@@ -348,11 +390,10 @@ export default function ParentPortal({
   // API Call: Fetch Child Grades
   const fetchChildGrades = async (childId: string) => {
     try {
-      const response = await fetch(withApiBase(`/api/mobile/parent/children/${childId}/grades`), {
-        headers: { "Authorization": `Bearer ${token}` }
-      });
-      if (response.status === 401 || response.status === 403) {
-        handleSessionExpired();
+      const response = await performProtectedRequest((authToken) => fetch(withApiBase(`/api/mobile/parent/children/${childId}/grades`), {
+        headers: { "Authorization": `Bearer ${authToken}` }
+      }));
+      if (!response) {
         return;
       }
       const serverAverageHeader = response.headers.get('X-Student-Term-Average');
@@ -418,10 +459,10 @@ export default function ParentPortal({
   // Helper API Call: Register FCM token
   const registerMockToken = async () => {
     try {
-      await fetch(withApiBase("/api/mobile/parent/devices/register-push-token"), {
+      const response = await performProtectedRequest((authToken) => fetch(withApiBase("/api/mobile/parent/devices/register-push-token"), {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${token}`,
+          "Authorization": `Bearer ${authToken}`,
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
@@ -429,7 +470,10 @@ export default function ParentPortal({
           platform: "android",
           appVersion: "2.4.1"
         })
-      });
+      }));
+      if (!response) {
+        return;
+      }
     } catch (e) {
       console.log("Mock token registration handled");
     }
@@ -556,11 +600,15 @@ export default function ParentPortal({
   };
 
   const handleReadAllNotifications = async () => {
+    const response = await performProtectedRequest((authToken) => fetch(withApiBase("/api/mobile/parent/notifications/read-all"), {
+      method: "PUT",
+      headers: { "Authorization": `Bearer ${authToken}` }
+    }));
+    if (!response) {
+      return;
+    }
+
     try {
-      const response = await fetch(withApiBase("/api/mobile/parent/notifications/read-all"), {
-        method: "PUT",
-        headers: { "Authorization": `Bearer ${token}` }
-      });
       const data = await parseJsonSafe(response);
       if (response.ok) {
         setLocalNotifications((prev) => prev.map((item) => ({ ...item, read: true })));
@@ -591,10 +639,13 @@ export default function ParentPortal({
     setMarkingNotificationIds((prev) => [...prev, notif.id]);
 
     try {
-      const response = await fetch(withApiBase(`/api/mobile/parent/notifications/${notif.id}/read`), {
+      const response = await performProtectedRequest((authToken) => fetch(withApiBase(`/api/mobile/parent/notifications/${notif.id}/read`), {
         method: "PUT",
-        headers: { "Authorization": `Bearer ${token}` }
-      });
+        headers: { "Authorization": `Bearer ${authToken}` }
+      }));
+      if (!response) {
+        throw new Error(`Impossible de marquer la notification ${notif.id} comme lue.`);
+      }
       const responseData = await parseJsonSafe(response);
       if (!response.ok) {
         const errorMessage = getApiErrorMessage(responseData, `Failed to mark notification ${notif.id} as read`);

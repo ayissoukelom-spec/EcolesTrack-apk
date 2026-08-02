@@ -1032,7 +1032,7 @@ function isInvalidFcmTokenError(error) {
   }
   return false;
 }
-async function sendPushNotification(token, title, body) {
+async function sendPushNotification(token, title, body, target = "home") {
   console.log("[FCM] Token :", token);
   const message = {
     token,
@@ -1042,7 +1042,8 @@ async function sendPushNotification(token, title, body) {
     },
     data: {
       title,
-      body
+      body,
+      target
     },
     android: {
       priority: "high",
@@ -1180,7 +1181,8 @@ var QueueManager = class {
       const {
         token,
         title,
-        message
+        message,
+        target = "home"
       } = job.data;
       if (!token) {
         throw new Error("FCM token missing");
@@ -1188,7 +1190,8 @@ var QueueManager = class {
       await sendPushNotification(
         token,
         title,
-        message
+        message,
+        target
       );
       logger4.info("Push notification sent successfully", {
         title
@@ -1258,6 +1261,7 @@ var NotificationService = class {
       if (isPushAuthorized && pushTokens.length > 0) {
         parentChannelsToDeliver.push("push");
       }
+      const target = typeof metadata?.target === "string" && metadata.target.trim().length > 0 ? metadata.target : "home";
       if (isWhatsappAuthorized) {
         parentChannelsToDeliver.push("whatsapp");
       }
@@ -1282,6 +1286,7 @@ var NotificationService = class {
               message,
               category,
               metadata,
+              target,
               token
             }, {
               priority,
@@ -1378,7 +1383,8 @@ var NotificationPreferencesSchema = import_zod.z.object({
 });
 var TestNotificationSchema = import_zod.z.object({
   title: import_zod.z.string().min(1, { message: "Le titre est requis." }),
-  message: import_zod.z.string().min(1, { message: "Le message est requis." })
+  message: import_zod.z.string().min(1, { message: "Le message est requis." }),
+  target: import_zod.z.string().min(1).optional()
 });
 var DevAddAbsenceSchema = import_zod.z.object({
   childId: import_zod.z.string().min(1),
@@ -1439,7 +1445,9 @@ function rateLimit(limit, windowMs) {
 }
 var requireAuth = (req, res, next) => {
   const authHeader = req.headers.authorization;
+  console.log("[AUTH_DEBUG] requireAuth Authorization header:", authHeader);
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    console.log("[AUTH_DEBUG] requireAuth missing or invalid Bearer header");
     return res.status(401).json({
       error: "Authentification requise. Jeton de session manquant.",
       code: "UNAUTHORIZED"
@@ -1448,6 +1456,7 @@ var requireAuth = (req, res, next) => {
   const token = authHeader.split(" ")[1];
   const decoded = verifyToken(token);
   if (!decoded) {
+    console.log("[AUTH_DEBUG] requireAuth token verification failed", { tokenLength: token?.length });
     return res.status(401).json({
       error: "Session invalide ou expir\xE9e. Veuillez vous reconnecter.",
       code: "INVALID_SESSION"
@@ -1462,6 +1471,7 @@ var requireAuth = (req, res, next) => {
   next();
 };
 var requireParentRoleOnly = (req, res, next) => {
+  console.log("[AUTH_DEBUG] requireParentRoleOnly parent role:", req.parent?.role, "url:", req.originalUrl);
   if (!req.parent || req.parent.role !== "parent") {
     console.warn(`[SECURITY VIOLATION] Attempted access with non-parent role: ${req.parent?.role || "none"} on URL: ${req.originalUrl}`);
     return res.status(403).json({
@@ -1839,14 +1849,17 @@ app.post("/api/mobile/parent/notifications/test", requireAuth, requireParentRole
       details: validation.error.format()
     });
   }
-  const { title, message } = validation.data;
+  const { title, message, target } = validation.data;
   const dedupeKey = `test-${parentId}-${Date.now()}`;
   const result = await NotificationService.dispatchNotification(
     parentId,
     title,
     message,
     "test",
-    { deepLink: "ecoletrack://dashboard" },
+    {
+      deepLink: "ecoletrack://dashboard",
+      ...target ? { target } : {}
+    },
     dedupeKey
   );
   logger6.audit("TEST_NOTIFICATION_DISPATCH", parentId, { title }, "SUCCESS");
