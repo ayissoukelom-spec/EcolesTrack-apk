@@ -763,6 +763,7 @@ app.post("/api/dev/add-absence", async (req, res) => {
 });
 
 const API_URL = process.env.API_URL || "http://localhost:3001";
+logger.info("[ENV_TRACE] API_URL =", { API_URL, raw: process.env.API_URL });
 
 await fetch(`${API_URL}/api/internal/absence-notification`, {
   method: "POST",
