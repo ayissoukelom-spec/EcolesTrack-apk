@@ -756,28 +756,30 @@ app.post("/api/dev/add-absence", async (req, res) => {
       dedupeKey
     };
     logger.info("[NOTIF_TRACE] calling /api/internal/absence-notification", {
-      parentId,
-      childId,
-      absenceId: absence.id,
-      payload: internalPayload
-    });
-    await fetch("http://localhost:3001/api/internal/absence-notification", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(internalPayload),
-    });
-  }
+  parentId,
+  childId,
+  absenceId: absence.id,
+  payload: internalPayload
+});
 
-  return res.json({ success: true, absence });
+const API_URL = process.env.API_URL || "http://localhost:3001";
+
+await fetch(`${API_URL}/api/internal/absence-notification`, {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify(internalPayload),
+});
+
+return res.json({ success: true, absence });
 });
 
 // Add grade via backend simulator
 app.post("/api/dev/add-grade", async (req, res) => {
   const { childId, childIds, subject, grade, coefficient, examName, date } = req.body;
   const requestedChildIds = Array.isArray(childIds)
-    ? childIds.filter((value: unknown): value is string => typeof value === "string" && value.trim().length > 0)
+    ? childIds.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
     : childId ? [String(childId)] : [];
 
   if (requestedChildIds.length === 0 || !subject || grade === undefined || !examName) {
@@ -905,10 +907,10 @@ app.post("/api/internal/grade-notification", async (req: Request, res: Response)
     }
 
     const childIds = Array.isArray(metadata?.childIds)
-      ? metadata.childIds.filter((value: unknown): value is string => typeof value === "string" && value.trim().length > 0)
+      ? metadata.childIds.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
       : [];
     const parentIds = Array.isArray(metadata?.parentIds)
-      ? metadata.parentIds.filter((value: unknown): value is string => typeof value === "string" && value.trim().length > 0)
+      ? metadata.parentIds.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
       : [];
 
     const resolvedParentIds = parentIds.length > 0
