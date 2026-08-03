@@ -771,6 +771,7 @@ await fetch(`${API_URL}/api/internal/absence-notification`, {
   },
   body: JSON.stringify(internalPayload),
 });
+}
 
 return res.json({ success: true, absence });
 });
