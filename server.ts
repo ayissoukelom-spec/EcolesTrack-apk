@@ -720,6 +720,7 @@ app.get("/api/mobile/health", (req, res) => {
 // Add absence via backend simulator
 app.post("/api/dev/add-absence", async (req, res) => {
   const { childId, date, reason, justified, justificationText } = req.body;
+  logger.info("[NOTIF_TRACE] add-absence endpoint received", { childId, date, reason, justified });
   if (!childId || !reason) {
     return res.status(400).json({ error: "childId and reason required" });
   }
@@ -731,6 +732,7 @@ app.post("/api/dev/add-absence", async (req, res) => {
     justified: !!justified,
     justificationText
   });
+  logger.info("[NOTIF_TRACE] absence created", { childId, absenceId: absence.id, date: absence.date, reason, justified });
 
   const children = await store.getChildrenOfParent("parent-jean-dupont"); // Default for demonstration
   const backupChildren = await store.getChildrenOfParent("parent-marie-martin");
@@ -740,14 +742,32 @@ app.post("/api/dev/add-absence", async (req, res) => {
     const parentId = child.parentId;
     const dedupeKey = `absence-${child.id}-${Date.now()}`;
     const name = `${child.firstName} ${child.lastName}`;
-    await NotificationService.dispatchNotification(
+    const internalPayload = {
       parentId,
-      "Alerte Absence ÉcoleTrack",
-      `Absence enregistrée pour ${name} le ${new Date(date).toLocaleDateString('fr-FR')}. Motif : ${reason}`,
-      'absence',
-      { childId, childName: name, date, reason },
+      title: `Nouvelle absence pour ${child.firstName}`,
+      message: `Une absence a été signalée pour ${child.firstName} le ${date}. Veuillez fournir un justificatif.`,
+      category: "absence",
+      metadata: {
+        absenceId: absence.id,
+        childId,
+        date: absence.date,
+        reason,
+      },
       dedupeKey
-    );
+    };
+    logger.info("[NOTIF_TRACE] calling /api/internal/absence-notification", {
+      parentId,
+      childId,
+      absenceId: absence.id,
+      payload: internalPayload
+    });
+    await fetch("http://localhost:3001/api/internal/absence-notification", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(internalPayload),
+    });
   }
 
   return res.json({ success: true, absence });
@@ -757,7 +777,7 @@ app.post("/api/dev/add-absence", async (req, res) => {
 app.post("/api/dev/add-grade", async (req, res) => {
   const { childId, childIds, subject, grade, coefficient, examName, date } = req.body;
   const requestedChildIds = Array.isArray(childIds)
-    ? childIds.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    ? childIds.filter((value: unknown): value is string => typeof value === "string" && value.trim().length > 0)
     : childId ? [String(childId)] : [];
 
   if (requestedChildIds.length === 0 || !subject || grade === undefined || !examName) {
@@ -822,6 +842,7 @@ app.post("/api/dev/clear-logs", (req, res) => {
 // ==========================================
 app.post("/api/internal/absence-notification", async (req: Request, res: Response) => {
   try {
+    logger.info("[NOTIF_TRACE] /api/internal/absence-notification route entry", { body: req.body });
     const {
       parentId,
       title,
@@ -831,11 +852,15 @@ app.post("/api/internal/absence-notification", async (req: Request, res: Respons
       dedupeKey
     } = req.body;
 
+    logger.info("[NOTIF_TRACE] /api/internal/absence-notification parsed body", { parentId, title, message, category, metadata, dedupeKey });
+
     if (!parentId || !title || !message) {
       return res.status(400).json({
         error: "Missing notification parameters"
       });
     }
+
+    logger.info("[NOTIF_TRACE] /api/internal/absence-notification dispatching", { parentId, title, message, category, metadata, dedupeKey });
 
     const result = await NotificationService.dispatchNotification(
       String(parentId),
@@ -845,6 +870,8 @@ app.post("/api/internal/absence-notification", async (req: Request, res: Respons
       metadata,
       dedupeKey
     );
+
+    logger.info("[NOTIF_TRACE] /api/internal/absence-notification dispatch result", { result });
 
     return res.json({
       success: true,
@@ -878,10 +905,10 @@ app.post("/api/internal/grade-notification", async (req: Request, res: Response)
     }
 
     const childIds = Array.isArray(metadata?.childIds)
-      ? metadata.childIds.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      ? metadata.childIds.filter((value: unknown): value is string => typeof value === "string" && value.trim().length > 0)
       : [];
     const parentIds = Array.isArray(metadata?.parentIds)
-      ? metadata.parentIds.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      ? metadata.parentIds.filter((value: unknown): value is string => typeof value === "string" && value.trim().length > 0)
       : [];
 
     const resolvedParentIds = parentIds.length > 0

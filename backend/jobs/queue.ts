@@ -33,6 +33,20 @@ export class QueueManager {
     const priority = options.priority ?? 0;
     const maxAttempts = options.maxAttempts ?? 3;
     const dedupeKey = options.dedupeKey;
+    const jobData = data as any;
+    const parentId = jobData?.parentId;
+    const token = jobData?.token;
+    const maskedToken = token ? `${String(token).slice(0, 10)}...` : undefined;
+    logger.info("[NOTIF_TRACE] addJob", {
+      jobName: name,
+      parentId,
+      tokenPresent: Boolean(token),
+      token: maskedToken,
+      title: jobData?.title,
+      message: jobData?.message,
+      priority,
+      dedupeKey
+    });
 
     // Idempotency check using dedupeKey
     if (dedupeKey && completedJobIds.has(dedupeKey)) {
@@ -80,6 +94,19 @@ export class QueueManager {
     this.isProcessing = true;
 
     const job = activeQueue.shift()!;
+    const jobData = job.data as any;
+    const maskedToken = jobData?.token ? `${String(jobData.token).slice(0, 10)}...` : undefined;
+    logger.info("[NOTIF_TRACE] processNextJob start", {
+      jobId: job.id,
+      jobName: job.name,
+      parentId: jobData?.parentId,
+      tokenPresent: Boolean(jobData?.token),
+      token: maskedToken,
+      title: jobData?.title,
+      message: jobData?.message,
+      attempt: job.attempts + 1,
+      maxAttempts: job.maxAttempts
+    });
     logger.info(`Processing Job: ${job.name} [ID: ${job.id}, Attempt: ${job.attempts + 1}/${job.maxAttempts}]`);
 
     try {
@@ -128,7 +155,18 @@ export class QueueManager {
         return;
       }
 
-      logger.error(`Job execution failed: ${job.name} [ID: ${job.id}]`, err);
+      const jobData = job.data as any;
+      const maskedToken = jobData?.token ? `${String(jobData.token).slice(0, 10)}...` : undefined;
+      logger.error(`Job execution failed: ${job.name} [ID: ${job.id}]`, err, {
+        jobId: job.id,
+        jobName: job.name,
+        parentId: jobData?.parentId,
+        token: maskedToken,
+        title: jobData?.title,
+        message: jobData?.message,
+        attempts: job.attempts,
+        errorHistory: job.errorHistory
+      });
 
       if (job.attempts < job.maxAttempts) {
         // Calculate exponential backoff delay (e.g., 2^attempts * 100ms)
@@ -161,50 +199,78 @@ export class QueueManager {
    * Logic execution based on job type
    */
   private static async executeJobLogic(job: QueueJob): Promise<void> {
-  await new Promise(resolve => setTimeout(resolve, 150));
-
-  if (job.name.startsWith("send-notification-push")) {
-    const {
-      token,
-      title,
-      message,
-      target = "home"
-    } = job.data;
-
-    if (!token) {
-      throw new Error("FCM token missing");
-    }
-
-    await sendPushNotification(
-      token,
-      title,
-      message,
-      target
-    );
-
-    logger.info("Push notification sent successfully", {
-      title
+    const jobData = job.data as any;
+    const maskedToken = jobData?.token ? `${String(jobData.token).slice(0, 10)}...` : undefined;
+    logger.info("[NOTIF_TRACE] executeJobLogic started", {
+      jobName: job.name,
+      jobId: job.id,
+      parentId: jobData?.parentId,
+      tokenPresent: Boolean(jobData?.token),
+      token: maskedToken,
+      title: jobData?.title,
+      message: jobData?.message,
+      target: jobData?.target
     });
 
-    return;
-  }
+    try {
+      await new Promise(resolve => setTimeout(resolve, 150));
 
-  if (job.name.startsWith("send-notification-whatsapp")) {
-    logger.info("WhatsApp delivery placeholder");
-    return;
-  }
+      if (job.name.startsWith("send-notification-push")) {
+        const {
+          token,
+          title,
+          message,
+          target = "home"
+        } = job.data;
 
-  if (job.name.startsWith("send-notification-sms")) {
-    logger.info("SMS delivery placeholder");
-    return;
-  }
+        if (!token) {
+          throw new Error("FCM token missing");
+        }
 
-  if (job.name === "test-failure-simulation") {
-    throw new Error(
-      "Network timeout: FCM Gateway failed to respond"
-    );
+        const tokenPreview = token ? `${String(token).slice(0, 10)}...` : undefined;
+        logger.info("[NOTIF_TRACE] About to call sendPushNotification", { parentId: jobData?.parentId, jobId: job.id, token: tokenPreview, title, message, target });
+        await sendPushNotification(
+          token,
+          title,
+          message,
+          target
+        );
+        logger.info("[NOTIF_TRACE] FCM envoyé avec succès", { token: tokenPreview, title, target });
+
+        logger.info("Push notification sent successfully", {
+          title
+        });
+
+        return;
+      }
+
+      if (job.name.startsWith("send-notification-whatsapp")) {
+        logger.info("WhatsApp delivery placeholder");
+        return;
+      }
+
+      if (job.name.startsWith("send-notification-sms")) {
+        logger.info("SMS delivery placeholder");
+        return;
+      }
+
+      if (job.name === "test-failure-simulation") {
+        throw new Error(
+          "Network timeout: FCM Gateway failed to respond"
+        );
+      }
+    } catch (err: any) {
+      logger.error("[NOTIF_TRACE] executeJobLogic error", err, {
+        jobId: job.id,
+        jobName: job.name,
+        parentId: jobData?.parentId,
+        token: maskedToken,
+        title: jobData?.title,
+        message: jobData?.message,
+      });
+      throw err;
+    }
   }
-}
 
   public static getDLQ(): QueueJob[] {
     return deadLetterQueue;

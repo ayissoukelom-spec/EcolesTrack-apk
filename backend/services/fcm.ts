@@ -2,6 +2,9 @@ import { initializeApp, cert } from "firebase-admin/app";
 import { getMessaging } from "firebase-admin/messaging";
 import * as fs from "fs";
 import * as path from "path";
+import { Logger } from "../utils/logger";
+
+const logger = new Logger("FCMService");
 
 const serviceAccount = process.env.FCM_SERVICE_ACCOUNT_JSON
   ? JSON.parse(process.env.FCM_SERVICE_ACCOUNT_JSON)
@@ -11,6 +14,10 @@ const serviceAccount = process.env.FCM_SERVICE_ACCOUNT_JSON
         "utf8"
       )
     );
+
+console.log("[FCM TEST] project:", serviceAccount.project_id);
+console.log("[FCM TEST] email:", serviceAccount.client_email);
+console.log("[FCM TEST KEY]", !!serviceAccount.private_key);
 
 initializeApp({
   credential: cert(serviceAccount),
@@ -75,7 +82,8 @@ export async function sendPushNotification(
   body: string,
   target: string = "home"
 ) {
-  console.log("[FCM] Token :", token);
+  const maskedToken = token ? `${token.slice(0, 10)}...` : "<missing>";
+  logger.info("[NOTIF_TRACE] sendPushNotification start", { token: maskedToken, title, body, target });
 
   const message = {
     token,
@@ -100,18 +108,26 @@ export async function sendPushNotification(
   } as const;
 
   try {
+    logger.info("[NOTIF_TRACE] sendPushNotification payload", { token: maskedToken, title, body, target });
     const response = await getMessaging().send(message);
 
-    console.log("[FCM] Succès :", response);
+    logger.info("[NOTIF_TRACE] sendPushNotification response", { messageId: response });
+    logger.info("[FCM] Succès", { messageId: response });
 
     return response;
   } catch (error) {
+    logger.error("[NOTIF_TRACE] sendPushNotification error", error, {
+      code: (error as any)?.code,
+      message: (error as any)?.message,
+      errorInfo: (error as any)?.errorInfo,
+      token: maskedToken
+    });
     if (isInvalidFcmTokenError(error)) {
-      console.error("[FCM] Invalid token detected:", { token, error });
+      logger.error("[FCM] Invalid token detected", error, { token: maskedToken });
       throw new InvalidFcmTokenError(token, error);
     }
 
-    console.error("[FCM] Erreur :", error);
+    logger.error("[FCM] Erreur", error, { token: maskedToken });
     throw error;
   }
 }

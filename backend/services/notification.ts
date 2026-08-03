@@ -17,11 +17,14 @@ export class NotificationService {
     metadata: any = {},
     dedupeKey?: string
   ) {
+    logger.info("[NOTIF_TRACE] dispatchNotification start", { parentId, category, title, dedupeKey, metadata });
     const effectiveParentIds = await this.resolveParentIds(parentId, metadata);
     logger.info(`Orchestrating notification for Parent IDs: ${effectiveParentIds.join(", ") || "<none>"}`, { category, dedupeKey });
+    logger.info("[NOTIF_TRACE] parentIds résolus", { effectiveParentIds });
 
     if (effectiveParentIds.length === 0) {
       logger.warn("No parent IDs resolved for notification dispatch.");
+      logger.info("[TRACE] dispatchNotification exited early: no parent IDs resolved");
       return {
         success: true,
         channels: [],
@@ -35,7 +38,19 @@ export class NotificationService {
     for (const effectiveParentId of effectiveParentIds) {
       // 1. Fetch parent preferences and consent from DB
       const preferences = await store.getNotificationPreferences(effectiveParentId);
+      logger.info("[NOTIF_TRACE] Notification preferences loaded", { parentId: effectiveParentId, preferences });
       const consents = await store.getConsentsOfParent(effectiveParentId);
+      logger.info("[NOTIF_TRACE] Notification consents loaded", { parentId: effectiveParentId, consents });
+
+      const devices = await store.getDevicesOfParent(effectiveParentId);
+      const deviceSummaries = devices.map((device) => ({
+        id: device.id,
+        platform: device.platform,
+        tokenPresent: Boolean(device.pushToken),
+        tokenPreview: device.pushToken ? `${device.pushToken.slice(0, 10)}...` : undefined,
+        appVersion: device.appVersion,
+      }));
+      logger.info("[NOTIF_TRACE] Notification devices loaded", { parentId: effectiveParentId, deviceCount: devices.length, devices: deviceSummaries });
 
       const isPushAuthorized = preferences.pushEnabled;
       const isSmsAuthorized = preferences.smsEnabled && consents.some(c => c.channel === "sms" && c.consentGranted);
@@ -48,7 +63,6 @@ export class NotificationService {
       }
 
       // 3. Select Channels and Queue Jobs
-      const devices = await store.getDevicesOfParent(effectiveParentId);
       const pushTokens = Array.from(new Set(
         devices
           .map((device) => device.pushToken)
@@ -56,6 +70,7 @@ export class NotificationService {
       ));
 
       logger.info("Devices found", { parentId: effectiveParentId, devices });
+      logger.info("[TRACE] Push tokens resolved", { parentId: effectiveParentId, pushTokens });
       if (pushTokens.length === 0 && isPushAuthorized) {
         logger.warn(`No devices registered for parent: ${effectiveParentId}. Push skipped.`);
       }
@@ -91,6 +106,8 @@ export class NotificationService {
         if (channel === "push") {
           for (const token of pushTokens) {
             const jobDedupeKey = dedupeKey ? `${dedupeKey}-${channel}-${token}` : undefined;
+            const tokenPreview = token ? `${token.slice(0, 10)}...` : undefined;
+            logger.info("[NOTIF_TRACE] QueueManager.addJob preparing", { channel, tokenPresent: Boolean(token), token: tokenPreview, jobName, dedupeKey: jobDedupeKey });
             const jobId = QueueManager.addJob(jobName, {
               parentId: effectiveParentId,
               channel,
@@ -105,11 +122,13 @@ export class NotificationService {
               dedupeKey: jobDedupeKey,
               maxAttempts: 3
             });
+            logger.info("[NOTIF_TRACE] QueueManager.addJob queued", { jobName, jobId, parentId: effectiveParentId, channel, dedupeKey: jobDedupeKey, tokenPresent: Boolean(token), token: tokenPreview });
 
             jobsTriggered.push(jobId);
           }
         } else {
           const jobDedupeKey = dedupeKey ? `${dedupeKey}-${channel}` : undefined;
+          logger.info("[NOTIF_TRACE] QueueManager.addJob preparing", { channel, tokenPresent: false, jobName, dedupeKey: jobDedupeKey });
           const jobId = QueueManager.addJob(jobName, {
             parentId: effectiveParentId,
             channel,
@@ -123,6 +142,7 @@ export class NotificationService {
             dedupeKey: jobDedupeKey,
             maxAttempts: 3
           });
+          logger.info("[NOTIF_TRACE] QueueManager.addJob queued", { jobName, jobId, parentId: effectiveParentId, channel, dedupeKey: jobDedupeKey, tokenPresent: false });
 
           jobsTriggered.push(jobId);
         }
@@ -131,11 +151,13 @@ export class NotificationService {
       parentChannelsToDeliver.forEach((channel) => channelsToDeliver.push(channel));
     }
 
-    return {
+    const result = {
       success: true,
       channels: Array.from(new Set(channelsToDeliver)),
       jobs: jobsTriggered
     };
+    logger.info("[TRACE] dispatchNotification completed", { channels: result.channels, jobs: result.jobs });
+    return result;
   }
 
   private static async resolveParentIds(parentId: string | string[] | undefined, metadata: any = {}): Promise<string[]> {
