@@ -3,15 +3,14 @@ import { getMessaging } from "firebase-admin/messaging";
 import * as fs from "fs";
 import * as path from "path";
 
-const serviceAccountPath = path.join(
-  process.cwd(),
-  "config",
-  "firebase-service-account.json"
-);
-
-const serviceAccount = JSON.parse(
-  fs.readFileSync(serviceAccountPath, "utf8")
-);
+const serviceAccount = process.env.FCM_SERVICE_ACCOUNT_JSON
+  ? JSON.parse(process.env.FCM_SERVICE_ACCOUNT_JSON)
+  : JSON.parse(
+      fs.readFileSync(
+        path.join(process.cwd(), "config", "firebase-service-account.json"),
+        "utf8"
+      )
+    );
 
 initializeApp({
   credential: cert(serviceAccount),
