@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">EcoleTrack</string>
-    <string name="api_base_url">http://10.102.212.124:3001</string>
+    <string name="api_base_url">https://ecoletrack-mobile-api-apk.onrender.com</string>
 </resources>

@@ -5,7 +5,6 @@
         <domain includeSubdomains="true">localhost</domain>
         <domain includeSubdomains="true">127.0.0.1</domain>
         <domain includeSubdomains="true">10.0.2.2</domain>
-        <domain includeSubdomains="true">10.125.24.124</domain>
-        <domain includeSubdomains="true">10.102.212.124</domain>
+        <domain includeSubdomains="true">ecoletrack-mobile-api-apk.onrender.com</domain>
     </domain-config>
 </network-security-config>
