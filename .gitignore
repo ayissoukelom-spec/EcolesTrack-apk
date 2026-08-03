@@ -12,3 +12,5 @@ temp_logcat_dump.txt
 full_device_log.txt
 login_attempt_logs.txt
 login_webview_logs.txt
+.gradle/
+
