@@ -742,16 +742,38 @@ app.post("/api/dev/add-absence", async (req, res) => {
     const parentId = child.parentId;
     const dedupeKey = `absence-${child.id}-${Date.now()}`;
     const name = `${child.firstName} ${child.lastName}`;
+    // Compose a consistent human-readable message for absence notifications
+    const formatDateSafe = (dateStr: string) => {
+      if (!dateStr) return '';
+      const opts = { day: '2-digit', month: '2-digit', year: 'numeric' } as const;
+      if (dateStr.includes('T')) return new Date(dateStr).toLocaleDateString('fr-FR', opts);
+      const parts = String(dateStr).split('-');
+      if (parts.length === 3) {
+        const y = Number(parts[0]);
+        const m = Number(parts[1]) - 1;
+        const d = Number(parts[2]);
+        return new Date(y, m, d).toLocaleDateString('fr-FR', opts);
+      }
+      return new Date(dateStr).toLocaleDateString('fr-FR', opts);
+    };
+    const absenceDate = new Date(absence.date);
+    const formattedDate = formatDateSafe(absence.date);
+    const timePart = absenceDate.toISOString().includes('T') ? ` de ${absenceDate.toISOString().substr(11,5)}` : '';
+    const subjectName = (absence as any).subjectName || undefined; // mock store may not have subject
+    const subjectText = subjectName ? `, en ${subjectName}` : '';
+    const messageBody = `Une absence a été signalée pour ${child.firstName} le ${formattedDate}${timePart}${subjectText}. Veuillez fournir un justificatif.`;
+
     const internalPayload = {
       parentId,
       title: `Nouvelle absence pour ${child.firstName}`,
-      message: `Une absence a été signalée pour ${child.firstName} le ${date}. Veuillez fournir un justificatif.`,
+      message: messageBody,
       category: "absence",
       metadata: {
         absenceId: absence.id,
         childId,
         date: absence.date,
         reason,
+        subjectName: subjectName,
       },
       dedupeKey
     };

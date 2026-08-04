@@ -983,14 +983,16 @@ var import_app = require("firebase-admin/app");
 var import_messaging = require("firebase-admin/messaging");
 var fs = __toESM(require("fs"), 1);
 var path2 = __toESM(require("path"), 1);
-var serviceAccountPath = path2.join(
-  process.cwd(),
-  "config",
-  "firebase-service-account.json"
+var logger4 = new Logger("FCMService");
+var serviceAccount = process.env.FCM_SERVICE_ACCOUNT_JSON ? JSON.parse(process.env.FCM_SERVICE_ACCOUNT_JSON) : JSON.parse(
+  fs.readFileSync(
+    path2.join(process.cwd(), "config", "firebase-service-account.json"),
+    "utf8"
+  )
 );
-var serviceAccount = JSON.parse(
-  fs.readFileSync(serviceAccountPath, "utf8")
-);
+console.log("[FCM TEST] project:", serviceAccount.project_id);
+console.log("[FCM TEST] email:", serviceAccount.client_email);
+console.log("[FCM TEST KEY]", !!serviceAccount.private_key);
 (0, import_app.initializeApp)({
   credential: (0, import_app.cert)(serviceAccount)
 });
@@ -1035,7 +1037,8 @@ function isInvalidFcmTokenError(error) {
   return false;
 }
 async function sendPushNotification(token, title, body, target = "home") {
-  console.log("[FCM] Token :", token);
+  const maskedToken = token ? `${token.slice(0, 10)}...` : "<missing>";
+  logger4.info("[NOTIF_TRACE] sendPushNotification start", { token: maskedToken, title, body, target });
   const message = {
     token,
     notification: {
@@ -1058,21 +1061,29 @@ async function sendPushNotification(token, title, body, target = "home") {
     }
   };
   try {
+    logger4.info("[NOTIF_TRACE] sendPushNotification payload", { token: maskedToken, title, body, target });
     const response = await (0, import_messaging.getMessaging)().send(message);
-    console.log("[FCM] Succ\xE8s :", response);
+    logger4.info("[NOTIF_TRACE] sendPushNotification response", { messageId: response });
+    logger4.info("[FCM] Succ\xE8s", { messageId: response });
     return response;
   } catch (error) {
+    logger4.error("[NOTIF_TRACE] sendPushNotification error", error, {
+      code: error?.code,
+      message: error?.message,
+      errorInfo: error?.errorInfo,
+      token: maskedToken
+    });
     if (isInvalidFcmTokenError(error)) {
-      console.error("[FCM] Invalid token detected:", { token, error });
+      logger4.error("[FCM] Invalid token detected", error, { token: maskedToken });
       throw new InvalidFcmTokenError(token, error);
     }
-    console.error("[FCM] Erreur :", error);
+    logger4.error("[FCM] Erreur", error, { token: maskedToken });
     throw error;
   }
 }
 
 // backend/jobs/queue.ts
-var logger4 = new Logger("QueueProcessor");
+var logger5 = new Logger("QueueProcessor");
 var activeQueue = [];
 var deadLetterQueue = [];
 var completedJobIds = /* @__PURE__ */ new Set();
@@ -1084,12 +1095,26 @@ var QueueManager = class {
     const priority = options.priority ?? 0;
     const maxAttempts = options.maxAttempts ?? 3;
     const dedupeKey = options.dedupeKey;
+    const jobData = data;
+    const parentId = jobData?.parentId;
+    const token = jobData?.token;
+    const maskedToken = token ? `${String(token).slice(0, 10)}...` : void 0;
+    logger5.info("[NOTIF_TRACE] addJob", {
+      jobName: name,
+      parentId,
+      tokenPresent: Boolean(token),
+      token: maskedToken,
+      title: jobData?.title,
+      message: jobData?.message,
+      priority,
+      dedupeKey
+    });
     if (dedupeKey && completedJobIds.has(dedupeKey)) {
-      logger4.info(`Idempotency hit! Job with dedupeKey '${dedupeKey}' already processed. Skipping duplicate entry.`);
+      logger5.info(`Idempotency hit! Job with dedupeKey '${dedupeKey}' already processed. Skipping duplicate entry.`);
       return `skipped-${dedupeKey}`;
     }
     if (dedupeKey && activeQueue.some((j) => j.dedupeKey === dedupeKey)) {
-      logger4.info(`Job with dedupeKey '${dedupeKey}' is already active in queue. Ignoring duplicate entry.`);
+      logger5.info(`Job with dedupeKey '${dedupeKey}' is already active in queue. Ignoring duplicate entry.`);
       return `queued-${dedupeKey}`;
     }
     const job = {
@@ -1105,7 +1130,7 @@ var QueueManager = class {
     };
     activeQueue.push(job);
     activeQueue.sort((a, b) => b.priority - a.priority || a.createdAt - b.createdAt);
-    logger4.info(`Job added to queue: ${name} [ID: ${job.id}]`, { jobId: job.id, priority, dedupeKey });
+    logger5.info(`Job added to queue: ${name} [ID: ${job.id}]`, { jobId: job.id, priority, dedupeKey });
     this.processNextJob();
     return job.id;
   }
@@ -1119,14 +1144,27 @@ var QueueManager = class {
     if (this.isProcessing || activeQueue.length === 0) return;
     this.isProcessing = true;
     const job = activeQueue.shift();
-    logger4.info(`Processing Job: ${job.name} [ID: ${job.id}, Attempt: ${job.attempts + 1}/${job.maxAttempts}]`);
+    const jobData = job.data;
+    const maskedToken = jobData?.token ? `${String(jobData.token).slice(0, 10)}...` : void 0;
+    logger5.info("[NOTIF_TRACE] processNextJob start", {
+      jobId: job.id,
+      jobName: job.name,
+      parentId: jobData?.parentId,
+      tokenPresent: Boolean(jobData?.token),
+      token: maskedToken,
+      title: jobData?.title,
+      message: jobData?.message,
+      attempt: job.attempts + 1,
+      maxAttempts: job.maxAttempts
+    });
+    logger5.info(`Processing Job: ${job.name} [ID: ${job.id}, Attempt: ${job.attempts + 1}/${job.maxAttempts}]`);
     try {
       job.attempts++;
       await this.executeJobLogic(job);
       if (job.dedupeKey) {
         completedJobIds.add(job.dedupeKey);
       }
-      logger4.info(`Job completed successfully: ${job.name} [ID: ${job.id}]`);
+      logger5.info(`Job completed successfully: ${job.name} [ID: ${job.id}]`);
     } catch (err) {
       const errorMessage = err?.message || String(err);
       job.errorHistory.push({
@@ -1136,7 +1174,7 @@ var QueueManager = class {
       if (err instanceof InvalidFcmTokenError) {
         const invalidToken = err.token;
         const parentId = job.data?.parentId;
-        logger4.warn(`Invalid FCM token detected, removing it and not retrying job: ${job.name} [ID: ${job.id}]`, {
+        logger5.warn(`Invalid FCM token detected, removing it and not retrying job: ${job.name} [ID: ${job.id}]`, {
           jobId: job.id,
           token: invalidToken,
           parentId,
@@ -1145,9 +1183,9 @@ var QueueManager = class {
         if (parentId) {
           try {
             await store.deletePushToken(parentId, invalidToken);
-            logger4.info(`Invalid FCM token removed from database`, { parentId, token: invalidToken });
+            logger5.info(`Invalid FCM token removed from database`, { parentId, token: invalidToken });
           } catch (deleteError) {
-            logger4.error(`Failed to delete invalid FCM token from database`, deleteError, { parentId, token: invalidToken });
+            logger5.error(`Failed to delete invalid FCM token from database`, deleteError, { parentId, token: invalidToken });
           }
         }
         if (job.dedupeKey) {
@@ -1155,19 +1193,30 @@ var QueueManager = class {
         }
         return;
       }
-      logger4.error(`Job execution failed: ${job.name} [ID: ${job.id}]`, err);
+      const jobData2 = job.data;
+      const maskedToken2 = jobData2?.token ? `${String(jobData2.token).slice(0, 10)}...` : void 0;
+      logger5.error(`Job execution failed: ${job.name} [ID: ${job.id}]`, err, {
+        jobId: job.id,
+        jobName: job.name,
+        parentId: jobData2?.parentId,
+        token: maskedToken2,
+        title: jobData2?.title,
+        message: jobData2?.message,
+        attempts: job.attempts,
+        errorHistory: job.errorHistory
+      });
       if (job.attempts < job.maxAttempts) {
         const delay = Math.pow(2, job.attempts) * 100;
-        logger4.warn(`Scheduling retry for job: ${job.id} in ${delay}ms...`);
+        logger5.warn(`Scheduling retry for job: ${job.id} in ${delay}ms...`);
         setTimeout(() => {
           activeQueue.push(job);
           activeQueue.sort((a, b) => b.priority - a.priority || a.createdAt - b.createdAt);
           this.processNextJob();
         }, delay);
       } else {
-        logger4.error(`Job failed maximum attempts: ${job.name} [ID: ${job.id}]. Moving to DLQ.`);
+        logger5.error(`Job failed maximum attempts: ${job.name} [ID: ${job.id}]. Moving to DLQ.`);
         deadLetterQueue.push(job);
-        logger4.audit("JOB_DLQ_ROUTED", "QueueProcessor", { jobId: job.id, jobName: job.name, errors: job.errorHistory }, "FAILURE");
+        logger5.audit("JOB_DLQ_ROUTED", "QueueProcessor", { jobId: job.id, jobName: job.name, errors: job.errorHistory }, "FAILURE");
       }
     } finally {
       this.isProcessing = false;
@@ -1178,40 +1227,67 @@ var QueueManager = class {
    * Logic execution based on job type
    */
   static async executeJobLogic(job) {
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    if (job.name.startsWith("send-notification-push")) {
-      const {
-        token,
-        title,
-        message,
-        target = "home"
-      } = job.data;
-      if (!token) {
-        throw new Error("FCM token missing");
+    const jobData = job.data;
+    const maskedToken = jobData?.token ? `${String(jobData.token).slice(0, 10)}...` : void 0;
+    logger5.info("[NOTIF_TRACE] executeJobLogic started", {
+      jobName: job.name,
+      jobId: job.id,
+      parentId: jobData?.parentId,
+      tokenPresent: Boolean(jobData?.token),
+      token: maskedToken,
+      title: jobData?.title,
+      message: jobData?.message,
+      target: jobData?.target
+    });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      if (job.name.startsWith("send-notification-push")) {
+        const {
+          token,
+          title,
+          message,
+          target = "home"
+        } = job.data;
+        if (!token) {
+          throw new Error("FCM token missing");
+        }
+        const tokenPreview = token ? `${String(token).slice(0, 10)}...` : void 0;
+        logger5.info("[NOTIF_TRACE] About to call sendPushNotification", { parentId: jobData?.parentId, jobId: job.id, token: tokenPreview, title, message, target });
+        await sendPushNotification(
+          token,
+          title,
+          message,
+          target
+        );
+        logger5.info("[NOTIF_TRACE] FCM envoy\xE9 avec succ\xE8s", { token: tokenPreview, title, target });
+        logger5.info("Push notification sent successfully", {
+          title
+        });
+        return;
       }
-      await sendPushNotification(
-        token,
-        title,
-        message,
-        target
-      );
-      logger4.info("Push notification sent successfully", {
-        title
+      if (job.name.startsWith("send-notification-whatsapp")) {
+        logger5.info("WhatsApp delivery placeholder");
+        return;
+      }
+      if (job.name.startsWith("send-notification-sms")) {
+        logger5.info("SMS delivery placeholder");
+        return;
+      }
+      if (job.name === "test-failure-simulation") {
+        throw new Error(
+          "Network timeout: FCM Gateway failed to respond"
+        );
+      }
+    } catch (err) {
+      logger5.error("[NOTIF_TRACE] executeJobLogic error", err, {
+        jobId: job.id,
+        jobName: job.name,
+        parentId: jobData?.parentId,
+        token: maskedToken,
+        title: jobData?.title,
+        message: jobData?.message
       });
-      return;
-    }
-    if (job.name.startsWith("send-notification-whatsapp")) {
-      logger4.info("WhatsApp delivery placeholder");
-      return;
-    }
-    if (job.name.startsWith("send-notification-sms")) {
-      logger4.info("SMS delivery placeholder");
-      return;
-    }
-    if (job.name === "test-failure-simulation") {
-      throw new Error(
-        "Network timeout: FCM Gateway failed to respond"
-      );
+      throw err;
     }
   }
   static getDLQ() {
@@ -1223,16 +1299,19 @@ var QueueManager = class {
 };
 
 // backend/services/notification.ts
-var logger5 = new Logger("NotificationService");
+var logger6 = new Logger("NotificationService");
 var NotificationService = class {
   /**
    * Orchestrates multi-channel delivery based on parent consents and quiet hours
    */
   static async dispatchNotification(parentId, title, message, category, metadata = {}, dedupeKey) {
+    logger6.info("[NOTIF_TRACE] dispatchNotification start", { parentId, category, title, dedupeKey, metadata });
     const effectiveParentIds = await this.resolveParentIds(parentId, metadata);
-    logger5.info(`Orchestrating notification for Parent IDs: ${effectiveParentIds.join(", ") || "<none>"}`, { category, dedupeKey });
+    logger6.info(`Orchestrating notification for Parent IDs: ${effectiveParentIds.join(", ") || "<none>"}`, { category, dedupeKey });
+    logger6.info("[NOTIF_TRACE] parentIds r\xE9solus", { effectiveParentIds });
     if (effectiveParentIds.length === 0) {
-      logger5.warn("No parent IDs resolved for notification dispatch.");
+      logger6.warn("No parent IDs resolved for notification dispatch.");
+      logger6.info("[TRACE] dispatchNotification exited early: no parent IDs resolved");
       return {
         success: true,
         channels: [],
@@ -1243,21 +1322,32 @@ var NotificationService = class {
     const channelsToDeliver = [];
     for (const effectiveParentId of effectiveParentIds) {
       const preferences = await store.getNotificationPreferences(effectiveParentId);
+      logger6.info("[NOTIF_TRACE] Notification preferences loaded", { parentId: effectiveParentId, preferences });
       const consents = await store.getConsentsOfParent(effectiveParentId);
+      logger6.info("[NOTIF_TRACE] Notification consents loaded", { parentId: effectiveParentId, consents });
+      const devices = await store.getDevicesOfParent(effectiveParentId);
+      const deviceSummaries = devices.map((device) => ({
+        id: device.id,
+        platform: device.platform,
+        tokenPresent: Boolean(device.pushToken),
+        tokenPreview: device.pushToken ? `${device.pushToken.slice(0, 10)}...` : void 0,
+        appVersion: device.appVersion
+      }));
+      logger6.info("[NOTIF_TRACE] Notification devices loaded", { parentId: effectiveParentId, deviceCount: devices.length, devices: deviceSummaries });
       const isPushAuthorized = preferences.pushEnabled;
       const isSmsAuthorized = preferences.smsEnabled && consents.some((c) => c.channel === "sms" && c.consentGranted);
       const isWhatsappAuthorized = preferences.whatsappEnabled && consents.some((c) => c.channel === "whatsapp" && c.consentGranted);
       if (this.isWithinQuietHours(preferences.quietHoursStart, preferences.quietHoursEnd)) {
-        logger5.info(`Quiet Hours active for parent ${effectiveParentId}. Scheduling notification with lower priority or buffering.`);
+        logger6.info(`Quiet Hours active for parent ${effectiveParentId}. Scheduling notification with lower priority or buffering.`);
         metadata.quietHoursApplied = true;
       }
-      const devices = await store.getDevicesOfParent(effectiveParentId);
       const pushTokens = Array.from(new Set(
         devices.map((device) => device.pushToken).filter((token) => Boolean(token))
       ));
-      logger5.info("Devices found", { parentId: effectiveParentId, devices });
+      logger6.info("Devices found", { parentId: effectiveParentId, devices });
+      logger6.info("[TRACE] Push tokens resolved", { parentId: effectiveParentId, pushTokens });
       if (pushTokens.length === 0 && isPushAuthorized) {
-        logger5.warn(`No devices registered for parent: ${effectiveParentId}. Push skipped.`);
+        logger6.warn(`No devices registered for parent: ${effectiveParentId}. Push skipped.`);
       }
       const parentChannelsToDeliver = [];
       if (isPushAuthorized && pushTokens.length > 0) {
@@ -1271,7 +1361,7 @@ var NotificationService = class {
         parentChannelsToDeliver.push("sms");
       }
       if (parentChannelsToDeliver.length === 0) {
-        logger5.warn(
+        logger6.warn(
           `No delivery channels available for parent: ${effectiveParentId}. In-app notification only.`
         );
       }
@@ -1281,6 +1371,8 @@ var NotificationService = class {
         if (channel === "push") {
           for (const token of pushTokens) {
             const jobDedupeKey = dedupeKey ? `${dedupeKey}-${channel}-${token}` : void 0;
+            const tokenPreview = token ? `${token.slice(0, 10)}...` : void 0;
+            logger6.info("[NOTIF_TRACE] QueueManager.addJob preparing", { channel, tokenPresent: Boolean(token), token: tokenPreview, jobName, dedupeKey: jobDedupeKey });
             const jobId = QueueManager.addJob(jobName, {
               parentId: effectiveParentId,
               channel,
@@ -1295,10 +1387,12 @@ var NotificationService = class {
               dedupeKey: jobDedupeKey,
               maxAttempts: 3
             });
+            logger6.info("[NOTIF_TRACE] QueueManager.addJob queued", { jobName, jobId, parentId: effectiveParentId, channel, dedupeKey: jobDedupeKey, tokenPresent: Boolean(token), token: tokenPreview });
             jobsTriggered.push(jobId);
           }
         } else {
           const jobDedupeKey = dedupeKey ? `${dedupeKey}-${channel}` : void 0;
+          logger6.info("[NOTIF_TRACE] QueueManager.addJob preparing", { channel, tokenPresent: false, jobName, dedupeKey: jobDedupeKey });
           const jobId = QueueManager.addJob(jobName, {
             parentId: effectiveParentId,
             channel,
@@ -1312,16 +1406,19 @@ var NotificationService = class {
             dedupeKey: jobDedupeKey,
             maxAttempts: 3
           });
+          logger6.info("[NOTIF_TRACE] QueueManager.addJob queued", { jobName, jobId, parentId: effectiveParentId, channel, dedupeKey: jobDedupeKey, tokenPresent: false });
           jobsTriggered.push(jobId);
         }
       }
       parentChannelsToDeliver.forEach((channel) => channelsToDeliver.push(channel));
     }
-    return {
+    const result = {
       success: true,
       channels: Array.from(new Set(channelsToDeliver)),
       jobs: jobsTriggered
     };
+    logger6.info("[TRACE] dispatchNotification completed", { channels: result.channels, jobs: result.jobs });
+    return result;
   }
   static async resolveParentIds(parentId, metadata = {}) {
     if (Array.isArray(parentId)) {
@@ -1356,7 +1453,7 @@ var NotificationService = class {
         return currentMinutes >= startMinutes || currentMinutes <= endMinutes;
       }
     } catch (e) {
-      logger5.error("Failed to parse quiet hours, skipping window validation", e);
+      logger6.error("Failed to parse quiet hours, skipping window validation", e);
       return false;
     }
   }
@@ -1405,7 +1502,7 @@ var DevAddGradeSchema = import_zod.z.object({
 });
 
 // server.ts
-var logger6 = new Logger("ExpressServer");
+var logger7 = new Logger("ExpressServer");
 var app = (0, import_express.default)();
 var PORT = Number(process.env.PORT) || 3001;
 app.use(import_express.default.json());
@@ -1486,7 +1583,7 @@ var requireParentRoleOnly = (req, res, next) => {
 app.post("/api/mobile/parent/login", rateLimit(15, 6e4), async (req, res) => {
   const validation = LoginSchema.safeParse(req.body);
   if (!validation.success) {
-    logger6.warn("\xC9chec de la validation Zod sur la route d'authentification.");
+    logger7.warn("\xC9chec de la validation Zod sur la route d'authentification.");
     return res.status(400).json({
       error: "Donn\xE9es de connexion invalides.",
       code: "BAD_REQUEST",
@@ -1496,7 +1593,7 @@ app.post("/api/mobile/parent/login", rateLimit(15, 6e4), async (req, res) => {
   const { email, password } = validation.data;
   const user = await store.findParentByEmail(email);
   if (!user) {
-    logger6.warn(`Tentative de connexion infructueuse (utilisateur inconnu): ${email}`);
+    logger7.warn(`Tentative de connexion infructueuse (utilisateur inconnu): ${email}`);
     return res.status(401).json({
       error: "Identifiants de connexion incorrects.",
       code: "BAD_CREDENTIALS"
@@ -1504,14 +1601,14 @@ app.post("/api/mobile/parent/login", rateLimit(15, 6e4), async (req, res) => {
   }
   const isPasswordValid = await store.verifyParentPassword(email, password);
   if (!isPasswordValid) {
-    logger6.warn(`Mot de passe incorrect pour le compte parent: ${email}`);
+    logger7.warn(`Mot de passe incorrect pour le compte parent: ${email}`);
     return res.status(401).json({
       error: "Identifiants de connexion incorrects.",
       code: "BAD_CREDENTIALS"
     });
   }
   if (user.role !== "parent") {
-    logger6.audit("NON_PARENT_LOGIN_REJECT", user.id, { email, role: user.role }, "FAILURE");
+    logger7.audit("NON_PARENT_LOGIN_REJECT", user.id, { email, role: user.role }, "FAILURE");
     return res.status(403).json({
       error: "Acc\xE8s mobile r\xE9serv\xE9 aux parents.",
       code: "PARENTS_ONLY",
@@ -1538,7 +1635,7 @@ app.post("/api/mobile/parent/login", rateLimit(15, 6e4), async (req, res) => {
     activeSchoolId: user.activeSchoolId,
     schools: user.schools
   };
-  logger6.audit("PARENT_LOGIN_SUCCESS", user.id, { email, mustReset: localMustReset }, "SUCCESS");
+  logger7.audit("PARENT_LOGIN_SUCCESS", user.id, { email, mustReset: localMustReset }, "SUCCESS");
   return res.json({
     parent: parentDetails,
     token: session.accessToken,
@@ -1583,7 +1680,7 @@ app.post("/api/mobile/parent/change-password", rateLimit(15, 6e4), async (req, r
   const newSalt = import_crypto2.default.randomBytes(16).toString("hex");
   const newHash = import_crypto2.default.pbkdf2Sync(newPassword, newSalt, 31e4, 64, "sha512").toString("hex");
   await dbQuery(`UPDATE local_auths SET password_hash = $1, salt = $2, must_reset = false WHERE user_id = $3`, [newHash, newSalt, Number(user.id)]);
-  logger6.audit("PARENT_CHANGE_PASSWORD", user.id, { email }, "SUCCESS");
+  logger7.audit("PARENT_CHANGE_PASSWORD", user.id, { email }, "SUCCESS");
   return res.json({ success: true });
 });
 app.post("/api/mobile/parent/refresh-token", (req, res) => {
@@ -1596,13 +1693,13 @@ app.post("/api/mobile/parent/refresh-token", (req, res) => {
   }
   const newSession = AuthService.rotateSession(refreshToken);
   if (!newSession) {
-    logger6.warn("\xC9chec de rotation du Jeton de Rafra\xEEchissement. Token expir\xE9, compromis ou invalide.");
+    logger7.warn("\xC9chec de rotation du Jeton de Rafra\xEEchissement. Token expir\xE9, compromis ou invalide.");
     return res.status(401).json({
       error: "Session invalide ou expir\xE9e. Veuillez vous reconnecter.",
       code: "INVALID_SESSION"
     });
   }
-  logger6.info("Rotation du jeton de session effectu\xE9e avec succ\xE8s.");
+  logger7.info("Rotation du jeton de session effectu\xE9e avec succ\xE8s.");
   return res.json(newSession);
 });
 app.post("/api/mobile/parent/logout", requireAuth, requireParentRoleOnly, async (req, res) => {
@@ -1616,7 +1713,7 @@ app.post("/api/mobile/parent/logout", requireAuth, requireParentRoleOnly, async 
   if (pushToken || deviceId) {
     await store.deletePushToken(parentId, typeof pushToken === "string" ? pushToken : void 0, typeof deviceId === "string" ? deviceId : void 0);
   }
-  logger6.audit("PARENT_LOGOUT", parentId, { parentId, deviceId: typeof deviceId === "string" ? deviceId : void 0 }, "SUCCESS");
+  logger7.audit("PARENT_LOGOUT", parentId, { parentId, deviceId: typeof deviceId === "string" ? deviceId : void 0 }, "SUCCESS");
   return res.json({
     success: true,
     message: "D\xE9connexion r\xE9ussie avec succ\xE8s."
@@ -1816,7 +1913,7 @@ app.post("/api/mobile/parent/devices/register-push-token", requireAuth, requireP
   const parentId = req.parent.id;
   const validation = RegisterPushTokenSchema.safeParse(req.body);
   if (!validation.success) {
-    logger6.warn(`\xC9chec de validation de l'enregistrement de token pour le parent: ${parentId}`);
+    logger7.warn(`\xC9chec de validation de l'enregistrement de token pour le parent: ${parentId}`);
     return res.status(400).json({
       error: "Param\xE8tres de notification invalides.",
       code: "BAD_REQUEST",
@@ -1839,7 +1936,7 @@ app.post("/api/mobile/parent/devices/register-push-token", requireAuth, requireP
     appVersion
   );
   console.log("DEVICE ENREGISTRE :", device);
-  logger6.audit(
+  logger7.audit(
     "REGISTER_PUSH_TOKEN",
     parentId,
     { platform, appVersion },
@@ -1864,7 +1961,7 @@ app.put("/api/mobile/parent/notification-preferences", requireAuth, requireParen
   const parentId = req.parent.id;
   const validation = NotificationPreferencesSchema.safeParse(req.body);
   if (!validation.success) {
-    logger6.warn(`\xC9chec de la validation de pr\xE9f\xE9rences pour le parent: ${parentId}`);
+    logger7.warn(`\xC9chec de la validation de pr\xE9f\xE9rences pour le parent: ${parentId}`);
     return res.status(400).json({
       error: "Param\xE8tres de pr\xE9f\xE9rences invalides.",
       code: "BAD_REQUEST",
@@ -1885,7 +1982,7 @@ app.put("/api/mobile/parent/notification-preferences", requireAuth, requireParen
     quietHoursStart: quietHoursStart ?? void 0,
     quietHoursEnd: quietHoursEnd ?? void 0
   });
-  logger6.audit("UPDATE_PREFERENCES", parentId, { pushEnabled, whatsappEnabled, smsEnabled }, "SUCCESS");
+  logger7.audit("UPDATE_PREFERENCES", parentId, { pushEnabled, whatsappEnabled, smsEnabled }, "SUCCESS");
   return res.json({
     success: true,
     message: "Pr\xE9f\xE9rences de notification mises \xE0 jour.",
@@ -1916,7 +2013,7 @@ app.post("/api/mobile/parent/notifications/test", requireAuth, requireParentRole
     },
     dedupeKey
   );
-  logger6.audit("TEST_NOTIFICATION_DISPATCH", parentId, { title }, "SUCCESS");
+  logger7.audit("TEST_NOTIFICATION_DISPATCH", parentId, { title }, "SUCCESS");
   return res.json({
     success: true,
     message: "Test de notification multi-canal envoy\xE9 \xE0 la file d'attente.",
@@ -1939,6 +2036,7 @@ app.get("/api/mobile/health", (req, res) => {
 });
 app.post("/api/dev/add-absence", async (req, res) => {
   const { childId, date, reason, justified, justificationText } = req.body;
+  logger7.info("[NOTIF_TRACE] add-absence endpoint received", { childId, date, reason, justified });
   if (!childId || !reason) {
     return res.status(400).json({ error: "childId and reason required" });
   }
@@ -1949,6 +2047,7 @@ app.post("/api/dev/add-absence", async (req, res) => {
     justified: !!justified,
     justificationText
   });
+  logger7.info("[NOTIF_TRACE] absence created", { childId, absenceId: absence.id, date: absence.date, reason, justified });
   const children = await store.getChildrenOfParent("parent-jean-dupont");
   const backupChildren = await store.getChildrenOfParent("parent-marie-martin");
   const child = children.find((c) => c.id === childId) || backupChildren.find((c) => c.id === childId);
@@ -1956,14 +2055,56 @@ app.post("/api/dev/add-absence", async (req, res) => {
     const parentId = child.parentId;
     const dedupeKey = `absence-${child.id}-${Date.now()}`;
     const name = `${child.firstName} ${child.lastName}`;
-    await NotificationService.dispatchNotification(
+    // Build consistent message body using absence date/time and optional subjectName
+    const formatDateSafe = (dateStr) => {
+      if (!dateStr) return '';
+      const opts = { day: '2-digit', month: '2-digit', year: 'numeric' };
+      if (String(dateStr).includes('T')) return new Date(dateStr).toLocaleDateString('fr-FR', opts);
+      const parts = String(dateStr).split('-');
+      if (parts.length === 3) {
+        const y = Number(parts[0]);
+        const m = Number(parts[1]) - 1;
+        const d = Number(parts[2]);
+        return new Date(y, m, d).toLocaleDateString('fr-FR', opts);
+      }
+      return new Date(dateStr).toLocaleDateString('fr-FR', opts);
+    };
+    const absenceDate = new Date(absence.date);
+    const formattedDate = formatDateSafe(absence.date);
+    const timePart = absenceDate.toISOString().includes('T') ? ` de ${absenceDate.toISOString().substr(11,5)}` : '';
+    const subjectName = absence.subjectName || undefined;
+    const subjectText = subjectName ? `, en ${subjectName}` : '';
+    const messageBody = `Une absence a été signalée pour ${child.firstName} le ${formattedDate}${timePart}${subjectText}. Veuillez fournir un justificatif.`;
+
+    const internalPayload = {
       parentId,
-      "Alerte Absence \xC9coleTrack",
-      `Absence enregistr\xE9e pour ${name} le ${new Date(date).toLocaleDateString("fr-FR")}. Motif : ${reason}`,
-      "absence",
-      { childId, childName: name, date, reason },
+      title: `Nouvelle absence pour ${child.firstName}`,
+      message: messageBody,
+      category: "absence",
+      metadata: {
+        absenceId: absence.id,
+        childId,
+        date: absence.date,
+        reason,
+        subjectName: subjectName
+      },
       dedupeKey
-    );
+    };
+    logger7.info("[NOTIF_TRACE] calling /api/internal/absence-notification", {
+      parentId,
+      childId,
+      absenceId: absence.id,
+      payload: internalPayload
+    });
+    const API_URL = process.env.API_URL || "http://localhost:3001";
+    logger7.info("[ENV_TRACE] API_URL =", { API_URL, raw: process.env.API_URL });
+    await fetch(`${API_URL}/api/internal/absence-notification`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(internalPayload)
+    });
   }
   return res.json({ success: true, absence });
 });
@@ -2018,6 +2159,7 @@ app.post("/api/dev/clear-logs", (req, res) => {
 });
 app.post("/api/internal/absence-notification", async (req, res) => {
   try {
+    logger7.info("[NOTIF_TRACE] /api/internal/absence-notification route entry", { body: req.body });
     const {
       parentId,
       title,
@@ -2026,11 +2168,13 @@ app.post("/api/internal/absence-notification", async (req, res) => {
       metadata = {},
       dedupeKey
     } = req.body;
+    logger7.info("[NOTIF_TRACE] /api/internal/absence-notification parsed body", { parentId, title, message, category, metadata, dedupeKey });
     if (!parentId || !title || !message) {
       return res.status(400).json({
         error: "Missing notification parameters"
       });
     }
+    logger7.info("[NOTIF_TRACE] /api/internal/absence-notification dispatching", { parentId, title, message, category, metadata, dedupeKey });
     const result = await NotificationService.dispatchNotification(
       String(parentId),
       title,
@@ -2039,12 +2183,13 @@ app.post("/api/internal/absence-notification", async (req, res) => {
       metadata,
       dedupeKey
     );
+    logger7.info("[NOTIF_TRACE] /api/internal/absence-notification dispatch result", { result });
     return res.json({
       success: true,
       result
     });
   } catch (err) {
-    logger6.error("Internal absence notification failed", err);
+    logger7.error("Internal absence notification failed", err);
     return res.status(500).json({
       error: "Notification dispatch failed"
     });
@@ -2085,7 +2230,7 @@ app.post("/api/internal/grade-notification", async (req, res) => {
       result
     });
   } catch (err) {
-    logger6.error("Internal grade notification failed", err);
+    logger7.error("Internal grade notification failed", err);
     return res.status(500).json({
       error: "Notification dispatch failed"
     });
@@ -2120,7 +2265,7 @@ app.post("/api/internal/evaluation-notification", async (req, res) => {
       result
     });
   } catch (err) {
-    logger6.error("Internal evaluation notification failed", err);
+    logger7.error("Internal evaluation notification failed", err);
     return res.status(500).json({
       error: "Notification dispatch failed"
     });
@@ -2155,7 +2300,7 @@ app.post("/api/internal/info-notification", async (req, res) => {
       result
     });
   } catch (err) {
-    logger6.error("Internal info notification failed", err);
+    logger7.error("Internal info notification failed", err);
     return res.status(500).json({
       error: "Notification dispatch failed"
     });

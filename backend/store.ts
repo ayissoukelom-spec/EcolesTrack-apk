@@ -222,7 +222,7 @@ const INITIAL_DATABASE: DatabaseSchema = {
       id: "not-1",
       parentId: "parent-jean-dupont",
       title: "Nouvelle absence signalée",
-      message: "Votre enfant Lucas Dupont a été signalé absent aujourd'hui à 10:00. Veuillez fournir un justificatif.",
+      message: "Une absence a été signalée pour Lucas Dupont le 02/07/2026. Veuillez fournir un justificatif.",
       read: false,
       createdAt: "2026-07-02T10:15:00Z",
       deepLink: "ecoletrack://absences?childId=child-lucas"
