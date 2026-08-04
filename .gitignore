@@ -13,4 +13,8 @@ full_device_log.txt
 login_attempt_logs.txt
 login_webview_logs.txt
 .gradle/
-
+# Gradle generated files
+.gradle/
+**/.gradle/
+# Android generated web assets
+mobile/android-webview/app/src/main/assets/assets/
