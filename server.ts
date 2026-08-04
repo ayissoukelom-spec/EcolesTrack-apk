@@ -8,7 +8,7 @@ import path from "path";
 import crypto from "crypto";
 import { createServer as createViteServer } from "vite";
 import { store } from "./backend/store";
-import { dbQuery } from "./backend/postgres";
+import { dbQuery, initializeMobileTables } from "./backend/postgres";
 import { helmetHeaders, requestIdMiddleware, sanitizePayload } from "./backend/middlewares/security";
 import { Logger } from "./backend/utils/logger";
 import { AuthService } from "./backend/services/auth";
@@ -54,9 +54,9 @@ app.use((req, res, next) => {
 // ====================================================================
 const JWT_SECRET = "ecoletrack-super-secret-key-2026";
 
-function generateToken(payload: { parentId: string; role: string }): string {
+async function generateToken(payload: { parentId: string; role: string }): Promise<string> {
   // Use AuthService to keep session management synchronized
-  const { accessToken } = AuthService.createSession(payload.parentId, payload.role);
+  const { accessToken } = await AuthService.createSession(payload.parentId, payload.role);
   return accessToken;
 }
 
@@ -197,7 +197,7 @@ app.post("/api/mobile/parent/login", rateLimit(15, 60000), async (req, res) => {
     }
   }
 
-  const session = AuthService.createSession(user.id, user.role);
+  const session = await AuthService.createSession(user.id, user.role);
   const parentDetails = {
     id: user.id,
     name: user.name,
@@ -264,7 +264,7 @@ app.post("/api/mobile/parent/change-password", rateLimit(15, 60000), async (req,
 });
 
 // 1b. POST /api/mobile/parent/refresh-token (Refresh Token Rotation - RTR)
-app.post("/api/mobile/parent/refresh-token", (req, res) => {
+app.post("/api/mobile/parent/refresh-token", async (req, res) => {
   const { refreshToken } = req.body;
   if (!refreshToken) {
     return res.status(400).json({
@@ -273,7 +273,7 @@ app.post("/api/mobile/parent/refresh-token", (req, res) => {
     });
   }
 
-  const newSession = AuthService.rotateSession(refreshToken);
+  const newSession = await AuthService.rotateSession(refreshToken);
   if (!newSession) {
     logger.warn("Échec de rotation du Jeton de Rafraîchissement. Token expiré, compromis ou invalide.");
     return res.status(401).json({
@@ -292,9 +292,9 @@ app.post("/api/mobile/parent/logout", requireAuth, requireParentRoleOnly, async 
   const { refreshToken, deviceId, pushToken } = req.body ?? {};
 
   if (refreshToken) {
-    AuthService.revokeSession(parentId, refreshToken);
+    await AuthService.revokeSession(parentId, refreshToken);
   } else {
-    AuthService.revokeAllSessions(parentId);
+    await AuthService.revokeAllSessions(parentId);
   }
 
   if (pushToken || deviceId) {
@@ -1054,6 +1054,8 @@ app.post("/api/internal/info-notification", async (req: Request, res: Response) 
 // VITE OR STATIC FILE HOSTING (FULL-STACK CONFIG)
 // ====================================================================
 async function startServer() {
+  await initializeMobileTables();
+
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },

@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { Logger } from "../utils/logger";
+import { dbQuery } from "../postgres";
 
 const logger = new Logger("AuthService");
 
@@ -13,11 +14,18 @@ export interface TokenPayload {
   exp: number;
 }
 
-// In-Memory Redis Mock for revoked/blacklisted Refresh Tokens (rotation protection)
-const tokenBlacklist = new Set<string>();
+function hashRefreshToken(refreshToken: string): string {
+  return crypto.createHash("sha256").update(refreshToken).digest("hex");
+}
 
-// Track active sessions: Maps Parent ID -> Set of Active Refresh Tokens
-const activeSessions = new Map<string, Set<string>>();
+interface PersistedSession {
+  id: number;
+  parent_id: string;
+  role: string;
+  refresh_token_hash: string;
+  is_active: boolean;
+  expires_at: string;
+}
 
 export class AuthService {
   /**
@@ -70,19 +78,18 @@ export class AuthService {
   /**
    * Generates a pair of (Access Token, Refresh Token) for a user session
    */
-  public static createSession(parentId: string, role: string): { accessToken: string; refreshToken: string } {
+  public static async createSession(parentId: string, role: string): Promise<{ accessToken: string; refreshToken: string }> {
     const accessToken = this.generateJWT({ parentId, role }, JWT_SECRET, ACCESS_TOKEN_EXPIRY_MS);
-    
-    // Refresh Token contains random entropy to guarantee uniqueness
     const entropy = crypto.randomBytes(16).toString("hex");
     const refreshToken = this.generateJWT({ parentId, role, entropy }, JWT_SECRET, REFRESH_TOKEN_EXPIRY_MS);
-    
-    // Track active session
-    if (!activeSessions.has(parentId)) {
-      activeSessions.set(parentId, new Set());
-    }
-    activeSessions.get(parentId)!.add(refreshToken);
-    
+    const refreshTokenHash = hashRefreshToken(refreshToken);
+    const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_MS).toISOString();
+
+    await dbQuery(`
+      INSERT INTO mobile_parent_sessions (parent_id, role, refresh_token_hash, expires_at, is_active)
+      VALUES ($1, $2, $3, $4, true)
+    `, [parentId, role, refreshTokenHash, expiresAt]);
+
     logger.info(`Session created for parent: ${parentId}`);
     return { accessToken, refreshToken };
   }
@@ -91,62 +98,91 @@ export class AuthService {
    * Rotates a Refresh Token (Refresh Token Rotation - RTR)
    * Prevents replay attacks by invalidating the old Refresh Token and issuing a new pair.
    */
-  public static rotateSession(oldRefreshToken: string): { accessToken: string; refreshToken: string } | null {
-    // 1. Verify token signature
+  private static async ensureSessionRecordForToken(parentId: string, role: string, refreshToken: string, expiresAt: string): Promise<PersistedSession> {
+    const refreshTokenHash = hashRefreshToken(refreshToken);
+    const { rows } = await dbQuery<PersistedSession>(`
+      SELECT id, parent_id, role, refresh_token_hash, is_active, expires_at
+      FROM mobile_parent_sessions
+      WHERE refresh_token_hash = $1
+      LIMIT 1
+    `, [refreshTokenHash]);
+
+    if (rows.length > 0) {
+      return rows[0];
+    }
+
+    await dbQuery(`
+      INSERT INTO mobile_parent_sessions (parent_id, role, refresh_token_hash, expires_at, is_active)
+      VALUES ($1, $2, $3, $4, true)
+    `, [parentId, role, refreshTokenHash, expiresAt]);
+
+    const result = await dbQuery<PersistedSession>(`
+      SELECT id, parent_id, role, refresh_token_hash, is_active, expires_at
+      FROM mobile_parent_sessions
+      WHERE refresh_token_hash = $1
+      LIMIT 1
+    `, [refreshTokenHash]);
+
+    return result.rows[0];
+  }
+
+  public static async rotateSession(oldRefreshToken: string): Promise<{ accessToken: string; refreshToken: string } | null> {
     const payload = this.verifyJWT(oldRefreshToken);
     if (!payload) {
       logger.warn("Rotation attempted with invalid or expired Refresh Token.");
       return null;
     }
 
-    const { parentId, role } = payload;
+    const { parentId, role, exp } = payload;
+    const refreshTokenHash = hashRefreshToken(oldRefreshToken);
+    const expiresAt = new Date(exp).toISOString();
 
-    // 2. Check if Refresh Token is blacklisted (compromised)
-    if (tokenBlacklist.has(oldRefreshToken)) {
-      logger.warn(`[SECURITY ALERT] Replay attack detected! Compromised Refresh Token reused for parent ID: ${parentId}. Revoking all sessions!`);
-      this.revokeAllSessions(parentId); // Security measure: Revoke everything!
+    const existingSession = await this.ensureSessionRecordForToken(parentId, role, oldRefreshToken, expiresAt);
+    if (!existingSession.is_active) {
+      logger.warn(`Refresh Token not found or inactive for parent: ${parentId}`);
       return null;
     }
 
-    // 3. Blacklist the old token now
-    tokenBlacklist.add(oldRefreshToken);
-
-    // 4. Verify old token was in active sessions list
-    const parentTokens = activeSessions.get(parentId);
-    if (!parentTokens || !parentTokens.has(oldRefreshToken)) {
-      logger.warn(`Refresh Token not found in active session list for parent: ${parentId}`);
+    if (new Date(existingSession.expires_at).getTime() < Date.now()) {
+      logger.warn(`Refresh Token expired in DB for parent: ${parentId}`);
       return null;
     }
 
-    // Remove old token from active list
-    parentTokens.delete(oldRefreshToken);
+    await dbQuery(`
+      UPDATE mobile_parent_sessions
+      SET is_active = false, revoked_at = now(), last_used_at = now()
+      WHERE id = $1
+    `, [existingSession.id]);
 
-    // 5. Generate new session pair
-    const newSession = this.createSession(parentId, role);
+    const newSession = await this.createSession(parentId, role);
     return newSession;
   }
 
   /**
    * Revokes a specific session (Logout)
    */
-  public static revokeSession(parentId: string, refreshToken: string) {
-    tokenBlacklist.add(refreshToken);
-    const parentTokens = activeSessions.get(parentId);
-    if (parentTokens) {
-      parentTokens.delete(refreshToken);
-    }
+  public static async revokeSession(parentId: string, refreshToken: string) {
+    const refreshTokenHash = hashRefreshToken(refreshToken);
+
+    await dbQuery(`
+      UPDATE mobile_parent_sessions
+      SET is_active = false, revoked_at = now()
+      WHERE parent_id = $1 AND refresh_token_hash = $2 AND is_active = true
+    `, [parentId, refreshTokenHash]);
+
     logger.info(`Session revoked for parent: ${parentId}`);
   }
 
   /**
    * Revokes all sessions for a user (e.g., when a compromise is detected)
    */
-  public static revokeAllSessions(parentId: string) {
-    const parentTokens = activeSessions.get(parentId);
-    if (parentTokens) {
-      parentTokens.forEach(token => tokenBlacklist.add(token));
-      activeSessions.delete(parentId);
-    }
+  public static async revokeAllSessions(parentId: string) {
+    await dbQuery(`
+      UPDATE mobile_parent_sessions
+      SET is_active = false, revoked_at = now()
+      WHERE parent_id = $1 AND is_active = true
+    `, [parentId]);
+
     logger.audit("REVOKE_ALL_SESSIONS", parentId, { parentId }, "SUCCESS");
   }
 }

@@ -102,6 +102,21 @@ export async function initializeMobileTables() {
       delivered_at TIMESTAMP
     );
   `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS mobile_parent_sessions (
+      id SERIAL PRIMARY KEY,
+      parent_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      refresh_token_hash TEXT NOT NULL UNIQUE,
+      created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+      expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+      is_active BOOLEAN NOT NULL DEFAULT true,
+      revoked_at TIMESTAMP WITH TIME ZONE,
+      last_used_at TIMESTAMP WITH TIME ZONE
+    );
+    CREATE INDEX IF NOT EXISTS mobile_parent_sessions_parent_idx ON mobile_parent_sessions(parent_id);
+  `);
 }
 
 export async function dbQuery<T = any>(text: string, params: any[] = []) {
