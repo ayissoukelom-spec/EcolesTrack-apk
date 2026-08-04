@@ -19,7 +19,7 @@ async function main() {
       process.exit(1);
     }
 
-    const tokenPair = AuthService.createSession(String(userId), 'parent');
+    const tokenPair = await AuthService.createSession(String(userId), 'parent');
     console.log('Found parentId:', userId);
     console.log('Access token:', tokenPair.accessToken);
     console.log('Refresh token:', tokenPair.refreshToken);
