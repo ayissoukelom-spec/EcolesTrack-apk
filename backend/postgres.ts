@@ -37,9 +37,43 @@ pool.on('error', (err) => {
 });
 
 export async function initializeMobileTables() {
+  // Clean up potential orphan sequences created by previous SERIAL-based table creations
+  // This only drops the orphan sequence when the table itself does not exist to avoid data loss.
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relkind = 'r' AND relname = 'mobile_parent_devices')
+         AND EXISTS (SELECT 1 FROM pg_class WHERE relkind = 'S' AND relname = 'mobile_parent_devices_id_seq') THEN
+        DROP SEQUENCE IF EXISTS mobile_parent_devices_id_seq;
+      END IF;
+
+      IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relkind = 'r' AND relname = 'mobile_notification_consents')
+         AND EXISTS (SELECT 1 FROM pg_class WHERE relkind = 'S' AND relname = 'mobile_notification_consents_id_seq') THEN
+        DROP SEQUENCE IF EXISTS mobile_notification_consents_id_seq;
+      END IF;
+
+      IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relkind = 'r' AND relname = 'mobile_notification_events')
+         AND EXISTS (SELECT 1 FROM pg_class WHERE relkind = 'S' AND relname = 'mobile_notification_events_id_seq') THEN
+        DROP SEQUENCE IF EXISTS mobile_notification_events_id_seq;
+      END IF;
+
+      IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relkind = 'r' AND relname = 'mobile_notification_deliveries')
+         AND EXISTS (SELECT 1 FROM pg_class WHERE relkind = 'S' AND relname = 'mobile_notification_deliveries_id_seq') THEN
+        DROP SEQUENCE IF EXISTS mobile_notification_deliveries_id_seq;
+      END IF;
+
+      IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relkind = 'r' AND relname = 'mobile_parent_sessions')
+         AND EXISTS (SELECT 1 FROM pg_class WHERE relkind = 'S' AND relname = 'mobile_parent_sessions_id_seq') THEN
+        DROP SEQUENCE IF EXISTS mobile_parent_sessions_id_seq;
+      END IF;
+    END
+    $$;
+  `);
+
+  // Create tables using IDENTITY columns (modern PostgreSQL) to avoid creating explicit sequences
   await pool.query(`
     CREATE TABLE IF NOT EXISTS mobile_parent_devices (
-      id SERIAL PRIMARY KEY,
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
       parent_id TEXT NOT NULL,
       device_id TEXT,
       platform TEXT NOT NULL,
@@ -66,7 +100,7 @@ export async function initializeMobileTables() {
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS mobile_notification_consents (
-      id SERIAL PRIMARY KEY,
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
       parent_id TEXT NOT NULL,
       channel TEXT NOT NULL,
       consent_granted BOOLEAN NOT NULL DEFAULT false,
@@ -78,7 +112,7 @@ export async function initializeMobileTables() {
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS mobile_notification_events (
-      id SERIAL PRIMARY KEY,
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
       parent_id TEXT NOT NULL,
       event_type TEXT NOT NULL,
       payload_json TEXT NOT NULL,
@@ -89,7 +123,7 @@ export async function initializeMobileTables() {
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS mobile_notification_deliveries (
-      id SERIAL PRIMARY KEY,
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
       event_id INTEGER NOT NULL,
       channel TEXT NOT NULL,
       provider TEXT NOT NULL,
@@ -105,7 +139,7 @@ export async function initializeMobileTables() {
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS mobile_parent_sessions (
-      id SERIAL PRIMARY KEY,
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
       parent_id TEXT NOT NULL,
       role TEXT NOT NULL,
       refresh_token_hash TEXT NOT NULL UNIQUE,
