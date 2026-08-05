@@ -522,33 +522,34 @@ export class PostgresStore {
   public async justifyAbsence(absenceId: string, parentId: string, justificationReason: string): Promise<Absence | null> {
     const { rows } = await dbQuery<{
       id: string;
-      child_id: string;
-      date: string;
-      reason: string;
-      justified: boolean;
-      justification_text: string | null;
+student_id: string;
+date: string;
+reason: string;
+is_justified: boolean;
+justification_reason: string | null;
     }>(`
       UPDATE absences AS a
-      SET justified = true,
-          justification_text = $1
-      FROM children AS c
-      WHERE a.id = $2
-        AND a.child_id = c.id
-        AND c.parent_id = $3
-      RETURNING a.id, a.child_id, a.date, a.reason, a.justified, a.justification_text
+      SET is_justified = true,
+          justification_reason = $1
+      FROM students AS s
+JOIN parents AS p ON p.id = s.parent_id
+WHERE a.id = $2
+  AND a.student_id = s.id
+  AND p.user_id = $3
+      RETURNING a.id, a.student_id, a.date, a.is_justified, a.justification_reason
     `, [justificationReason, absenceId, parentId]);
 
     if (rows.length === 0) return null;
 
     const row = rows[0];
     return {
-      id: String(row.id),
-      childId: String(row.child_id),
-      date: row.date,
-      reason: row.reason,
-      justified: row.justified,
-      justificationText: row.justification_text ?? undefined,
-    };
+  id: String(row.id),
+  childId: String(row.student_id),
+  date: row.date,
+  reason: row.reason,
+  justified: row.is_justified,
+  justificationText: row.justification_reason ?? undefined,
+};
   }
 
   public async addGrade(grade: Omit<Grade, 'id'>): Promise<Grade> {
