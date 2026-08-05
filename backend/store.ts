@@ -478,24 +478,46 @@ export class PostgresStore {
   }
 
   public async getAbsencesOfChild(childId: string): Promise<Absence[]> {
-    const childIdNum = Number(childId);
-    if (!Number.isInteger(childIdNum)) return [];
+  const childIdNum = Number(childId);
+  if (!Number.isInteger(childIdNum)) return [];
 
-    const { rows } = await dbQuery<{ id: number; date: string; period: string | null; is_justified: boolean; justification_reason: string | null }>(`
-      SELECT id, date, period, is_justified, justification_reason
-      FROM absences
-      WHERE student_id = $1
-    `, [childIdNum]);
+  const { rows } = await dbQuery<{
+    id: number;
+    date: string;
+    period: string | null;
+    is_justified: boolean;
+    justification_reason: string | null;
+    subject_name: string | null;
+    start_time: string | null;
+    end_time: string | null;
+  }>(`
+    SELECT 
+      a.id,
+      a.date,
+      a.period,
+      a.is_justified,
+      a.justification_reason,
+      s.name AS subject_name,
+      a.start_time,
+      a.end_time
+    FROM absences a
+    LEFT JOIN subjects s ON s.id = a.subject_id
+    WHERE a.student_id = $1
+  `, [childIdNum]);
 
-    return rows.map((row) => ({
-      id: String(row.id),
-      childId,
-      date: row.date,
-      reason: row.justification_reason ?? (row.is_justified ? 'Absence justifiée' : 'Absence non justifiée'),
-      justified: row.is_justified,
-      justificationText: row.justification_reason ?? undefined,
-    }));
-  }
+  return rows.map((row) => ({
+    id: String(row.id),
+    childId,
+    date: row.date,
+    reason: row.justification_reason ?? (row.is_justified ? 'Absence justifiée' : 'Absence non justifiée'),
+    justified: row.is_justified,
+    justificationText: row.justification_reason ?? undefined,
+    subjectName: row.subject_name ?? undefined,
+    startTime: row.start_time ?? undefined,
+    endTime: row.end_time ?? undefined,
+    period: row.period ?? undefined,
+  }));
+}
 
   public async justifyAbsence(absenceId: string, parentId: string, justificationReason: string): Promise<Absence | null> {
     const { rows } = await dbQuery<{

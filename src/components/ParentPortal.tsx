@@ -450,9 +450,17 @@ export default function ParentPortal({
         hasCompletedProtectedLoadRef.current = true;
         const data = await parseJsonSafe<Absence[]>(response);
         // Sort absences by date descending (most recent first)
-        const sortedAbsences = Array.isArray(data) 
-          ? [...data].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-          : [];
+        const sortedAbsences = Array.isArray(data)
+          ? [...data].sort((a, b) => {
+        const dateDiff = new Date(b.date).getTime() - new Date(a.date).getTime();
+
+        if (dateDiff !== 0) {
+        return dateDiff;
+      }
+
+      return Number(b.id) - Number(a.id);
+    })
+  : [];
         setAbsences(sortedAbsences);
       }
     } catch (e) {
@@ -1319,7 +1327,19 @@ export default function ParentPortal({
                             <p className="text-[10px] font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
                               {new Date(abs.date).toLocaleDateString("fr-FR")}
                             </p>
-                            <h4 className="text-xs font-bold text-slate-900 dark:text-white mt-0.5">Motif : {abs.reason}</h4>
+                            <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
+  Matière : {abs.subjectName || abs.subject || 'Non précisée'}
+</p>
+
+<p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
+  {abs.startTime && abs.endTime
+    ? `${abs.startTime} - ${abs.endTime}`
+    : abs.period || 'Horaire non précisé'}
+</p>
+
+<h4 className="text-xs font-bold text-slate-900 dark:text-white mt-0.5">
+  Motif : {abs.reason}
+</h4>
                           </div>
                           {abs.justified ? (
                             <span className="shrink-0 text-[10px] font-bold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-900 px-2 py-0.5 rounded-full flex items-center gap-1">

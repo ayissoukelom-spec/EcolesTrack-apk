@@ -37,6 +37,11 @@ export interface Absence {
   reason: string;
   justified: boolean;
   justificationText?: string;
+  period?: string;
+  subject?: string;
+  subjectName?: string;
+  startTime?: string;
+  endTime?: string;
 }
 
 export interface Grade {
