@@ -509,7 +509,7 @@ export class PostgresStore {
     id: String(row.id),
     childId,
     date: row.date,
-    reason: row.justification_reason ?? (row.is_justified ? 'Absence justifiée' : 'Absence non justifiée'),
+    reason: row.is_justified ? 'Absence justifiée' : 'Absence non justifiée',
     justified: row.is_justified,
     justificationText: row.justification_reason ?? undefined,
     subjectName: row.subject_name ?? undefined,
@@ -546,7 +546,7 @@ WHERE a.id = $2
   id: String(row.id),
   childId: String(row.student_id),
   date: row.date,
-  reason: row.reason,
+  reason: row.is_justified ? 'Absence justifiée' : 'Absence non justifiée',
   justified: row.is_justified,
   justificationText: row.justification_reason ?? undefined,
 };
