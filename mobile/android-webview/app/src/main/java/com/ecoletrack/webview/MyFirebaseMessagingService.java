@@ -25,20 +25,20 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
 
     @Override
     public void onMessageReceived(RemoteMessage remoteMessage) {
-        Log.i(TAG, "onMessageReceived() called");
-        Log.i(TAG, "from=" + remoteMessage.getFrom());
-        Log.i(TAG, "messageId=" + remoteMessage.getMessageId());
-        Log.i(TAG, "data=" + remoteMessage.getData());
+        Log.d(TAG, "[FCM_DEBUG] onMessageReceived() called");
+        Log.d(TAG, "[FCM_DEBUG] from=" + remoteMessage.getFrom());
+        Log.d(TAG, "[FCM_DEBUG] messageId=" + remoteMessage.getMessageId());
+        Log.d(TAG, "[FCM_DEBUG] data=" + remoteMessage.getData());
 
         String notificationTitle = null;
         String notificationBody = null;
         if (remoteMessage.getNotification() != null) {
             notificationTitle = remoteMessage.getNotification().getTitle();
             notificationBody = remoteMessage.getNotification().getBody();
-            Log.i(TAG, "notificationTitle=" + notificationTitle);
-            Log.i(TAG, "notificationBody=" + notificationBody);
+            Log.d(TAG, "[FCM_DEBUG] notificationTitle=" + notificationTitle);
+            Log.d(TAG, "[FCM_DEBUG] notificationBody=" + notificationBody);
         } else {
-            Log.i(TAG, "notification=none");
+            Log.d(TAG, "[FCM_DEBUG] notification=none");
         }
 
         String title = "EcoleTrack";
@@ -53,6 +53,7 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
         }
 
         if (remoteMessage.getData() != null && !remoteMessage.getData().isEmpty()) {
+            Log.d(TAG, "[FCM_DEBUG] data map contents=" + remoteMessage.getData());
             if (remoteMessage.getData().containsKey("title")) {
                 title = remoteMessage.getData().get("title");
             }
@@ -64,13 +65,11 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
             }
             if (remoteMessage.getData().containsKey("target")) {
                 target = remoteMessage.getData().get("target");
-                Log.i(TAG, "[FCM] received target from payload: " + target);
-            } else {
-                Log.i(TAG, "[FCM] no target in payload; keeping default behavior");
+                Log.d(TAG, "[FCM_DEBUG] received target from payload: " + target);
             }
         }
 
-        Log.i(TAG, "final notification title=" + title + " body=" + message);
+        Log.i(TAG, "final notification title=" + title + " body=" + message + " target=" + target);
         showNotification(title, message, target);
     }
 
@@ -89,7 +88,7 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
         Intent intent = new Intent(this, MainActivity.class);
         if (target != null && !target.trim().isEmpty()) {
             intent.putExtra("target", target);
-            Log.i(TAG, "[FCM] attaching target to notification intent: " + target);
+            Log.d(TAG, "[FCM_DEBUG] attaching target to notification intent: " + target);
         }
 
         PendingIntent pendingIntent =

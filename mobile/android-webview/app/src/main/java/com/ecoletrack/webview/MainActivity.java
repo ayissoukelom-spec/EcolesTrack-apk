@@ -81,19 +81,28 @@ public class MainActivity extends AppCompatActivity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         Log.d(TAG, "[MainActivity] onNewIntent ts=" + System.currentTimeMillis() + " intent=" + intent);
+        if (intent != null) {
+            Log.d(TAG, "[MainActivity] onNewIntent targetExtra=" + intent.getStringExtra(EXTRA_TARGET));
+        }
         setIntent(intent);
         handleIncomingIntent(intent);
     }
 
     private void handleIncomingIntent(Intent intent) {
         if (intent == null) {
+            Log.d(TAG, "[MainActivity] handleIncomingIntent called with null intent");
             return;
         }
 
         String target = intent.getStringExtra(EXTRA_TARGET);
+        Log.d(TAG, "[MainActivity] handleIncomingIntent targetExtra=" + target);
         if (target != null && !target.trim().isEmpty()) {
             pendingTarget = target;
             Log.i(TAG, "[MainActivity] received target extra from intent: " + target);
+            if (webView != null) {
+                dispatchTargetToWebView(target);
+                pendingTarget = null;
+            }
         } else {
             Log.i(TAG, "[MainActivity] no target extra received; keeping default behavior");
         }
@@ -117,12 +126,20 @@ public class MainActivity extends AppCompatActivity {
 
     private void dispatchTargetToWebView(String target) {
         if (webView == null || target == null || target.trim().isEmpty()) {
+            Log.d(TAG, "[MainActivity] dispatchTargetToWebView skipped because webView or target is null/empty");
             return;
         }
 
         String escapedTarget = target.replace("\\", "\\\\").replace("'", "\\'");
-        String js = "window.setNotificationTarget && window.setNotificationTarget('" + escapedTarget + "');";
-        Log.i(TAG, "[MainActivity] dispatching target to WebView: " + target);
+        String js = "if (window.setNotificationTarget) { " +
+                    "window.setNotificationTarget('" + escapedTarget + "'); " +
+                    "console.log('[NOTIFICATION_DEBUG] window.setNotificationTarget exists'); " +
+                    "} else { " +
+                    "window.__pendingNotificationTarget = '" + escapedTarget + "'; " +
+                    "console.log('[NOTIFICATION_DEBUG] window.setNotificationTarget missing, storing pending target'); " +
+                    "}";
+        Log.d(TAG, "[MainActivity] dispatchTargetToWebView target=" + target);
+        Log.d(TAG, "[MainActivity] dispatchTargetToWebView js=" + js);
         webView.evaluateJavascript(js, null);
     }
 

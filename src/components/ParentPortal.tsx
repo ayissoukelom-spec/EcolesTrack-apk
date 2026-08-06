@@ -26,6 +26,7 @@ interface ParentPortalProps {
   setSelectedChild: (child: Child | null) => void;
   notifications: AppNotification[];
   fetchNotifications: () => void;
+  notificationAlertMenu?: "notes" | "homework" | "absences" | "info" | null;
 }
 
 export default function ParentPortal({
@@ -39,7 +40,8 @@ export default function ParentPortal({
   selectedChild,
   setSelectedChild,
   notifications,
-  fetchNotifications
+  fetchNotifications,
+  notificationAlertMenu
 }: ParentPortalProps) {
   // APK debug: log incoming props
   console.log('[APK DEBUG] ParentPortal props', JSON.stringify({ notifications }, null, 2));
@@ -87,6 +89,14 @@ export default function ParentPortal({
   // Sub-tab inside child details (Notes vs Absences)
   const [childDetailTab, setChildDetailTab] = useState<"grades" | "absences">("grades");
   const [alertMenu, setAlertMenu] = useState<"notes" | "homework" | "absences" | "info">("notes");
+
+  useEffect(() => {
+    if (notificationAlertMenu) {
+      console.log("[PARENTPORTAL_DEBUG] notificationAlertMenu changed:", notificationAlertMenu);
+      setActiveTab("alerts");
+      setAlertMenu(notificationAlertMenu);
+    }
+  }, [notificationAlertMenu, setActiveTab]);
   const [gradeSubjectFilter, setGradeSubjectFilter] = useState("all");
   const [gradePeriodFilter, setGradePeriodFilter] = useState<"all" | "7d" | "30d" | "trimester">("all");
   const [showJustificationModal, setShowJustificationModal] = useState<Absence | null>(null);
@@ -672,6 +682,7 @@ export default function ParentPortal({
   };
 
   const handleNavigateTab = (tab: string) => {
+    console.log('[PARENTPORTAL_DEBUG] handleNavigateTab called with tab:', tab, 'notificationAlertMenu:', notificationAlertMenu);
     setActiveTab(tab);
   };
 

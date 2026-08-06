@@ -196,7 +196,14 @@ export default function App() {
       void refreshAccessToken();
     }
   }, [refreshToken, token]);
+
+  const [activeTab, setActiveTab] = useState("children");
+  const [selectedChild, setSelectedChild] = useState<Child | null>(null);
+  const [children, setChildren] = useState<Child[]>([]);
+
   const [notificationTarget, setNotificationTarget] = useState<string | null>(null);
+  const [notificationTargetSignal, setNotificationTargetSignal] = useState(0);
+  const [notificationAlertMenu, setNotificationAlertMenu] = useState<"notes" | "homework" | "absences" | "info" | null>(null);
   const lastRegisteredPushTokenRef = useRef<string | null>(null);
   const registeringPushTokenRef = useRef<string | null>(null);
   const deviceIdRef = useRef<string | null>(null);
@@ -231,16 +238,25 @@ export default function App() {
     console.log("[LIFECYCLE] App useEffect install JS bridges", { url: window.location.href, documentHidden: document.hidden });
 
     runtime.setFcmToken = (token: string) => {
-      console.log("[FCM_DEBUG] React received token via window.setFcmToken", token);
+      console.log("[NOTIFICATION_DEBUG] React received token via window.setFcmToken", token);
       setFcmToken(token);
       window.localStorage.setItem("fcm_token", token);
-      console.log("[FCM_DEBUG] React stored fcm_token in localStorage");
+      console.log("[NOTIFICATION_DEBUG] React stored fcm_token in localStorage");
     };
 
     runtime.setNotificationTarget = (target: string) => {
-      console.log("[FCM] notification target received", target);
+      console.log("[NOTIFICATION_DEBUG] window.setNotificationTarget created");
+      console.log("[NOTIFICATION_DEBUG] target received by window.setNotificationTarget :", target);
       setNotificationTarget(target);
+      setNotificationTargetSignal((prev) => prev + 1);
     };
+
+    const pendingTarget = (window as any).__pendingNotificationTarget;
+    if (pendingTarget && typeof pendingTarget === "string" && pendingTarget.trim().length > 0) {
+      console.log("[NOTIFICATION_DEBUG] pending target consumed :", pendingTarget);
+      runtime.setNotificationTarget(pendingTarget);
+      delete (window as any).__pendingNotificationTarget;
+    }
 
     return () => {
       delete runtime.setFcmToken;
@@ -249,10 +265,51 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (notificationTarget) {
-      console.log("[FCM] notification target state updated", notificationTarget);
+    if (!notificationTarget || notificationTargetSignal === 0) {
+      return;
     }
-  }, [notificationTarget]);
+
+    const normalizedTarget = notificationTarget.trim().toLowerCase();
+    console.log("[NOTIFICATION_DEBUG] notificationTarget state:", notificationTarget);
+    console.log("[NOTIFICATION_DEBUG] normalizedTarget:", normalizedTarget);
+
+    if (normalizedTarget === "absence") {
+      console.log("[NOTIFICATION_DEBUG] setting activeTab to notifications for absence");
+      setActiveTab("notifications");
+      console.log("[NOTIFICATION_DEBUG] activeTab set to notifications");
+      setNotificationAlertMenu(null);
+      return;
+    }
+
+    if (normalizedTarget === "note" || normalizedTarget === "notes" || normalizedTarget === "grade" || normalizedTarget === "grades") {
+      if (!selectedChild && children.length > 0) {
+        setSelectedChild(children[0]);
+      }
+      setActiveTab("notes");
+      setNotificationAlertMenu(null);
+      return;
+    }
+
+    if (normalizedTarget === "assignment" || normalizedTarget === "homework") {
+      setActiveTab("alerts");
+      setNotificationAlertMenu("homework");
+      return;
+    }
+
+    if (normalizedTarget === "announcement") {
+      setActiveTab("alerts");
+      setNotificationAlertMenu("info");
+      return;
+    }
+
+    if (normalizedTarget === "payment") {
+      setActiveTab("alerts");
+      setNotificationAlertMenu("info");
+      return;
+    }
+
+    console.log("[FCM] notification target not recognized, preserving current tab", normalizedTarget);
+  }, [notificationTarget, notificationTargetSignal, children, selectedChild]);
 
   useEffect(() => {
     const pushToken = fcmToken;
@@ -294,11 +351,6 @@ export default function App() {
     const isStoredMobileMode = typeof window !== "undefined" && window.localStorage.getItem("ecoletrack_mobile_production") === "true";
     return envFlag || isAndroidWebViewHost || isMobileQueryMode || isStoredMobileMode;
   })();
-  
-  // Persistent parent session state
-  // Navigation states
-  const [activeTab, setActiveTab] = useState("children");
-  const [selectedChild, setSelectedChild] = useState<Child | null>(null);
 
   // Notifications and delivery audit logs loaded from Express
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
@@ -418,7 +470,9 @@ export default function App() {
     console.log("[AUTH_DEBUG] handleLoginSuccess new session stored", {
       hasToken: !!newToken,
       tokenLength: newToken.length,
-      hasRefreshToken: !!newRefreshToken
+      hasRefreshToken: !!newRefreshToken,
+      notificationTarget: notificationTarget,
+      notificationTargetSignal: notificationTargetSignal
     });
     localStorage.setItem("ecoletrack_token", newToken);
     localStorage.setItem("ecoletrack_refresh_token", newRefreshToken);
@@ -426,7 +480,9 @@ export default function App() {
     setToken(newToken);
     setRefreshToken(newRefreshToken);
     setParent(newParent);
-    setActiveTab("children");
+    if (!notificationTarget || notificationTargetSignal === 0) {
+      setActiveTab("children");
+    }
     setSelectedChild(null);
     fetchNotifications(newToken);
   };
@@ -509,6 +565,7 @@ export default function App() {
           setSelectedChild={setSelectedChild}
           notifications={notifications}
           fetchNotifications={fetchNotifications}
+          notificationAlertMenu={notificationAlertMenu}
         />
       </div>
     );
