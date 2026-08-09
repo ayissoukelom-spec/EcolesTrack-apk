@@ -64,8 +64,38 @@ pool.on("error", (err) => {
 });
 async function initializeMobileTables() {
   await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relkind = 'r' AND relname = 'mobile_parent_devices')
+         AND EXISTS (SELECT 1 FROM pg_class WHERE relkind = 'S' AND relname = 'mobile_parent_devices_id_seq') THEN
+        DROP SEQUENCE IF EXISTS mobile_parent_devices_id_seq;
+      END IF;
+
+      IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relkind = 'r' AND relname = 'mobile_notification_consents')
+         AND EXISTS (SELECT 1 FROM pg_class WHERE relkind = 'S' AND relname = 'mobile_notification_consents_id_seq') THEN
+        DROP SEQUENCE IF EXISTS mobile_notification_consents_id_seq;
+      END IF;
+
+      IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relkind = 'r' AND relname = 'mobile_notification_events')
+         AND EXISTS (SELECT 1 FROM pg_class WHERE relkind = 'S' AND relname = 'mobile_notification_events_id_seq') THEN
+        DROP SEQUENCE IF EXISTS mobile_notification_events_id_seq;
+      END IF;
+
+      IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relkind = 'r' AND relname = 'mobile_notification_deliveries')
+         AND EXISTS (SELECT 1 FROM pg_class WHERE relkind = 'S' AND relname = 'mobile_notification_deliveries_id_seq') THEN
+        DROP SEQUENCE IF EXISTS mobile_notification_deliveries_id_seq;
+      END IF;
+
+      IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relkind = 'r' AND relname = 'mobile_parent_sessions')
+         AND EXISTS (SELECT 1 FROM pg_class WHERE relkind = 'S' AND relname = 'mobile_parent_sessions_id_seq') THEN
+        DROP SEQUENCE IF EXISTS mobile_parent_sessions_id_seq;
+      END IF;
+    END
+    $$;
+  `);
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS mobile_parent_devices (
-      id SERIAL PRIMARY KEY,
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
       parent_id TEXT NOT NULL,
       device_id TEXT,
       platform TEXT NOT NULL,
@@ -90,7 +120,7 @@ async function initializeMobileTables() {
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS mobile_notification_consents (
-      id SERIAL PRIMARY KEY,
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
       parent_id TEXT NOT NULL,
       channel TEXT NOT NULL,
       consent_granted BOOLEAN NOT NULL DEFAULT false,
@@ -101,7 +131,7 @@ async function initializeMobileTables() {
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS mobile_notification_events (
-      id SERIAL PRIMARY KEY,
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
       parent_id TEXT NOT NULL,
       event_type TEXT NOT NULL,
       payload_json TEXT NOT NULL,
@@ -111,7 +141,7 @@ async function initializeMobileTables() {
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS mobile_notification_deliveries (
-      id SERIAL PRIMARY KEY,
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
       event_id INTEGER NOT NULL,
       channel TEXT NOT NULL,
       provider TEXT NOT NULL,
@@ -123,6 +153,20 @@ async function initializeMobileTables() {
       sent_at TIMESTAMP,
       delivered_at TIMESTAMP
     );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS mobile_parent_sessions (
+      id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      parent_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      refresh_token_hash TEXT NOT NULL UNIQUE,
+      created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+      expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+      is_active BOOLEAN NOT NULL DEFAULT true,
+      revoked_at TIMESTAMP WITH TIME ZONE,
+      last_used_at TIMESTAMP WITH TIME ZONE
+    );
+    CREATE INDEX IF NOT EXISTS mobile_parent_sessions_parent_idx ON mobile_parent_sessions(parent_id);
   `);
 }
 async function dbQuery(text, params = []) {
@@ -366,39 +410,53 @@ var PostgresStore = class {
     const childIdNum = Number(childId);
     if (!Number.isInteger(childIdNum)) return [];
     const { rows } = await dbQuery(`
-      SELECT id, date, period, is_justified, justification_reason
-      FROM absences
-      WHERE student_id = $1
-    `, [childIdNum]);
+    SELECT 
+      a.id,
+      a.date,
+      a.period,
+      a.is_justified,
+      a.justification_reason,
+      s.name AS subject_name,
+      a.start_time,
+      a.end_time
+    FROM absences a
+    LEFT JOIN subjects s ON s.id = a.subject_id
+    WHERE a.student_id = $1
+  `, [childIdNum]);
     return rows.map((row) => ({
       id: String(row.id),
       childId,
       date: row.date,
-      reason: row.justification_reason ?? (row.is_justified ? "Absence justifi\xE9e" : "Absence non justifi\xE9e"),
+      reason: row.is_justified ? "Absence justifi\xE9e" : "Absence non justifi\xE9e",
       justified: row.is_justified,
-      justificationText: row.justification_reason ?? void 0
+      justificationText: row.justification_reason ?? void 0,
+      subjectName: row.subject_name ?? void 0,
+      startTime: row.start_time ?? void 0,
+      endTime: row.end_time ?? void 0,
+      period: row.period ?? void 0
     }));
   }
   async justifyAbsence(absenceId, parentId, justificationReason) {
     const { rows } = await dbQuery(`
       UPDATE absences AS a
-      SET justified = true,
-          justification_text = $1
-      FROM children AS c
-      WHERE a.id = $2
-        AND a.child_id = c.id
-        AND c.parent_id = $3
-      RETURNING a.id, a.child_id, a.date, a.reason, a.justified, a.justification_text
+      SET is_justified = true,
+          justification_reason = $1
+      FROM students AS s
+JOIN parents AS p ON p.id = s.parent_id
+WHERE a.id = $2
+  AND a.student_id = s.id
+  AND p.user_id = $3
+      RETURNING a.id, a.student_id, a.date, a.is_justified, a.justification_reason
     `, [justificationReason, absenceId, parentId]);
     if (rows.length === 0) return null;
     const row = rows[0];
     return {
       id: String(row.id),
-      childId: String(row.child_id),
+      childId: String(row.student_id),
       date: row.date,
-      reason: row.reason,
-      justified: row.justified,
-      justificationText: row.justification_text ?? void 0
+      reason: row.is_justified ? "Absence justifi\xE9e" : "Absence non justifi\xE9e",
+      justified: row.is_justified,
+      justificationText: row.justification_reason ?? void 0
     };
   }
   async addGrade(grade) {
@@ -872,8 +930,9 @@ var logger3 = new Logger("AuthService");
 var JWT_SECRET = process.env.JWT_SECRET || "ecoletrack-super-secret-key-2026";
 var ACCESS_TOKEN_EXPIRY_MS = 15 * 60 * 1e3;
 var REFRESH_TOKEN_EXPIRY_MS = 30 * 24 * 60 * 60 * 1e3;
-var tokenBlacklist = /* @__PURE__ */ new Set();
-var activeSessions = /* @__PURE__ */ new Map();
+function hashRefreshToken(refreshToken) {
+  return import_crypto.default.createHash("sha256").update(refreshToken).digest("hex");
+}
 var AuthService = class {
   /**
    * Generates a secure JWT-like token
@@ -917,14 +976,16 @@ var AuthService = class {
   /**
    * Generates a pair of (Access Token, Refresh Token) for a user session
    */
-  static createSession(parentId, role) {
+  static async createSession(parentId, role) {
     const accessToken = this.generateJWT({ parentId, role }, JWT_SECRET, ACCESS_TOKEN_EXPIRY_MS);
     const entropy = import_crypto.default.randomBytes(16).toString("hex");
     const refreshToken = this.generateJWT({ parentId, role, entropy }, JWT_SECRET, REFRESH_TOKEN_EXPIRY_MS);
-    if (!activeSessions.has(parentId)) {
-      activeSessions.set(parentId, /* @__PURE__ */ new Set());
-    }
-    activeSessions.get(parentId).add(refreshToken);
+    const refreshTokenHash = hashRefreshToken(refreshToken);
+    const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_MS).toISOString();
+    await dbQuery(`
+      INSERT INTO mobile_parent_sessions (parent_id, role, refresh_token_hash, expires_at, is_active)
+      VALUES ($1, $2, $3, $4, true)
+    `, [parentId, role, refreshTokenHash, expiresAt]);
     logger3.info(`Session created for parent: ${parentId}`);
     return { accessToken, refreshToken };
   }
@@ -932,48 +993,76 @@ var AuthService = class {
    * Rotates a Refresh Token (Refresh Token Rotation - RTR)
    * Prevents replay attacks by invalidating the old Refresh Token and issuing a new pair.
    */
-  static rotateSession(oldRefreshToken) {
+  static async ensureSessionRecordForToken(parentId, role, refreshToken, expiresAt) {
+    const refreshTokenHash = hashRefreshToken(refreshToken);
+    const { rows } = await dbQuery(`
+      SELECT id, parent_id, role, refresh_token_hash, is_active, expires_at
+      FROM mobile_parent_sessions
+      WHERE refresh_token_hash = $1
+      LIMIT 1
+    `, [refreshTokenHash]);
+    if (rows.length > 0) {
+      return rows[0];
+    }
+    await dbQuery(`
+      INSERT INTO mobile_parent_sessions (parent_id, role, refresh_token_hash, expires_at, is_active)
+      VALUES ($1, $2, $3, $4, true)
+    `, [parentId, role, refreshTokenHash, expiresAt]);
+    const result = await dbQuery(`
+      SELECT id, parent_id, role, refresh_token_hash, is_active, expires_at
+      FROM mobile_parent_sessions
+      WHERE refresh_token_hash = $1
+      LIMIT 1
+    `, [refreshTokenHash]);
+    return result.rows[0];
+  }
+  static async rotateSession(oldRefreshToken) {
     const payload = this.verifyJWT(oldRefreshToken);
     if (!payload) {
       logger3.warn("Rotation attempted with invalid or expired Refresh Token.");
       return null;
     }
-    const { parentId, role } = payload;
-    if (tokenBlacklist.has(oldRefreshToken)) {
-      logger3.warn(`[SECURITY ALERT] Replay attack detected! Compromised Refresh Token reused for parent ID: ${parentId}. Revoking all sessions!`);
-      this.revokeAllSessions(parentId);
+    const { parentId, role, exp } = payload;
+    const refreshTokenHash = hashRefreshToken(oldRefreshToken);
+    const expiresAt = new Date(exp).toISOString();
+    const existingSession = await this.ensureSessionRecordForToken(parentId, role, oldRefreshToken, expiresAt);
+    if (!existingSession.is_active) {
+      logger3.warn(`Refresh Token not found or inactive for parent: ${parentId}`);
       return null;
     }
-    tokenBlacklist.add(oldRefreshToken);
-    const parentTokens = activeSessions.get(parentId);
-    if (!parentTokens || !parentTokens.has(oldRefreshToken)) {
-      logger3.warn(`Refresh Token not found in active session list for parent: ${parentId}`);
+    if (new Date(existingSession.expires_at).getTime() < Date.now()) {
+      logger3.warn(`Refresh Token expired in DB for parent: ${parentId}`);
       return null;
     }
-    parentTokens.delete(oldRefreshToken);
-    const newSession = this.createSession(parentId, role);
+    await dbQuery(`
+      UPDATE mobile_parent_sessions
+      SET is_active = false, revoked_at = now(), last_used_at = now()
+      WHERE id = $1
+    `, [existingSession.id]);
+    const newSession = await this.createSession(parentId, role);
     return newSession;
   }
   /**
    * Revokes a specific session (Logout)
    */
-  static revokeSession(parentId, refreshToken) {
-    tokenBlacklist.add(refreshToken);
-    const parentTokens = activeSessions.get(parentId);
-    if (parentTokens) {
-      parentTokens.delete(refreshToken);
-    }
+  static async revokeSession(parentId, refreshToken) {
+    const refreshTokenHash = hashRefreshToken(refreshToken);
+    await dbQuery(`
+      UPDATE mobile_parent_sessions
+      SET is_active = false, revoked_at = now()
+      WHERE parent_id = $1 AND refresh_token_hash = $2 AND is_active = true
+    `, [parentId, refreshTokenHash]);
     logger3.info(`Session revoked for parent: ${parentId}`);
   }
   /**
    * Revokes all sessions for a user (e.g., when a compromise is detected)
    */
-  static revokeAllSessions(parentId) {
-    const parentTokens = activeSessions.get(parentId);
-    if (parentTokens) {
-      parentTokens.forEach((token) => tokenBlacklist.add(token));
-      activeSessions.delete(parentId);
-    }
+  static async revokeAllSessions(parentId) {
+    await dbQuery(`
+      UPDATE mobile_parent_sessions
+      SET is_active = false, revoked_at = now()
+      WHERE parent_id = $1 AND is_active = true
+    `, [parentId]);
     logger3.audit("REVOKE_ALL_SESSIONS", parentId, { parentId }, "SUCCESS");
   }
 };
@@ -1626,7 +1715,7 @@ app.post("/api/mobile/parent/login", rateLimit(15, 6e4), async (req, res) => {
       localMustReset = false;
     }
   }
-  const session = AuthService.createSession(user.id, user.role);
+  const session = await AuthService.createSession(user.id, user.role);
   const parentDetails = {
     id: user.id,
     name: user.name,
@@ -1683,7 +1772,7 @@ app.post("/api/mobile/parent/change-password", rateLimit(15, 6e4), async (req, r
   logger7.audit("PARENT_CHANGE_PASSWORD", user.id, { email }, "SUCCESS");
   return res.json({ success: true });
 });
-app.post("/api/mobile/parent/refresh-token", (req, res) => {
+app.post("/api/mobile/parent/refresh-token", async (req, res) => {
   const { refreshToken } = req.body;
   if (!refreshToken) {
     return res.status(400).json({
@@ -1691,7 +1780,7 @@ app.post("/api/mobile/parent/refresh-token", (req, res) => {
       code: "BAD_REQUEST"
     });
   }
-  const newSession = AuthService.rotateSession(refreshToken);
+  const newSession = await AuthService.rotateSession(refreshToken);
   if (!newSession) {
     logger7.warn("\xC9chec de rotation du Jeton de Rafra\xEEchissement. Token expir\xE9, compromis ou invalide.");
     return res.status(401).json({
@@ -1706,9 +1795,9 @@ app.post("/api/mobile/parent/logout", requireAuth, requireParentRoleOnly, async 
   const parentId = req.parent.id;
   const { refreshToken, deviceId, pushToken } = req.body ?? {};
   if (refreshToken) {
-    AuthService.revokeSession(parentId, refreshToken);
+    await AuthService.revokeSession(parentId, refreshToken);
   } else {
-    AuthService.revokeAllSessions(parentId);
+    await AuthService.revokeAllSessions(parentId);
   }
   if (pushToken || deviceId) {
     await store.deletePushToken(parentId, typeof pushToken === "string" ? pushToken : void 0, typeof deviceId === "string" ? deviceId : void 0);
@@ -2055,27 +2144,25 @@ app.post("/api/dev/add-absence", async (req, res) => {
     const parentId = child.parentId;
     const dedupeKey = `absence-${child.id}-${Date.now()}`;
     const name = `${child.firstName} ${child.lastName}`;
-    // Build consistent message body using absence date/time and optional subjectName
     const formatDateSafe = (dateStr) => {
-      if (!dateStr) return '';
-      const opts = { day: '2-digit', month: '2-digit', year: 'numeric' };
-      if (String(dateStr).includes('T')) return new Date(dateStr).toLocaleDateString('fr-FR', opts);
-      const parts = String(dateStr).split('-');
+      if (!dateStr) return "";
+      const opts = { day: "2-digit", month: "2-digit", year: "numeric" };
+      if (dateStr.includes("T")) return new Date(dateStr).toLocaleDateString("fr-FR", opts);
+      const parts = String(dateStr).split("-");
       if (parts.length === 3) {
         const y = Number(parts[0]);
         const m = Number(parts[1]) - 1;
         const d = Number(parts[2]);
-        return new Date(y, m, d).toLocaleDateString('fr-FR', opts);
+        return new Date(y, m, d).toLocaleDateString("fr-FR", opts);
       }
-      return new Date(dateStr).toLocaleDateString('fr-FR', opts);
+      return new Date(dateStr).toLocaleDateString("fr-FR", opts);
     };
     const absenceDate = new Date(absence.date);
     const formattedDate = formatDateSafe(absence.date);
-    const timePart = absenceDate.toISOString().includes('T') ? ` de ${absenceDate.toISOString().substr(11,5)}` : '';
-    const subjectName = absence.subjectName || undefined;
-    const subjectText = subjectName ? `, en ${subjectName}` : '';
-    const messageBody = `Une absence a été signalée pour ${child.firstName} le ${formattedDate}${timePart}${subjectText}. Veuillez fournir un justificatif.`;
-
+    const timePart = absenceDate.toISOString().includes("T") ? ` de ${absenceDate.toISOString().substr(11, 5)}` : "";
+    const subjectName = absence.subjectName || void 0;
+    const subjectText = subjectName ? `, en ${subjectName}` : "";
+    const messageBody = `Une absence a \xE9t\xE9 signal\xE9e pour ${child.firstName} le ${formattedDate}${timePart}${subjectText}. Veuillez fournir un justificatif.`;
     const internalPayload = {
       parentId,
       title: `Nouvelle absence pour ${child.firstName}`,
@@ -2086,7 +2173,7 @@ app.post("/api/dev/add-absence", async (req, res) => {
         childId,
         date: absence.date,
         reason,
-        subjectName: subjectName
+        subjectName
       },
       dedupeKey
     };
@@ -2307,6 +2394,7 @@ app.post("/api/internal/info-notification", async (req, res) => {
   }
 });
 async function startServer() {
+  await initializeMobileTables();
   if (process.env.NODE_ENV !== "production") {
     const vite = await (0, import_vite.createServer)({
       server: { middlewareMode: true },
