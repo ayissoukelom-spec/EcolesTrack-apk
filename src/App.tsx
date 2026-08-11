@@ -325,18 +325,17 @@ export default function App() {
     }
 
     registeringPushTokenRef.current = pushToken;
-    console.log("[FCM_DEBUG] Calling registerPushToken from App.tsx");
-    void registerPushToken(pushToken)
-      .then((success) => {
-        if (success) {
-          lastRegisteredPushTokenRef.current = pushToken;
-        }
-      })
-      .finally(() => {
-        if (registeringPushTokenRef.current === pushToken) {
-          registeringPushTokenRef.current = null;
-        }
-      });
+    console.log("[FCM_DEBUG] Calling registerPushTokenWithBackoff from App.tsx");
+
+    void (async () => {
+      const success = await tryRegisterPushTokenWithBackoff(pushToken);
+      if (success) {
+        lastRegisteredPushTokenRef.current = pushToken;
+      }
+      if (registeringPushTokenRef.current === pushToken) {
+        registeringPushTokenRef.current = null;
+      }
+    })();
   }, [token, fcmToken]);
 
   const isMobileProductionMode = (() => {
@@ -356,11 +355,11 @@ export default function App() {
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [deliveryLogs, setDeliveryLogs] = useState<CompleteDeliveryLog[]>([]);
 
-  const registerPushToken = async (pushToken: string) => {
+  const registerPushToken = async (pushToken: string): Promise<{ success: boolean; status?: number; retryable: boolean; error?: unknown }> => {
     const deviceId = getDeviceId();
     if (!deviceId) {
       console.error("[FCM] Impossible de générer un deviceId");
-      return false;
+      return { success: false, retryable: false, error: "no-device-id" };
     }
 
     try {
@@ -371,28 +370,56 @@ export default function App() {
           "Authorization": `Bearer ${authToken}`,
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({
-          pushToken,
-          platform: "android",
-          appVersion: "1.0.0",
-          deviceId
-        })
+        body: JSON.stringify({ pushToken, platform: "android", appVersion: "1.0.0", deviceId })
       }));
 
       if (!response) {
-        return false;
+        // performProtectedRequest returned null (likely auth refresh failed)
+        return { success: false, retryable: false, error: "no-response" };
       }
 
+      // Preserve existing behavior: logout on 403
       if (response.status === 403) {
-        handleLogout();
-        return false;
+        try { handleLogout(); } catch (e) { /* ignore */ }
+        return { success: false, status: 403, retryable: false };
       }
 
-      return response.ok;
+      // Retryable server errors
+      if ([500, 502, 503, 504].includes(response.status)) {
+        return { success: false, status: response.status, retryable: true };
+      }
+
+      // Non-retryable client errors
+      if ([400, 401, 404, 422].includes(response.status)) {
+        return { success: false, status: response.status, retryable: false };
+      }
+
+      // Otherwise success if ok
+      return { success: response.ok, status: response.status, retryable: false };
     } catch (e) {
       console.error("[FCM_DEBUG] registerPushToken threw", e);
-      return false;
+      // network / fetch exception -> retryable
+      return { success: false, retryable: true, error: e };
     }
+  };
+
+  const tryRegisterPushTokenWithBackoff = async (pushToken: string) => {
+    const MAX_ATTEMPTS = 5;
+    const BASE_DELAY_MS = 1000;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        const result = await registerPushToken(pushToken);
+        if (result.success) return true;
+        if (!result.retryable) return false;
+      } catch (e) {
+        // defensive: treat unexpected throws as retryable
+      }
+
+      if (attempt === MAX_ATTEMPTS) break;
+      const delay = BASE_DELAY_MS * Math.pow(2, attempt - 1);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+    return false;
   };
   // Fetch parent in-app notifications
   const fetchNotifications = async (activeToken?: string) => {
