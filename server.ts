@@ -52,7 +52,7 @@ app.use((req, res, next) => {
 // ====================================================================
 // CRYPTO-JWT HELPER
 // ====================================================================
-const JWT_SECRET = "ecoletrack-super-secret-key-2026";
+
 
 async function generateToken(payload: { parentId: string; role: string }): Promise<string> {
   // Use AuthService to keep session management synchronized

@@ -497,7 +497,7 @@ WHERE a.id = $2
     const childIdNum = Number(childId);
     if (!Number.isInteger(childIdNum)) return [];
     const { rows } = await dbQuery(`
-      SELECT g.id, e.subject, g.score, e.coefficient, e.title, e.date, e.max_score
+      SELECT g.id, e.subject, g.score, e.coefficient, e.title, e.date, e.max_score, g.created_at
       FROM grades g
       JOIN evaluations e ON e.id = g.evaluation_id
       WHERE g.student_id = $1
@@ -518,7 +518,8 @@ WHERE a.id = $2
         rawScore,
         coefficient: Number(row.coefficient ?? 1),
         examName: row.title,
-        date: row.date
+        date: row.date,
+        publishedAt: row.created_at ?? void 0
       };
     });
   }
@@ -927,7 +928,10 @@ function sanitizePayload(req, res, next) {
 // backend/services/auth.ts
 var import_crypto = __toESM(require("crypto"), 1);
 var logger3 = new Logger("AuthService");
-var JWT_SECRET = process.env.JWT_SECRET || "ecoletrack-super-secret-key-2026";
+var JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET || !JWT_SECRET.trim()) {
+  throw new Error("JWT_SECRET environment variable is required");
+}
 var ACCESS_TOKEN_EXPIRY_MS = 15 * 60 * 1e3;
 var REFRESH_TOKEN_EXPIRY_MS = 30 * 24 * 60 * 60 * 1e3;
 function hashRefreshToken(refreshToken) {
