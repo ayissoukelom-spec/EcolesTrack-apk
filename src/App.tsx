@@ -16,9 +16,8 @@ declare global {
   }
 }
 import ParentPortal from "./components/ParentPortal";
-import DeveloperConsole from "./components/DeveloperConsole";
 import ThemeToggle from "./components/ThemeToggle";
-import { Parent, Child, AppNotification, CompleteDeliveryLog } from "./types";
+import { Parent, Child, AppNotification } from "./types";
 import { parseJsonSafe, withApiBase } from "./utils/http";
 
 export default function App() {
@@ -351,9 +350,8 @@ export default function App() {
     return envFlag || isAndroidWebViewHost || isMobileQueryMode || isStoredMobileMode;
   })();
 
-  // Notifications and delivery audit logs loaded from Express
+  // Notifications loaded from Express
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
-  const [deliveryLogs, setDeliveryLogs] = useState<CompleteDeliveryLog[]>([]);
 
   const registerPushToken = async (pushToken: string): Promise<{ success: boolean; status?: number; retryable: boolean; error?: unknown }> => {
     const deviceId = getDeviceId();
@@ -448,32 +446,7 @@ export default function App() {
     }
   };
 
-  // Fetch complete delivery audit logs from Dev endpoints
-  const fetchDeliveryLogs = async () => {
-    try {
-      const response = await fetch(withApiBase("/api/dev/delivery-logs"));
-      if (response.ok) {
-        const data = await parseJsonSafe<CompleteDeliveryLog[]>(response);
-        setDeliveryLogs(Array.isArray(data) ? data : []);
-      }
-    } catch (e) {
-      console.error("Failed to fetch delivery logs", e);
-    }
-  };
 
-  // Clear delivery logs
-  const handleClearLogs = async () => {
-    try {
-      const response = await fetch(withApiBase("/api/dev/clear-logs"), { method: "POST" });
-      if (response.ok) {
-        setDeliveryLogs([]);
-        setNotifications([]);
-        alert("Historique des logs et des notifications effacé !");
-      }
-      } catch (e) {
-    console.error(e);
-  }
-};
 
   // Poll for background notifications regularly when logged in
   useEffect(() => {
@@ -481,16 +454,10 @@ export default function App() {
       fetchNotifications();
       const interval = setInterval(() => {
         fetchNotifications();
-        fetchDeliveryLogs();
       }, 3000);
       return () => clearInterval(interval);
     }
   }, [token]);
-
-  // Initial load
-  useEffect(() => {
-    fetchDeliveryLogs();
-  }, []);
 
   // Handlers for session authentication
   const handleLoginSuccess = (newToken: string, newParent: Parent, newRefreshToken: string) => {
@@ -703,14 +670,7 @@ export default function App() {
           />
         </div>
 
-        {/* COLUMN 3: DEV TRIGGERS & LOG CONSOLE (4 cols) */}
-        <div className="lg:col-span-4 h-auto lg:h-full lg:min-h-0 overflow-y-auto lg:overflow-hidden">
-          <DeveloperConsole
-            logs={deliveryLogs}
-            onRefreshLogs={fetchDeliveryLogs}
-            onClearLogs={handleClearLogs}
-          />
-        </div>
+
 
       </div>
     </div>

@@ -76,12 +76,12 @@ function rateLimit(limit: number, windowMs: number) {
     const ip = (req.headers["x-forwarded-for"] as string) || req.socket.remoteAddress || "global";
     const now = Date.now();
     const clientLimit = rateLimitMap.get(ip);
-    
+
     if (!clientLimit || now > clientLimit.resetTime) {
       rateLimitMap.set(ip, { count: 1, resetTime: now + windowMs });
       return next();
     }
-    
+
     clientLimit.count++;
     if (clientLimit.count > limit) {
       return res.status(429).json({
@@ -97,9 +97,7 @@ function rateLimit(limit: number, windowMs: number) {
 // Authentication check
 const requireAuth = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   const authHeader = req.headers.authorization;
-  console.log("[AUTH_DEBUG] requireAuth Authorization header:", authHeader);
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    console.log("[AUTH_DEBUG] requireAuth missing or invalid Bearer header");
     return res.status(401).json({
       error: "Authentification requise. Jeton de session manquant.",
       code: "UNAUTHORIZED"
@@ -108,9 +106,8 @@ const requireAuth = (req: AuthenticatedRequest, res: Response, next: NextFunctio
 
   const token = authHeader.split(" ")[1];
   const decoded = verifyToken(token);
-  
+
   if (!decoded) {
-    console.log("[AUTH_DEBUG] requireAuth token verification failed", { tokenLength: token?.length });
     return res.status(401).json({
       error: "Session invalide ou expirée. Veuillez vous reconnecter.",
       code: "INVALID_SESSION"
@@ -122,13 +119,12 @@ const requireAuth = (req: AuthenticatedRequest, res: Response, next: NextFunctio
     email: "", // Loaded dynamically if needed
     role: decoded.role
   };
-  
+
   next();
 };
 
 // Strict parental check
 const requireParentRoleOnly = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
-  console.log("[AUTH_DEBUG] requireParentRoleOnly parent role:", req.parent?.role, "url:", req.originalUrl);
   if (!req.parent || req.parent.role !== "parent") {
     // Audit trace logging
     console.warn(`[SECURITY VIOLATION] Attempted access with non-parent role: ${req.parent?.role || 'none'} on URL: ${req.originalUrl}`);
@@ -137,6 +133,31 @@ const requireParentRoleOnly = (req: AuthenticatedRequest, res: Response, next: N
       code: "PARENTS_ONLY"
     });
   }
+  next();
+};
+
+// Internal server-to-server signature verification
+const verifyInternalAuth = (req: Request, res: Response, next: NextFunction) => {
+  const signature = req.headers["x-internal-signature"] as string;
+  const timestamp = req.headers["x-internal-timestamp"] as string;
+
+  // Collect raw body for signature verification
+  let body = "";
+  if (typeof req.body === "object") {
+    body = JSON.stringify(req.body);
+  } else {
+    body = String(req.body || "");
+  }
+
+  if (!AuthService.verifyInternalSignature(body, signature, timestamp)) {
+    logger.warn(`[SECURITY VIOLATION] Invalid internal signature or timestamp. IP: ${req.ip}, URL: ${req.originalUrl}`);
+    return res.status(401).json({
+      error: "Signature interne invalide ou expirée.",
+      code: "INVALID_INTERNAL_SIGNATURE"
+    });
+  }
+
+  logger.info(`[INTERNAL_AUTH] Valid signature verified for ${req.method} ${req.originalUrl}`);
   next();
 };
 
@@ -202,7 +223,6 @@ app.post("/api/mobile/parent/login", rateLimit(15, 60000), async (req, res) => {
     id: user.id,
     name: user.name,
     email: user.email,
-    phoneNumber: user.phoneNumber,
     activeSchoolId: user.activeSchoolId,
     schools: user.schools
   };
@@ -264,7 +284,7 @@ app.post("/api/mobile/parent/change-password", rateLimit(15, 60000), async (req,
 });
 
 // 1b. POST /api/mobile/parent/refresh-token (Refresh Token Rotation - RTR)
-app.post("/api/mobile/parent/refresh-token", async (req, res) => {
+app.post("/api/mobile/parent/refresh-token", rateLimit(15, 60000), async (req, res) => {
   const { refreshToken } = req.body;
   if (!refreshToken) {
     return res.status(400).json({
@@ -312,7 +332,7 @@ app.post("/api/mobile/parent/logout", requireAuth, requireParentRoleOnly, async 
 app.get("/api/mobile/parent/me", requireAuth, requireParentRoleOnly, async (req: AuthenticatedRequest, res) => {
   const parentId = req.parent!.id;
   const parent = await store.getParentById(parentId);
-  
+
   if (!parent) {
     return res.status(404).json({
       error: "Parent introuvable.",
@@ -324,7 +344,6 @@ app.get("/api/mobile/parent/me", requireAuth, requireParentRoleOnly, async (req:
     id: parent.id,
     name: parent.name,
     email: parent.email,
-    phoneNumber: parent.phoneNumber,
     activeSchoolId: parent.activeSchoolId,
     schools: parent.schools
   };
@@ -561,11 +580,9 @@ app.put("/api/mobile/parent/notifications/:id/read", requireAuth, requireParentR
 
 // 9. POST /api/mobile/parent/devices/register-push-token
 app.post("/api/mobile/parent/devices/register-push-token", requireAuth, requireParentRoleOnly, async (req: AuthenticatedRequest, res) => {
-   console.log("========== REGISTER PUSH TOKEN ==========");
-  console.log("Body reçu :", req.body);
   const parentId = req.parent!.id;
   const validation = RegisterPushTokenSchema.safeParse(req.body);
-  
+
   if (!validation.success) {
     logger.warn(`Échec de validation de l'enregistrement de token pour le parent: ${parentId}`);
     return res.status(400).json({
@@ -577,14 +594,6 @@ app.post("/api/mobile/parent/devices/register-push-token", requireAuth, requireP
 
   const { pushToken, platform, appVersion, deviceId } = validation.data;
 
-console.log("PUSH TOKEN RECU :", {
-  parentId,
-  pushToken,
-  platform,
-  appVersion,
-  deviceId
-});
-
 const device = await store.registerPushToken(
   parentId,
   deviceId,
@@ -592,8 +601,6 @@ const device = await store.registerPushToken(
   platform,
   appVersion
 );
-
-console.log("DEVICE ENREGISTRE :", device);
 
 logger.audit(
   "REGISTER_PUSH_TOKEN",
@@ -713,160 +720,11 @@ app.get("/api/mobile/health", (req, res) => {
   });
 });
 
-// ====================================================================
-// DEV / CONTROL PANEL ENDPOINTS (FOR LIVE TESTING EXCLUSIVELY)
-// ====================================================================
-
-// Add absence via backend simulator
-app.post("/api/dev/add-absence", async (req, res) => {
-  const { childId, date, reason, justified, justificationText } = req.body;
-  logger.info("[NOTIF_TRACE] add-absence endpoint received", { childId, date, reason, justified });
-  if (!childId || !reason) {
-    return res.status(400).json({ error: "childId and reason required" });
-  }
-
-  const absence = await store.addAbsence({
-    childId,
-    date: date || new Date().toISOString(),
-    reason,
-    justified: !!justified,
-    justificationText
-  });
-  logger.info("[NOTIF_TRACE] absence created", { childId, absenceId: absence.id, date: absence.date, reason, justified });
-
-  const children = await store.getChildrenOfParent("parent-jean-dupont"); // Default for demonstration
-  const backupChildren = await store.getChildrenOfParent("parent-marie-martin");
-  const child = children.find(c => c.id === childId) || backupChildren.find(c => c.id === childId);
-  
-  if (child) {
-    const parentId = child.parentId;
-    const dedupeKey = `absence-${child.id}-${Date.now()}`;
-    const name = `${child.firstName} ${child.lastName}`;
-    // Compose a consistent human-readable message for absence notifications
-    const formatDateSafe = (dateStr: string) => {
-      if (!dateStr) return '';
-      const opts = { day: '2-digit', month: '2-digit', year: 'numeric' } as const;
-      if (dateStr.includes('T')) return new Date(dateStr).toLocaleDateString('fr-FR', opts);
-      const parts = String(dateStr).split('-');
-      if (parts.length === 3) {
-        const y = Number(parts[0]);
-        const m = Number(parts[1]) - 1;
-        const d = Number(parts[2]);
-        return new Date(y, m, d).toLocaleDateString('fr-FR', opts);
-      }
-      return new Date(dateStr).toLocaleDateString('fr-FR', opts);
-    };
-    const absenceDate = new Date(absence.date);
-    const formattedDate = formatDateSafe(absence.date);
-    const timePart = absenceDate.toISOString().includes('T') ? ` de ${absenceDate.toISOString().substr(11,5)}` : '';
-    const subjectName = (absence as any).subjectName || undefined; // mock store may not have subject
-    const subjectText = subjectName ? `, en ${subjectName}` : '';
-    const messageBody = `Une absence a été signalée pour ${child.firstName} le ${formattedDate}${timePart}${subjectText}. Veuillez fournir un justificatif.`;
-
-    const internalPayload = {
-      parentId,
-      title: `Nouvelle absence pour ${child.firstName}`,
-      message: messageBody,
-      category: "absence",
-      metadata: {
-        absenceId: absence.id,
-        childId,
-        date: absence.date,
-        reason,
-        subjectName: subjectName,
-      },
-      dedupeKey
-    };
-    logger.info("[NOTIF_TRACE] calling /api/internal/absence-notification", {
-  parentId,
-  childId,
-  absenceId: absence.id,
-  payload: internalPayload
-});
-
-const API_URL = process.env.API_URL || "http://localhost:3001";
-logger.info("[ENV_TRACE] API_URL =", { API_URL, raw: process.env.API_URL });
-
-await fetch(`${API_URL}/api/internal/absence-notification`, {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json",
-  },
-  body: JSON.stringify(internalPayload),
-});
-}
-
-return res.json({ success: true, absence });
-});
-
-// Add grade via backend simulator
-app.post("/api/dev/add-grade", async (req, res) => {
-  const { childId, childIds, subject, grade, coefficient, examName, date } = req.body;
-  const requestedChildIds = Array.isArray(childIds)
-    ? childIds.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-    : childId ? [String(childId)] : [];
-
-  if (requestedChildIds.length === 0 || !subject || grade === undefined || !examName) {
-    return res.status(400).json({ error: "Missing required grade properties" });
-  }
-
-  const gradeObj = await store.addGrade({
-    childId: requestedChildIds[0],
-    subject,
-    grade: parseFloat(grade),
-    coefficient: coefficient ? parseFloat(coefficient) : 1,
-    examName,
-    date: date || new Date().toISOString().split('T')[0]
-  } as any);
-
-  const children = await store.getChildrenOfParent("parent-jean-dupont");
-  const backupChildren = await store.getChildrenOfParent("parent-marie-martin");
-  const primaryChild = children.find(c => c.id === requestedChildIds[0]) || backupChildren.find(c => c.id === requestedChildIds[0]);
-
-  const resolvedParentIds = await store.getParentIdsForChildren(requestedChildIds);
-  const notificationParentIds = resolvedParentIds.length > 0 ? resolvedParentIds : primaryChild ? [primaryChild.parentId] : [];
-
-  if (primaryChild) {
-    const dedupeKey = `grade-${requestedChildIds[0]}-${Date.now()}`;
-    const name = `${primaryChild.firstName} ${primaryChild.lastName}`;
-
-    await NotificationService.dispatchNotification(
-      notificationParentIds,
-      "Nouvelle note disponible",
-      `${name} a reçu un ${grade}/20 en ${subject} (${examName}).`,
-      'grade',
-      {
-        childId: requestedChildIds[0],
-        childIds: requestedChildIds,
-        parentIds: notificationParentIds,
-        childName: name,
-        subject,
-        grade,
-        examName
-      },
-      dedupeKey
-    );
-  }
-
-  return res.json({ success: true, grade: gradeObj });
-});
-
-// Retrieve Delivery logs
-app.get("/api/dev/delivery-logs", (req, res) => {
-  const logs = store.getCompleteDeliveryLogs();
-  return res.json(logs);
-});
-
-// Clear all notification delivery history logs
-app.post("/api/dev/clear-logs", (req, res) => {
-  store.clearAllLogs();
-  return res.json({ success: true });
-});
 // ==========================================
 // INTERNAL SERVER-TO-SERVER NOTIFICATION
 // Called by web ecoles (pilot phase)
 // ==========================================
-app.post("/api/internal/absence-notification", async (req: Request, res: Response) => {
+app.post("/api/internal/absence-notification", verifyInternalAuth, async (req: Request, res: Response) => {
   try {
     logger.info("[NOTIF_TRACE] /api/internal/absence-notification route entry", { body: req.body });
     const {
@@ -913,7 +771,7 @@ app.post("/api/internal/absence-notification", async (req: Request, res: Respons
   }
 });
 
-app.post("/api/internal/grade-notification", async (req: Request, res: Response) => {
+app.post("/api/internal/grade-notification", verifyInternalAuth, async (req: Request, res: Response) => {
   try {
     const {
       parentId,
@@ -969,8 +827,7 @@ app.post("/api/internal/grade-notification", async (req: Request, res: Response)
     });
   }
 });
-app.post("/api/internal/evaluation-notification", async (req: Request, res: Response) => {
-  console.log("📢 EVALUATION NOTIFICATION RECUE", req.body);
+app.post("/api/internal/evaluation-notification", verifyInternalAuth, async (req: Request, res: Response) => {
   try {
     const {
       parentId,
@@ -1010,8 +867,7 @@ app.post("/api/internal/evaluation-notification", async (req: Request, res: Resp
   }
 });
 
-app.post("/api/internal/info-notification", async (req: Request, res: Response) => {
-  console.log("📢 INFO NOTIFICATION RECUE", req.body);
+app.post("/api/internal/info-notification", verifyInternalAuth, async (req: Request, res: Response) => {
   try {
     const {
       parentId,

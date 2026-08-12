@@ -189,4 +189,46 @@ export class AuthService {
 
     logger.audit("REVOKE_ALL_SESSIONS", parentId, { parentId }, "SUCCESS");
   }
+
+  /**
+   * Verifies HMAC-SHA256 signature for internal server-to-server calls
+   * Requires: X-Internal-Signature and X-Internal-Timestamp headers
+   * Signature format: HMAC-SHA256(body + timestamp, INTERNAL_SECRET)
+   * Prevents: Unauthorized callers, request forgery, replay attacks
+   */
+  public static verifyInternalSignature(body: string, signature: string, timestamp: string): boolean {
+    const INTERNAL_SECRET = process.env.INTERNAL_SECRET;
+    if (!INTERNAL_SECRET || !INTERNAL_SECRET.trim()) {
+      logger.error("INTERNAL_SECRET environment variable is missing or empty");
+      return false;
+    }
+
+    if (!signature || !timestamp) {
+      logger.warn("Missing internal signature or timestamp headers");
+      return false;
+    }
+
+    // Replay protection: reject timestamps older than 5 minutes
+    const requestTime = parseInt(timestamp, 10);
+    const currentTime = Date.now();
+    const maxTimestampAge = 5 * 60 * 1000; // 5 minutes
+
+    if (isNaN(requestTime) || Math.abs(currentTime - requestTime) > maxTimestampAge) {
+      logger.warn(`Timestamp replay detected or invalid: requested=${requestTime}, now=${currentTime}, diff=${Math.abs(currentTime - requestTime)}ms`);
+      return false;
+    }
+
+    // Verify HMAC signature
+    const messageToSign = `${body}${timestamp}`;
+    const hmac = crypto.createHmac("sha256", INTERNAL_SECRET);
+    hmac.update(messageToSign);
+    const expectedSignature = hmac.digest("hex");
+
+    const isValid = signature === expectedSignature;
+    if (!isValid) {
+      logger.warn(`HMAC signature mismatch: expected=${expectedSignature}, received=${signature}`);
+    }
+
+    return isValid;
+  }
 }
