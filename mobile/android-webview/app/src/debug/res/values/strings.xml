@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Debug variant: local development API endpoint -->
+    <string name="api_base_url">http://10.179.20.124:3001</string>
+</resources>

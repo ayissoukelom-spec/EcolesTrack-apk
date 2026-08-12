@@ -4,7 +4,11 @@ import { dbQuery } from "../postgres";
 
 const logger = new Logger("AuthService");
 
-const JWT_SECRET = process.env.JWT_SECRET || "ecoletrack-super-secret-key-2026";
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET || !JWT_SECRET.trim()) {
+  throw new Error("JWT_SECRET environment variable is required");
+}
+
 const ACCESS_TOKEN_EXPIRY_MS = 15 * 60 * 1000; // 15 Minutes
 const REFRESH_TOKEN_EXPIRY_MS = 30 * 24 * 60 * 60 * 1000; // 30 Days
 
