@@ -603,8 +603,8 @@ WHERE a.id = $2
     const childIdNum = Number(childId);
     if (!Number.isInteger(childIdNum)) return [];
 
-    const { rows } = await dbQuery<{ id: number; subject: string; score: string; coefficient: number | null; title: string; date: string; max_score: number }>(`
-      SELECT g.id, e.subject, g.score, e.coefficient, e.title, e.date, e.max_score
+    const { rows } = await dbQuery<{ id: number; subject: string; score: string; coefficient: number | null; title: string; date: string; max_score: number; created_at: string }>(`
+      SELECT g.id, e.subject, g.score, e.coefficient, e.title, e.date, e.max_score, g.created_at
       FROM grades g
       JOIN evaluations e ON e.id = g.evaluation_id
       WHERE g.student_id = $1
@@ -629,6 +629,7 @@ WHERE a.id = $2
         coefficient: Number(row.coefficient ?? 1),
         examName: row.title,
         date: row.date,
+        publishedAt: row.created_at ?? undefined,
       };
     });
   }

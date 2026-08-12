@@ -193,7 +193,7 @@ export default function ParentPortal({
       : grades.filter((g) => g.subject === gradeSubjectFilter);
 
     if (gradePeriodFilter === "all") {
-      return [...subjectFiltered].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      return [...subjectFiltered].sort((a, b) => new Date(b.publishedAt ?? b.date).getTime() - new Date(a.publishedAt ?? a.date).getTime());
     }
 
     const now = Date.now();
@@ -202,7 +202,7 @@ export default function ParentPortal({
 
     return subjectFiltered
       .filter((g) => new Date(g.date).getTime() >= threshold)
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      .sort((a, b) => new Date(b.publishedAt ?? b.date).getTime() - new Date(a.publishedAt ?? a.date).getTime());
   }, [grades, gradeSubjectFilter, gradePeriodFilter]);
 
   const displayedGradesAverage = (gradePeriodFilter === "trimester" && termAverageApi != null)
