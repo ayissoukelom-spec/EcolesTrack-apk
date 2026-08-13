@@ -999,7 +999,7 @@ export default function ParentPortal({
                       className="absolute right-3 top-3 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
                       aria-label={showPassword ? "Masquer le mot de passe" : "Afficher le mot de passe"}
                     >
-                      <Eye className="h-4 w-4" />
+                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                     </button>
                   </div>
                 </div>
