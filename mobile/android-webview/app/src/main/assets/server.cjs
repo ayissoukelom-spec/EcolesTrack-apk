@@ -22,6 +22,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 
 // server.ts
+var import_config = require("dotenv/config");
 var import_express = __toESM(require("express"), 1);
 var import_path2 = __toESM(require("path"), 1);
 var import_crypto2 = __toESM(require("crypto"), 1);
@@ -1069,6 +1070,39 @@ var AuthService = class {
     `, [parentId]);
     logger3.audit("REVOKE_ALL_SESSIONS", parentId, { parentId }, "SUCCESS");
   }
+  /**
+   * Verifies HMAC-SHA256 signature for internal server-to-server calls
+   * Requires: X-Internal-Signature and X-Internal-Timestamp headers
+   * Signature format: HMAC-SHA256(body + timestamp, INTERNAL_SECRET)
+   * Prevents: Unauthorized callers, request forgery, replay attacks
+   */
+  static verifyInternalSignature(body, signature, timestamp) {
+    const INTERNAL_SECRET = process.env.INTERNAL_SECRET;
+    if (!INTERNAL_SECRET || !INTERNAL_SECRET.trim()) {
+      logger3.error("INTERNAL_SECRET environment variable is missing or empty");
+      return false;
+    }
+    if (!signature || !timestamp) {
+      logger3.warn("Missing internal signature or timestamp headers");
+      return false;
+    }
+    const requestTime = parseInt(timestamp, 10);
+    const currentTime = Date.now();
+    const maxTimestampAge = 5 * 60 * 1e3;
+    if (isNaN(requestTime) || Math.abs(currentTime - requestTime) > maxTimestampAge) {
+      logger3.warn(`Timestamp replay detected or invalid: requested=${requestTime}, now=${currentTime}, diff=${Math.abs(currentTime - requestTime)}ms`);
+      return false;
+    }
+    const messageToSign = `${body}${timestamp}`;
+    const hmac = import_crypto.default.createHmac("sha256", INTERNAL_SECRET);
+    hmac.update(messageToSign);
+    const expectedSignature = hmac.digest("hex");
+    const isValid = signature === expectedSignature;
+    if (!isValid) {
+      logger3.warn(`HMAC signature mismatch: expected=${expectedSignature}, received=${signature}`);
+    }
+    return isValid;
+  }
 };
 
 // backend/services/fcm.ts
@@ -1637,9 +1671,7 @@ function rateLimit(limit, windowMs) {
 }
 var requireAuth = (req, res, next) => {
   const authHeader = req.headers.authorization;
-  console.log("[AUTH_DEBUG] requireAuth Authorization header:", authHeader);
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    console.log("[AUTH_DEBUG] requireAuth missing or invalid Bearer header");
     return res.status(401).json({
       error: "Authentification requise. Jeton de session manquant.",
       code: "UNAUTHORIZED"
@@ -1648,7 +1680,6 @@ var requireAuth = (req, res, next) => {
   const token = authHeader.split(" ")[1];
   const decoded = verifyToken(token);
   if (!decoded) {
-    console.log("[AUTH_DEBUG] requireAuth token verification failed", { tokenLength: token?.length });
     return res.status(401).json({
       error: "Session invalide ou expir\xE9e. Veuillez vous reconnecter.",
       code: "INVALID_SESSION"
@@ -1663,7 +1694,6 @@ var requireAuth = (req, res, next) => {
   next();
 };
 var requireParentRoleOnly = (req, res, next) => {
-  console.log("[AUTH_DEBUG] requireParentRoleOnly parent role:", req.parent?.role, "url:", req.originalUrl);
   if (!req.parent || req.parent.role !== "parent") {
     console.warn(`[SECURITY VIOLATION] Attempted access with non-parent role: ${req.parent?.role || "none"} on URL: ${req.originalUrl}`);
     return res.status(403).json({
@@ -1671,6 +1701,25 @@ var requireParentRoleOnly = (req, res, next) => {
       code: "PARENTS_ONLY"
     });
   }
+  next();
+};
+var verifyInternalAuth = (req, res, next) => {
+  const signature = req.headers["x-internal-signature"];
+  const timestamp = req.headers["x-internal-timestamp"];
+  let body = "";
+  if (typeof req.body === "object") {
+    body = JSON.stringify(req.body);
+  } else {
+    body = String(req.body || "");
+  }
+  if (!AuthService.verifyInternalSignature(body, signature, timestamp)) {
+    logger7.warn(`[SECURITY VIOLATION] Invalid internal signature or timestamp. IP: ${req.ip}, URL: ${req.originalUrl}`);
+    return res.status(401).json({
+      error: "Signature interne invalide ou expir\xE9e.",
+      code: "INVALID_INTERNAL_SIGNATURE"
+    });
+  }
+  logger7.info(`[INTERNAL_AUTH] Valid signature verified for ${req.method} ${req.originalUrl}`);
   next();
 };
 app.post("/api/mobile/parent/login", rateLimit(15, 6e4), async (req, res) => {
@@ -1724,7 +1773,6 @@ app.post("/api/mobile/parent/login", rateLimit(15, 6e4), async (req, res) => {
     id: user.id,
     name: user.name,
     email: user.email,
-    phoneNumber: user.phoneNumber,
     activeSchoolId: user.activeSchoolId,
     schools: user.schools
   };
@@ -1776,7 +1824,7 @@ app.post("/api/mobile/parent/change-password", rateLimit(15, 6e4), async (req, r
   logger7.audit("PARENT_CHANGE_PASSWORD", user.id, { email }, "SUCCESS");
   return res.json({ success: true });
 });
-app.post("/api/mobile/parent/refresh-token", async (req, res) => {
+app.post("/api/mobile/parent/refresh-token", rateLimit(15, 6e4), async (req, res) => {
   const { refreshToken } = req.body;
   if (!refreshToken) {
     return res.status(400).json({
@@ -1825,7 +1873,6 @@ app.get("/api/mobile/parent/me", requireAuth, requireParentRoleOnly, async (req,
     id: parent.id,
     name: parent.name,
     email: parent.email,
-    phoneNumber: parent.phoneNumber,
     activeSchoolId: parent.activeSchoolId,
     schools: parent.schools
   };
@@ -2001,8 +2048,6 @@ app.put("/api/mobile/parent/notifications/:id/read", requireAuth, requireParentR
   return res.json({ success: true, message: "Notification marqu\xE9e comme lue." });
 });
 app.post("/api/mobile/parent/devices/register-push-token", requireAuth, requireParentRoleOnly, async (req, res) => {
-  console.log("========== REGISTER PUSH TOKEN ==========");
-  console.log("Body re\xE7u :", req.body);
   const parentId = req.parent.id;
   const validation = RegisterPushTokenSchema.safeParse(req.body);
   if (!validation.success) {
@@ -2014,13 +2059,6 @@ app.post("/api/mobile/parent/devices/register-push-token", requireAuth, requireP
     });
   }
   const { pushToken, platform, appVersion, deviceId } = validation.data;
-  console.log("PUSH TOKEN RECU :", {
-    parentId,
-    pushToken,
-    platform,
-    appVersion,
-    deviceId
-  });
   const device = await store.registerPushToken(
     parentId,
     deviceId,
@@ -2028,7 +2066,6 @@ app.post("/api/mobile/parent/devices/register-push-token", requireAuth, requireP
     platform,
     appVersion
   );
-  console.log("DEVICE ENREGISTRE :", device);
   logger7.audit(
     "REGISTER_PUSH_TOKEN",
     parentId,
@@ -2127,128 +2164,7 @@ app.get("/api/mobile/health", (req, res) => {
     }
   });
 });
-app.post("/api/dev/add-absence", async (req, res) => {
-  const { childId, date, reason, justified, justificationText } = req.body;
-  logger7.info("[NOTIF_TRACE] add-absence endpoint received", { childId, date, reason, justified });
-  if (!childId || !reason) {
-    return res.status(400).json({ error: "childId and reason required" });
-  }
-  const absence = await store.addAbsence({
-    childId,
-    date: date || (/* @__PURE__ */ new Date()).toISOString(),
-    reason,
-    justified: !!justified,
-    justificationText
-  });
-  logger7.info("[NOTIF_TRACE] absence created", { childId, absenceId: absence.id, date: absence.date, reason, justified });
-  const children = await store.getChildrenOfParent("parent-jean-dupont");
-  const backupChildren = await store.getChildrenOfParent("parent-marie-martin");
-  const child = children.find((c) => c.id === childId) || backupChildren.find((c) => c.id === childId);
-  if (child) {
-    const parentId = child.parentId;
-    const dedupeKey = `absence-${child.id}-${Date.now()}`;
-    const name = `${child.firstName} ${child.lastName}`;
-    const formatDateSafe = (dateStr) => {
-      if (!dateStr) return "";
-      const opts = { day: "2-digit", month: "2-digit", year: "numeric" };
-      if (dateStr.includes("T")) return new Date(dateStr).toLocaleDateString("fr-FR", opts);
-      const parts = String(dateStr).split("-");
-      if (parts.length === 3) {
-        const y = Number(parts[0]);
-        const m = Number(parts[1]) - 1;
-        const d = Number(parts[2]);
-        return new Date(y, m, d).toLocaleDateString("fr-FR", opts);
-      }
-      return new Date(dateStr).toLocaleDateString("fr-FR", opts);
-    };
-    const absenceDate = new Date(absence.date);
-    const formattedDate = formatDateSafe(absence.date);
-    const timePart = absenceDate.toISOString().includes("T") ? ` de ${absenceDate.toISOString().substr(11, 5)}` : "";
-    const subjectName = absence.subjectName || void 0;
-    const subjectText = subjectName ? `, en ${subjectName}` : "";
-    const messageBody = `Une absence a \xE9t\xE9 signal\xE9e pour ${child.firstName} le ${formattedDate}${timePart}${subjectText}. Veuillez fournir un justificatif.`;
-    const internalPayload = {
-      parentId,
-      title: `Nouvelle absence pour ${child.firstName}`,
-      message: messageBody,
-      category: "absence",
-      metadata: {
-        absenceId: absence.id,
-        childId,
-        date: absence.date,
-        reason,
-        subjectName
-      },
-      dedupeKey
-    };
-    logger7.info("[NOTIF_TRACE] calling /api/internal/absence-notification", {
-      parentId,
-      childId,
-      absenceId: absence.id,
-      payload: internalPayload
-    });
-    const API_URL = process.env.API_URL || "http://localhost:3001";
-    logger7.info("[ENV_TRACE] API_URL =", { API_URL, raw: process.env.API_URL });
-    await fetch(`${API_URL}/api/internal/absence-notification`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(internalPayload)
-    });
-  }
-  return res.json({ success: true, absence });
-});
-app.post("/api/dev/add-grade", async (req, res) => {
-  const { childId, childIds, subject, grade, coefficient, examName, date } = req.body;
-  const requestedChildIds = Array.isArray(childIds) ? childIds.filter((value) => typeof value === "string" && value.trim().length > 0) : childId ? [String(childId)] : [];
-  if (requestedChildIds.length === 0 || !subject || grade === void 0 || !examName) {
-    return res.status(400).json({ error: "Missing required grade properties" });
-  }
-  const gradeObj = await store.addGrade({
-    childId: requestedChildIds[0],
-    subject,
-    grade: parseFloat(grade),
-    coefficient: coefficient ? parseFloat(coefficient) : 1,
-    examName,
-    date: date || (/* @__PURE__ */ new Date()).toISOString().split("T")[0]
-  });
-  const children = await store.getChildrenOfParent("parent-jean-dupont");
-  const backupChildren = await store.getChildrenOfParent("parent-marie-martin");
-  const primaryChild = children.find((c) => c.id === requestedChildIds[0]) || backupChildren.find((c) => c.id === requestedChildIds[0]);
-  const resolvedParentIds = await store.getParentIdsForChildren(requestedChildIds);
-  const notificationParentIds = resolvedParentIds.length > 0 ? resolvedParentIds : primaryChild ? [primaryChild.parentId] : [];
-  if (primaryChild) {
-    const dedupeKey = `grade-${requestedChildIds[0]}-${Date.now()}`;
-    const name = `${primaryChild.firstName} ${primaryChild.lastName}`;
-    await NotificationService.dispatchNotification(
-      notificationParentIds,
-      "Nouvelle note disponible",
-      `${name} a re\xE7u un ${grade}/20 en ${subject} (${examName}).`,
-      "grade",
-      {
-        childId: requestedChildIds[0],
-        childIds: requestedChildIds,
-        parentIds: notificationParentIds,
-        childName: name,
-        subject,
-        grade,
-        examName
-      },
-      dedupeKey
-    );
-  }
-  return res.json({ success: true, grade: gradeObj });
-});
-app.get("/api/dev/delivery-logs", (req, res) => {
-  const logs = store.getCompleteDeliveryLogs();
-  return res.json(logs);
-});
-app.post("/api/dev/clear-logs", (req, res) => {
-  store.clearAllLogs();
-  return res.json({ success: true });
-});
-app.post("/api/internal/absence-notification", async (req, res) => {
+app.post("/api/internal/absence-notification", verifyInternalAuth, async (req, res) => {
   try {
     logger7.info("[NOTIF_TRACE] /api/internal/absence-notification route entry", { body: req.body });
     const {
@@ -2286,7 +2202,7 @@ app.post("/api/internal/absence-notification", async (req, res) => {
     });
   }
 });
-app.post("/api/internal/grade-notification", async (req, res) => {
+app.post("/api/internal/grade-notification", verifyInternalAuth, async (req, res) => {
   try {
     const {
       parentId,
@@ -2327,8 +2243,7 @@ app.post("/api/internal/grade-notification", async (req, res) => {
     });
   }
 });
-app.post("/api/internal/evaluation-notification", async (req, res) => {
-  console.log("\u{1F4E2} EVALUATION NOTIFICATION RECUE", req.body);
+app.post("/api/internal/evaluation-notification", verifyInternalAuth, async (req, res) => {
   try {
     const {
       parentId,
@@ -2362,8 +2277,7 @@ app.post("/api/internal/evaluation-notification", async (req, res) => {
     });
   }
 });
-app.post("/api/internal/info-notification", async (req, res) => {
-  console.log("\u{1F4E2} INFO NOTIFICATION RECUE", req.body);
+app.post("/api/internal/info-notification", verifyInternalAuth, async (req, res) => {
   try {
     const {
       parentId,
