@@ -114,6 +114,54 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private String buildApiBootstrapScript() {
+        String safeApiUrl = apiServerUrl == null ? "" : apiServerUrl.replace("\\", "\\\\").replace("'", "\\'");
+        return "<script>"
+                + "try {"
+                + "window.ECOLETRACK_API_BASE_URL = '" + safeApiUrl + "';"
+                + "localStorage.setItem('ecoletrack_api_base_url', '" + safeApiUrl + "');"
+                + "localStorage.setItem('ecoletrack_mobile_production', 'true');"
+                + "if (window.AndroidBridge && window.AndroidBridge.log) {"
+                + "window.AndroidBridge.log('[API_TRACE][A] ANDROID_INJECTION window.ECOLETRACK_API_BASE_URL = " + safeApiUrl + "');"
+                + "window.AndroidBridge.log('[API_TRACE][B] ANDROID_INJECTION localStorage = " + safeApiUrl + "');"
+                + "}"
+                + "console.log('[API_TRACE][A] ANDROID_INJECTION window.ECOLETRACK_API_BASE_URL = " + safeApiUrl + "');"
+                + "console.log('[API_TRACE][B] ANDROID_INJECTION localStorage = " + safeApiUrl + "');"
+                + "} catch (e) { console.log('[API_TRACE][ERROR] initial API bootstrap failed: ' + e); }"
+                + "</script>";
+    }
+
+    private String injectApiBootstrapIntoHtml(String html) {
+        if (html == null || html.isEmpty()) {
+            return buildApiBootstrapScript();
+        }
+
+        String injection = buildApiBootstrapScript();
+        if (html.contains("</head>")) {
+            return html.replace("</head>", injection + "</head>");
+        }
+
+        return injection + html;
+    }
+
+    private void loadPreparedIndexHtml() {
+        try {
+            String html = readIndexHtmlFromAssets();
+            String modifiedHtml = injectApiBootstrapIntoHtml(html);
+            Log.i(TAG, "[API_TRACE][INIT] Loading prepared index.html with Android API bootstrap: " + apiServerUrl);
+            webView.loadDataWithBaseURL(
+                    "file:///android_asset/",
+                    modifiedHtml,
+                    "text/html",
+                    "UTF-8",
+                    "file:///android_asset/index.html"
+            );
+        } catch (java.io.IOException e) {
+            Log.e(TAG, "[API_TRACE][ERROR] Failed to prepare Android index.html bootstrap", e);
+            webView.loadDataWithBaseURL(null, LOADING_HTML, "text/html", "UTF-8", null);
+        }
+    }
+
     private void dispatchFcmTokenToWebView(String token) {
         pendingFcmToken = token;
         if (webView == null) {
@@ -223,23 +271,8 @@ public class MainActivity extends AppCompatActivity {
                 if (requestUrl.contains("/index.html")) {
                     try {
                         String html = readIndexHtmlFromAssets();
-                        String injection = "<script>"
-                                + "window.__ECOLETRACK_ANDROID_API_BASE_URL='" + apiServerUrl + "';"
-                                + "window.__ECOLETRACK_API_DIAGNOSTICS__ = Object.assign({}, window.__ECOLETRACK_API_DIAGNOSTICS__, { androidResource: '" + apiServerUrl + "', windowValue: window.ECOLETRACK_API_BASE_URL || '<not-set>', localStorageValue: localStorage.getItem('ecoletrack_api_base_url') || '<not-set>' });"
-                                + "window.AndroidBridge && window.AndroidBridge.log('[API_TRACE][1] ANDROID RESOURCE apiServerUrl = " + apiServerUrl + "');"
-                                + "window.AndroidBridge && window.AndroidBridge.log('[API_TRACE][2] BEFORE_WEBVIEW_LOAD window.ECOLETRACK_API_BASE_URL = ' + (window.ECOLETRACK_API_BASE_URL || '<not-set>'));"
-                                + "console.log('[API_TRACE][1] ANDROID RESOURCE apiServerUrl = " + apiServerUrl + "');"
-                                + "console.log('[API_TRACE][2] BEFORE_WEBVIEW_LOAD window.ECOLETRACK_API_BASE_URL = ' + (window.ECOLETRACK_API_BASE_URL || '<not-set>'));"
-                                + "window.ECOLETRACK_API_BASE_URL='" + apiServerUrl + "';"
-                                + "localStorage.setItem('ecoletrack_api_base_url', '" + apiServerUrl + "');"
-                                + "localStorage.setItem('ecoletrack_mobile_production', 'true');"
-                                + "window.__ECOLETRACK_API_DIAGNOSTICS__ = Object.assign({}, window.__ECOLETRACK_API_DIAGNOSTICS__, { androidResource: '" + apiServerUrl + "', windowValue: window.ECOLETRACK_API_BASE_URL || '<not-set>', localStorageValue: localStorage.getItem('ecoletrack_api_base_url') || '<not-set>' });"
-                                + "window.AndroidBridge && window.AndroidBridge.log('[API_TRACE][3] INJECTION_ANDROID window.ECOLETRACK_API_BASE_URL = ' + window.ECOLETRACK_API_BASE_URL);"
-                                + "window.AndroidBridge && window.AndroidBridge.log('[API_TRACE][4] LOCAL_STORAGE after injection = ' + localStorage.getItem('ecoletrack_api_base_url'));"
-                                + "console.log('[API_TRACE][3] INJECTION_ANDROID window.ECOLETRACK_API_BASE_URL = ' + window.ECOLETRACK_API_BASE_URL);"
-                                + "console.log('[API_TRACE][4] LOCAL_STORAGE after injection = ' + localStorage.getItem('ecoletrack_api_base_url'));"
-                                + "</script>";
-                        String modifiedHtml = html.replace("</head>", injection + "</head>");
+                        String modifiedHtml = injectApiBootstrapIntoHtml(html);
+                        Log.i(TAG, "[API_TRACE][INIT] Android API bootstrap injected before JS execution: " + apiServerUrl);
                         return new WebResourceResponse(
                                 "text/html",
                                 "UTF-8",
@@ -269,18 +302,18 @@ public class MainActivity extends AppCompatActivity {
                     return;
                 }
 
-                // Injecte l'URL du serveur API dans localStorage et sur window pour que withApiBase() l'utilise
-                String js = "window.__ECOLETRACK_ANDROID_API_BASE_URL = '" + apiServerUrl + "'; " +
-                            "window.AndroidBridge && window.AndroidBridge.log('[API_TRACE][5] AFTER_PAGE_FINISHED before set window.ECOLETRACK_API_BASE_URL = ' + (window.ECOLETRACK_API_BASE_URL || '<not-set>')); " +
-                            "window.AndroidBridge && window.AndroidBridge.log('[API_TRACE][5] AFTER_PAGE_FINISHED before set localStorage = ' + (localStorage.getItem('ecoletrack_api_base_url') || '<not-set>')); " +
-                            "window.ECOLETRACK_API_BASE_URL = '" + apiServerUrl + "'; " +
-                            "localStorage.setItem('ecoletrack_api_base_url', '" + apiServerUrl + "'); " +
+                String safeApiUrl = apiServerUrl == null ? "" : apiServerUrl.replace("\\", "\\\\").replace("'", "\\'");
+                String js = "try { " +
+                            "window.AndroidBridge && window.AndroidBridge.log('[API_TRACE][LATE] BEFORE_SET window.ECOLETRACK_API_BASE_URL = ' + (window.ECOLETRACK_API_BASE_URL || '<not-set>')); " +
+                            "window.AndroidBridge && window.AndroidBridge.log('[API_TRACE][LATE] BEFORE_SET localStorage = ' + (localStorage.getItem('ecoletrack_api_base_url') || '<not-set>')); " +
+                            "window.ECOLETRACK_API_BASE_URL = '" + safeApiUrl + "'; " +
+                            "localStorage.setItem('ecoletrack_api_base_url', '" + safeApiUrl + "'); " +
                             "localStorage.setItem('ecoletrack_mobile_production', 'true'); " +
-                            "window.__ECOLETRACK_API_DIAGNOSTICS__ = Object.assign({}, window.__ECOLETRACK_API_DIAGNOSTICS__, { androidResource: '" + apiServerUrl + "', windowValue: window.ECOLETRACK_API_BASE_URL || '<not-set>', localStorageValue: localStorage.getItem('ecoletrack_api_base_url') || '<not-set>' }); " +
-                            "window.AndroidBridge && window.AndroidBridge.log('[API_TRACE][5] AFTER_PAGE_FINISHED window.ECOLETRACK_API_BASE_URL = ' + window.ECOLETRACK_API_BASE_URL); " +
-                            "window.AndroidBridge && window.AndroidBridge.log('[API_TRACE][5] AFTER_PAGE_FINISHED localStorage = ' + localStorage.getItem('ecoletrack_api_base_url')); " +
-                            "console.log('[API_TRACE][5] AFTER_PAGE_FINISHED window.ECOLETRACK_API_BASE_URL = ' + window.ECOLETRACK_API_BASE_URL); " +
-                            "console.log('[API_TRACE][5] AFTER_PAGE_FINISHED localStorage = ' + localStorage.getItem('ecoletrack_api_base_url'));";
+                            "window.AndroidBridge && window.AndroidBridge.log('[API_TRACE][LATE] AFTER_SET window.ECOLETRACK_API_BASE_URL = ' + window.ECOLETRACK_API_BASE_URL); " +
+                            "window.AndroidBridge && window.AndroidBridge.log('[API_TRACE][LATE] AFTER_SET localStorage = ' + localStorage.getItem('ecoletrack_api_base_url')); " +
+                            "console.log('[API_TRACE][LATE] AFTER_SET window.ECOLETRACK_API_BASE_URL = ' + window.ECOLETRACK_API_BASE_URL); " +
+                            "console.log('[API_TRACE][LATE] AFTER_SET localStorage = ' + localStorage.getItem('ecoletrack_api_base_url')); " +
+                            "} catch (e) { console.log('[API_TRACE][ERROR] late API bootstrap failed: ' + e); }";
                 view.evaluateJavascript(js, null);
 
                 if (pendingFcmToken != null) {
@@ -332,9 +365,7 @@ public class MainActivity extends AppCompatActivity {
 
         webView.setBackgroundColor(Color.parseColor("#0f172a"));
         webView.loadDataWithBaseURL(null, LOADING_HTML, "text/html", "UTF-8", null);
-        // Charge l'application avec un paramètre de cache-busting
-        String cachebustedUrl = APP_INDEX_URL + "?v=" + System.currentTimeMillis();
-        webView.post(() -> webView.loadUrl(cachebustedUrl));
+        webView.post(this::loadPreparedIndexHtml);
     }
 
     private void ensureNotificationPermission() {

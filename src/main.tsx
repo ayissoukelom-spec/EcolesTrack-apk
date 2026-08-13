@@ -2,7 +2,7 @@ import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
-import { installApiDiagnosticsPanel, resolveApiBaseUrl, withApiBase } from './utils/http';
+import { resolveApiBaseUrl, withApiBase } from './utils/http';
 import { ThemeProvider } from './contexts/ThemeContext';
 
 function logDiagnostic(message: string): void {
@@ -44,18 +44,6 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   throw error;
 }
 };
-
-(window as typeof window & { __ECOLETRACK_API_DIAGNOSTICS__?: Record<string, string> }).__ECOLETRACK_API_DIAGNOSTICS__ = {
-  androidResource: '<not-set>',
-  windowValue: '<not-set>',
-  localStorageValue: '<not-set>',
-  resolveValue: '<not-set>',
-  lastFetch: '<not-set>',
-  lastFetchSource: '<not-set>',
-  lastStep: '<not-set>',
-};
-
-installApiDiagnosticsPanel();
 
 logDiagnostic(`[ECOLETRACK_API_TRACE][6] resolveApiBaseUrl() => ${resolveApiBaseUrl()}`);
 logDiagnostic(`[ECOLETRACK_API_TRACE][7] FETCH URL = ${String(withApiBase('/api/login'))}`);
