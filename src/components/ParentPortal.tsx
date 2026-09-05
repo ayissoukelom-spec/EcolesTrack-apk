@@ -1638,6 +1638,16 @@ export default function ParentPortal({
                                       <p className={`text-[9px] ${tone.meta}`}>coeff {g.coefficient}</p>
                                     </div>
                                   </div>
+                                  <div className="mt-3 grid grid-cols-2 gap-2 text-[9px]">
+                                    <div className="rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-1.5 text-indigo-700 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-300">
+                                      <span className="font-semibold">Fort</span>
+                                      <strong className="ml-1">{g.evaluationMaximumScore == null ? "-" : `${g.evaluationMaximumScore.toFixed(2)} / 20`}</strong>
+                                    </div>
+                                    <div className="rounded-lg border border-black bg-black px-2 py-1.5 text-[#FFFF00]">
+                                      <span className="font-semibold">Faible</span>
+                                      <strong className="ml-1">{g.evaluationMinimumScore == null ? "-" : `${g.evaluationMinimumScore.toFixed(2)} / 20`}</strong>
+                                    </div>
+                                  </div>
                                 </div>
                               );
                             })}

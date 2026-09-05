@@ -603,12 +603,35 @@ WHERE a.id = $2
     const childIdNum = Number(childId);
     if (!Number.isInteger(childIdNum)) return [];
 
-    const { rows } = await dbQuery<{ id: number; subject: string; score: string; coefficient: number | null; title: string; date: string; max_score: number; created_at: string }>(`
-      SELECT g.id, e.subject, g.score, e.coefficient, e.title, e.date, e.max_score, g.created_at
+    const { rows } = await dbQuery<{ id: number; evaluation_id: number; subject: string; score: string; coefficient: number | null; title: string; date: string; max_score: number; created_at: string }>(`
+      SELECT g.id, g.evaluation_id, e.subject, g.score, e.coefficient, e.title, e.date, e.max_score, g.created_at
       FROM grades g
       JOIN evaluations e ON e.id = g.evaluation_id
       WHERE g.student_id = $1
     `, [childIdNum]);
+
+    const evaluationIds = Array.from(new Set(rows.map((row) => row.evaluation_id)));
+    const scoreRows = evaluationIds.length === 0
+      ? []
+      : (await dbQuery<{ evaluation_id: number; score: string; max_score: number | null }>(`
+          SELECT g.evaluation_id, g.score, e.max_score
+          FROM grades g
+          JOIN evaluations e ON e.id = g.evaluation_id
+          WHERE g.evaluation_id = ANY($1::int[])
+        `, [evaluationIds])).rows;
+
+    const scoreBounds = new Map<number, { minimum: number | null; maximum: number | null }>();
+    for (const scoreRow of scoreRows) {
+      const rawScore = Number(String(scoreRow.score ?? '').trim().replace(',', '.'));
+      const maxScore = Number(scoreRow.max_score);
+      if (!Number.isFinite(rawScore) || !Number.isFinite(maxScore) || maxScore <= 0) continue;
+
+      const normalizedScore = (rawScore / maxScore) * 20;
+      const current = scoreBounds.get(scoreRow.evaluation_id) ?? { minimum: null, maximum: null };
+      current.minimum = current.minimum == null ? normalizedScore : Math.min(current.minimum, normalizedScore);
+      current.maximum = current.maximum == null ? normalizedScore : Math.max(current.maximum, normalizedScore);
+      scoreBounds.set(scoreRow.evaluation_id, current);
+    }
 
     return rows.map((row) => {
       const rawScore = Number(row.score);
@@ -619,11 +642,14 @@ WHERE a.id = $2
       return {
         id: String(row.id),
         childId,
+        evaluationId: String(row.evaluation_id),
         subject: row.subject,
         // `grade` is the normalized score on a /20 scale (backward compatible)
         grade: normalizedScore,
         // Keep original max score to allow clients to display raw values
         maxScore: maxScore,
+        evaluationMinimumScore: scoreBounds.get(row.evaluation_id)?.minimum ?? null,
+        evaluationMaximumScore: scoreBounds.get(row.evaluation_id)?.maximum ?? null,
         // Expose the raw recorded score so clients can detect double-normalization
         rawScore: rawScore,
         coefficient: Number(row.coefficient ?? 1),

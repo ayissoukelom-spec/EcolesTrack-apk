@@ -47,9 +47,12 @@ export interface Absence {
 export interface Grade {
   id: string;
   childId: string;
+  evaluationId?: string;
   subject: string;
   grade: number; // Out of 20
   maxScore?: number;
+  evaluationMinimumScore?: number | null;
+  evaluationMaximumScore?: number | null;
   coefficient: number;
   examName: string;
   date: string;
