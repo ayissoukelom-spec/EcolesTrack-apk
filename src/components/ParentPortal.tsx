@@ -1645,7 +1645,7 @@ export default function ParentPortal({
                                   </div>
                                   <div className="mt-3 grid grid-cols-2 gap-2 text-[9px]">
                                     <div className="rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-1.5 text-indigo-700 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-300">
-                                      <span className="font-semibold">Fort</span>
+                                      <span className="font-semibold">Forte</span>
                                       <strong className="ml-1">{g.evaluationMaximumScore == null ? "-" : `${g.evaluationMaximumScore.toFixed(2)} / 20`}</strong>
                                     </div>
                                     <div className="rounded-lg border border-black bg-black px-2 py-1.5 text-[#FFFF00]">
