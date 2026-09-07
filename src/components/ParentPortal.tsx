@@ -768,7 +768,12 @@ export default function ParentPortal({
       .trim();
 
   const classifyParentNotification = (notif: AppNotification) => {
+    const normalizedTitle = normalizeNotificationText(notif.title);
     const payload = normalizeNotificationText(`${notif.title} ${notif.message}`);
+
+    if (/^(nouvelle note pour|note modifiee pour|nouvelle note disponible)\b/.test(normalizedTitle)) {
+      return "notes";
+    }
 
     if (/\b(devoir|homework|assignment|exercice|travail)\b/.test(payload)) {
       return "homework";
