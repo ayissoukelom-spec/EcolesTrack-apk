@@ -35,6 +35,9 @@ const app = express();
 const PORT = Number(process.env.PORT) || 3001;
 const uploadStorageDir = path.join(process.cwd(), "uploads", "absence-justifications");
 
+const MAX_ABSENCE_ATTACHMENT_COUNT = 5;
+const allowedJustificationMimeTypes = ["application/pdf", "image/png", "image/jpeg"];
+
 const upload = multer({
   storage: multer.diskStorage({
     destination: uploadStorageDir,
@@ -46,10 +49,10 @@ const upload = multer({
   }),
   limits: {
     fileSize: 5 * 1024 * 1024,
+    files: MAX_ABSENCE_ATTACHMENT_COUNT,
   },
   fileFilter: (_req, file, cb) => {
-    const allowedTypes = ["application/pdf", "image/png", "image/jpeg"];
-    if (!allowedTypes.includes(file.mimetype)) {
+    if (!allowedJustificationMimeTypes.includes(file.mimetype)) {
       return cb(new Error("Unsupported file type"));
     }
     cb(null, true);
@@ -61,6 +64,32 @@ const handleSingleFileUpload = (req: Request, res: Response, next: NextFunction)
     if (err) {
       return res.status(400).json({ error: err.message || "Invalid file upload", code: "UPLOAD_INVALID" });
     }
+    return next();
+  });
+};
+
+const handleAbsenceJustificationUpload = (req: Request, res: Response, next: NextFunction) => {
+  upload.fields([
+    { name: "files", maxCount: MAX_ABSENCE_ATTACHMENT_COUNT },
+    { name: "file", maxCount: 1 }
+  ])(req, res, (err: any) => {
+    if (err) {
+      return res.status(400).json({ error: err.message || "Invalid file upload", code: "UPLOAD_INVALID" });
+    }
+
+    const uploadedFiles = [] as Express.Multer.File[];
+    if (Array.isArray((req as any).files)) {
+      uploadedFiles.push(...(req as any).files);
+    } else if ((req as any).files && typeof (req as any).files === "object") {
+      for (const fieldFiles of Object.values((req as any).files as Record<string, Express.Multer.File[]>)) {
+        uploadedFiles.push(...fieldFiles);
+      }
+    }
+    if ((req as any).file) {
+      uploadedFiles.push((req as any).file);
+    }
+
+    (req as any).uploadedFiles = uploadedFiles;
     return next();
   });
 };
@@ -486,10 +515,11 @@ app.put("/api/absences/:id/justify", requireAuth, requireParentRoleOnly, async (
   }
 });
 
-app.post("/api/absences/:id/justifications", requireAuth, requireParentRoleOnly, handleSingleFileUpload, async (req: AuthenticatedRequest, res) => {
+app.post("/api/absences/:id/justifications", requireAuth, requireParentRoleOnly, handleAbsenceJustificationUpload, async (req: AuthenticatedRequest, res) => {
   const { id } = req.params;
   const parentId = req.parent!.id;
   const justificationReason = typeof req.body?.justificationReason === "string" ? req.body.justificationReason.trim() : "";
+  const uploadedFiles = ((req as any).uploadedFiles ?? []) as Express.Multer.File[];
 
   if (!justificationReason) {
     return res.status(400).json({
@@ -498,10 +528,17 @@ app.post("/api/absences/:id/justifications", requireAuth, requireParentRoleOnly,
     });
   }
 
-  if (!req.file) {
+  if (!uploadedFiles.length) {
     return res.status(400).json({
       error: "Veuillez joindre un document justificatif valide.",
       code: "JUSTIFICATION_FILE_REQUIRED"
+    });
+  }
+
+  if (uploadedFiles.length > MAX_ABSENCE_ATTACHMENT_COUNT) {
+    return res.status(400).json({
+      error: `Vous pouvez joindre jusqu'à ${MAX_ABSENCE_ATTACHMENT_COUNT} fichiers maximum.`,
+      code: "JUSTIFICATION_FILE_LIMIT_EXCEEDED"
     });
   }
 
@@ -515,16 +552,23 @@ app.post("/api/absences/:id/justifications", requireAuth, requireParentRoleOnly,
     }
 
     const uploadedByValue = Number.isFinite(Number(parentId)) ? Number(parentId) : parentId;
-    const insertResult = await dbQuery<{ id: number; file_name: string; file_path: string; mime_type: string; file_size: number }>(`
-      INSERT INTO absence_justifications (absence_id, file_name, file_path, mime_type, file_size, uploaded_by)
-      VALUES ($1, $2, $3, $4, $5, $6)
-      RETURNING id, file_name, file_path, mime_type, file_size
-    `, [id, req.file.originalname, req.file.filename, req.file.mimetype, Number(req.file.size), uploadedByValue]);
+    const insertedFiles: Array<{ id: number; file_name: string; file_path: string; mime_type: string; file_size: number }> = [];
 
+    for (const uploadedFile of uploadedFiles) {
+      const insertResult = await dbQuery<{ id: number; file_name: string; file_path: string; mime_type: string; file_size: number }>(`
+        INSERT INTO absence_justifications (absence_id, file_name, file_path, mime_type, file_size, uploaded_by)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING id, file_name, file_path, mime_type, file_size
+      `, [id, uploadedFile.originalname, uploadedFile.filename, uploadedFile.mimetype, Number(uploadedFile.size), uploadedByValue]);
+      insertedFiles.push(insertResult.rows[0]);
+    }
+
+    const lastInserted = insertedFiles[insertedFiles.length - 1];
     return res.status(201).json({
       ...updatedAbsence,
-      justificationFileId: insertResult.rows[0]?.id,
-      justificationFileName: insertResult.rows[0]?.file_name ?? req.file.originalname,
+      justificationFileId: lastInserted?.id,
+      justificationFileName: lastInserted?.file_name ?? uploadedFiles[uploadedFiles.length - 1].originalname,
+      justificationFiles: insertedFiles,
     });
   } catch (err: any) {
     console.error("Failed to justify absence with file:", err);
@@ -535,10 +579,11 @@ app.post("/api/absences/:id/justifications", requireAuth, requireParentRoleOnly,
   }
 });
 
-app.post("/api/absences/:absenceId/justifications", requireAuth, requireParentRoleOnly, handleSingleFileUpload, async (req: AuthenticatedRequest, res) => {
+app.post("/api/absences/:absenceId/justifications", requireAuth, requireParentRoleOnly, handleAbsenceJustificationUpload, async (req: AuthenticatedRequest, res) => {
   const { absenceId } = req.params;
   const parentId = req.parent!.id;
   const justificationReason = typeof req.body?.justificationReason === "string" ? req.body.justificationReason.trim() : "";
+  const uploadedFiles = ((req as any).uploadedFiles ?? []) as Express.Multer.File[];
 
   if (!justificationReason) {
     return res.status(400).json({
@@ -547,10 +592,17 @@ app.post("/api/absences/:absenceId/justifications", requireAuth, requireParentRo
     });
   }
 
-  if (!req.file) {
+  if (!uploadedFiles.length) {
     return res.status(400).json({
       error: "Veuillez joindre un document justificatif valide.",
       code: "JUSTIFICATION_FILE_REQUIRED"
+    });
+  }
+
+  if (uploadedFiles.length > MAX_ABSENCE_ATTACHMENT_COUNT) {
+    return res.status(400).json({
+      error: `Vous pouvez joindre jusqu'à ${MAX_ABSENCE_ATTACHMENT_COUNT} fichiers maximum.`,
+      code: "JUSTIFICATION_FILE_LIMIT_EXCEEDED"
     });
   }
 
@@ -564,16 +616,23 @@ app.post("/api/absences/:absenceId/justifications", requireAuth, requireParentRo
     }
 
     const uploadedByValue = Number.isFinite(Number(parentId)) ? Number(parentId) : parentId;
-    const insertResult = await dbQuery<{ id: number; file_name: string; file_path: string; mime_type: string; file_size: number }>(`
-      INSERT INTO absence_justifications (absence_id, file_name, file_path, mime_type, file_size, uploaded_by)
-      VALUES ($1, $2, $3, $4, $5, $6)
-      RETURNING id, file_name, file_path, mime_type, file_size
-    `, [absenceId, req.file.originalname, req.file.filename, req.file.mimetype, Number(req.file.size), uploadedByValue]);
+    const insertedFiles: Array<{ id: number; file_name: string; file_path: string; mime_type: string; file_size: number }> = [];
 
+    for (const uploadedFile of uploadedFiles) {
+      const insertResult = await dbQuery<{ id: number; file_name: string; file_path: string; mime_type: string; file_size: number }>(`
+        INSERT INTO absence_justifications (absence_id, file_name, file_path, mime_type, file_size, uploaded_by)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING id, file_name, file_path, mime_type, file_size
+      `, [absenceId, uploadedFile.originalname, uploadedFile.filename, uploadedFile.mimetype, Number(uploadedFile.size), uploadedByValue]);
+      insertedFiles.push(insertResult.rows[0]);
+    }
+
+    const lastInserted = insertedFiles[insertedFiles.length - 1];
     return res.status(201).json({
       ...updatedAbsence,
-      justificationFileId: insertResult.rows[0]?.id,
-      justificationFileName: insertResult.rows[0]?.file_name ?? req.file.originalname,
+      justificationFileId: lastInserted?.id,
+      justificationFileName: lastInserted?.file_name ?? uploadedFiles[uploadedFiles.length - 1].originalname,
+      justificationFiles: insertedFiles,
     });
   } catch (err: any) {
     console.error("Failed to justify absence with file:", err);

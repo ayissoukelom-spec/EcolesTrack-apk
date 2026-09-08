@@ -99,12 +99,51 @@ export default function ParentPortal({
   }, [notificationAlertMenu, setActiveTab]);
   const [gradeSubjectFilter, setGradeSubjectFilter] = useState("all");
   const [gradePeriodFilter, setGradePeriodFilter] = useState<"all" | "7d" | "30d" | "trimester">("all");
+  const MAX_JUSTIFICATION_ATTACHMENTS = 5;
   const [showJustificationModal, setShowJustificationModal] = useState<Absence | null>(null);
   const [justificationReason, setJustificationReason] = useState("");
-  const [justificationAttachment, setJustificationAttachment] = useState<File | null>(null);
+  const [justificationAttachments, setJustificationAttachments] = useState<File[]>([]);
   const [isJustifying, setIsJustifying] = useState(false);
   const [justificationError, setJustificationError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const allowedJustificationMimeTypes = new Set(["application/pdf", "image/png", "image/jpeg"]);
+  const formatFileSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} o`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} Ko`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} Mo`;
+  };
+
+  const appendAttachments = (incomingFiles: File[]) => {
+    const validFiles = incomingFiles.filter((file) => {
+      if (!allowedJustificationMimeTypes.has(file.type)) {
+        setJustificationError("Seuls les fichiers PDF, PNG et JPEG sont acceptés.");
+        return false;
+      }
+      if (file.size > 5 * 1024 * 1024) {
+        setJustificationError("Chaque fichier doit faire moins de 5 Mo.");
+        return false;
+      }
+      return true;
+    });
+
+    if (validFiles.length === 0) {
+      return;
+    }
+
+    setJustificationAttachments((previousAttachments) => {
+      const combined = [...previousAttachments, ...validFiles];
+      const limited = combined.slice(0, MAX_JUSTIFICATION_ATTACHMENTS);
+      if (combined.length > MAX_JUSTIFICATION_ATTACHMENTS) {
+        setJustificationError(`Vous pouvez joindre jusqu'à ${MAX_JUSTIFICATION_ATTACHMENTS} fichiers maximum.`);
+      }
+      return limited;
+    });
+  };
+
+  const removeJustificationAttachment = (indexToRemove: number) => {
+    setJustificationAttachments((previousAttachments) => previousAttachments.filter((_, index) => index !== indexToRemove));
+  };
 
   useEffect(() => {
     const handleAndroidCameraResult = async (payload: string) => {
@@ -133,7 +172,7 @@ export default function ParentPortal({
           throw new Error("No valid photo payload received from Android");
         }
 
-        setJustificationAttachment(file);
+        appendAttachments([file]);
       } catch (error) {
         console.error("[ANDROID_CAMERA] Failed to load captured photo", error);
         setJustificationError("Impossible de récupérer la photo prise. Merci de réessayer.");
@@ -443,7 +482,10 @@ export default function ParentPortal({
     setShowJustificationModal(null);
     setJustificationError(null);
     setJustificationReason("");
-    setJustificationAttachment(null);
+    setJustificationAttachments([]);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
   };
 
   const submitAbsenceJustification = async () => {
@@ -462,13 +504,16 @@ export default function ParentPortal({
     setJustificationError(null);
 
     try {
-      const requestUrl = `/api/absences/${showJustificationModal.id}` + (justificationAttachment ? "/justifications" : "/justify");
-      const method = justificationAttachment ? "POST" : "PUT";
+      const hasAttachments = justificationAttachments.length > 0;
+      const requestUrl = `/api/absences/${showJustificationModal.id}` + (hasAttachments ? "/justifications" : "/justify");
+      const method = hasAttachments ? "POST" : "PUT";
 
       const response = await performProtectedRequest((authToken) => {
-        if (justificationAttachment) {
+        if (hasAttachments) {
           const formData = new FormData();
-          formData.append("file", justificationAttachment);
+          justificationAttachments.forEach((file) => {
+            formData.append("files", file);
+          });
           formData.append("justificationReason", justificationReason.trim());
 
           return fetch(withApiBase(requestUrl), {
@@ -1368,7 +1413,7 @@ export default function ParentPortal({
                               className="flex items-center justify-center gap-2 rounded-2xl border border-slate-300 bg-white px-3 py-2.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
                             >
                               <span aria-hidden="true">📎</span>
-                              Choisir un fichier
+                              Choisir des fichiers
                             </button>
 
                             <button
@@ -1403,24 +1448,48 @@ export default function ParentPortal({
                             ref={fileInputRef}
                             type="file"
                             accept=".pdf,image/jpeg,image/png"
-                            onChange={(event) => setJustificationAttachment(event.target.files?.[0] ?? null)}
+                            multiple
+                            onChange={(event) => {
+                              const files = Array.from(event.target.files ?? []);
+                              if (files.length > 0) {
+                                appendAttachments(files);
+                              }
+                              event.target.value = "";
+                            }}
                             className="hidden"
                           />
 
                           <p className="mt-2 text-[10px] text-slate-500 dark:text-slate-400">
-                            PDF, PNG ou JPG — 5 Mo maximum
+                            PDF, PNG ou JPG — 5 Mo maximum par fichier — jusqu&apos;à 5 fichiers
                           </p>
 
-                          {justificationAttachment && (
-                            <div className="mt-2 flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/50 dark:text-emerald-300">
-                              <span>Fichier : {justificationAttachment.name}</span>
-                              <button
-                                type="button"
-                                onClick={() => setJustificationAttachment(null)}
-                                className="font-semibold underline underline-offset-2"
-                              >
-                                Retirer
-                              </button>
+                          {justificationAttachments.length > 0 && (
+                            <div className="mt-3 space-y-2">
+                              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400">
+                                Pièces jointes
+                              </p>
+                              {justificationAttachments.map((file, index) => (
+                                <div
+                                  key={`${file.name}-${index}`}
+                                  className="flex items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/50 dark:text-emerald-300"
+                                >
+                                  <div className="min-w-0 flex-1">
+                                    <div className="truncate font-semibold">{file.name}</div>
+                                    <div className="mt-0.5 flex flex-wrap gap-2 text-[10px] opacity-80">
+                                      <span>{file.type || "inconnu"}</span>
+                                      <span>•</span>
+                                      <span>{formatFileSize(file.size)}</span>
+                                    </div>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => removeJustificationAttachment(index)}
+                                    className="shrink-0 font-semibold underline underline-offset-2"
+                                  >
+                                    Supprimer
+                                  </button>
+                                </div>
+                              ))}
                             </div>
                           )}
                         </div>

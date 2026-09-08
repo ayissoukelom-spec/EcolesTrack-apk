@@ -612,6 +612,7 @@ public class MainActivity extends AppCompatActivity {
         Intent contentSelectionIntent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         contentSelectionIntent.addCategory(Intent.CATEGORY_OPENABLE);
         contentSelectionIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        contentSelectionIntent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
         contentSelectionIntent.setType("*/*");
 
         String[] acceptedMimeTypes = normalizeAcceptedMimeTypes(params != null ? params.getAcceptTypes() : null);
@@ -689,6 +690,7 @@ public class MainActivity extends AppCompatActivity {
         Intent contentSelectionIntent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         contentSelectionIntent.addCategory(Intent.CATEGORY_OPENABLE);
         contentSelectionIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        contentSelectionIntent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
         contentSelectionIntent.setType("*/*");
 
         String[] acceptedMimeTypes = normalizeAcceptedMimeTypes(params != null ? params.getAcceptTypes() : null);
