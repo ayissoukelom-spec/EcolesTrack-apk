@@ -41,8 +41,12 @@ import androidx.core.view.WindowInsetsCompat;
 import java.io.File;
 import java.io.IOException;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 import com.google.firebase.messaging.FirebaseMessaging;
 
@@ -445,6 +449,102 @@ public class MainActivity extends AppCompatActivity {
         return imageFile;
     }
 
+    private String[] normalizeAcceptedMimeTypes(String[] acceptTypes) {
+        Set<String> acceptedMimeTypes = new LinkedHashSet<>();
+        if (acceptTypes != null) {
+            for (String acceptType : acceptTypes) {
+                if (acceptType == null || acceptType.trim().isEmpty()) {
+                    continue;
+                }
+
+                for (String candidate : acceptType.split(",")) {
+                    String normalized = candidate.trim();
+                    if (normalized.isEmpty()) {
+                        continue;
+                    }
+
+                    String lower = normalized.toLowerCase(Locale.US);
+                    if (lower.contains("pdf") || lower.equals(".pdf")) {
+                        acceptedMimeTypes.add("application/pdf");
+                    } else if (lower.contains("png") || lower.equals(".png")) {
+                        acceptedMimeTypes.add("image/png");
+                    } else if (lower.contains("jpeg") || lower.contains("jpg") || lower.equals(".jpeg") || lower.equals(".jpg")) {
+                        acceptedMimeTypes.add("image/jpeg");
+                    } else if (lower.contains("image/*")) {
+                        acceptedMimeTypes.add("image/png");
+                        acceptedMimeTypes.add("image/jpeg");
+                    }
+                }
+            }
+        }
+
+        if (acceptedMimeTypes.isEmpty()) {
+            acceptedMimeTypes.add("application/pdf");
+            acceptedMimeTypes.add("image/png");
+            acceptedMimeTypes.add("image/jpeg");
+        }
+
+        return acceptedMimeTypes.toArray(new String[0]);
+    }
+
+    private String resolveMimeType(Uri uri) {
+        if (uri == null) {
+            return null;
+        }
+
+        try {
+            String mimeType = getContentResolver().getType(uri);
+            if (mimeType != null && !mimeType.trim().isEmpty()) {
+                return mimeType;
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Unable to resolve MIME from content URI: " + uri, e);
+        }
+
+        String path = uri.getPath();
+        if (path == null) {
+            return null;
+        }
+
+        String lowerPath = path.toLowerCase(Locale.US);
+        if (lowerPath.endsWith(".pdf")) {
+            return "application/pdf";
+        }
+        if (lowerPath.endsWith(".png")) {
+            return "image/png";
+        }
+        if (lowerPath.endsWith(".jpg") || lowerPath.endsWith(".jpeg")) {
+            return "image/jpeg";
+        }
+
+        return null;
+    }
+
+    private String resolveDisplayName(Uri uri) {
+        if (uri == null) {
+            return null;
+        }
+
+        String[] projection = { android.provider.OpenableColumns.DISPLAY_NAME };
+        try (android.database.Cursor cursor = getContentResolver().query(uri, projection, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst()) {
+                int index = cursor.getColumnIndexOrThrow(android.provider.OpenableColumns.DISPLAY_NAME);
+                String displayName = cursor.getString(index);
+                if (displayName != null && !displayName.trim().isEmpty()) {
+                    return displayName;
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Unable to resolve display name for URI: " + uri, e);
+        }
+
+        String path = uri.getPath();
+        if (path != null && path.lastIndexOf('/') >= 0) {
+            return path.substring(path.lastIndexOf('/') + 1);
+        }
+        return null;
+    }
+
     private void completeFileChooserRequest(Uri[] result) {
         if (filePathCallback != null) {
             filePathCallback.onReceiveValue(result);
@@ -473,18 +573,15 @@ public class MainActivity extends AppCompatActivity {
             }
             filePathCallback = callback;
 
-            Intent contentSelectionIntent = new Intent(Intent.ACTION_GET_CONTENT);
+            Intent contentSelectionIntent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
             contentSelectionIntent.addCategory(Intent.CATEGORY_OPENABLE);
+            contentSelectionIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
             contentSelectionIntent.setType("*/*");
 
-            if (params != null && params.getAcceptTypes() != null && params.getAcceptTypes().length > 0) {
-                String[] acceptedTypes = params.getAcceptTypes();
-                if (acceptedTypes.length == 1 && !acceptedTypes[0].trim().isEmpty()) {
-                    contentSelectionIntent.setType(acceptedTypes[0]);
-                } else {
-                    contentSelectionIntent.putExtra(Intent.EXTRA_MIME_TYPES, acceptedTypes);
-                    contentSelectionIntent.setType("*/*");
-                }
+            String[] acceptedMimeTypes = normalizeAcceptedMimeTypes(params != null ? params.getAcceptTypes() : null);
+            if (acceptedMimeTypes != null && acceptedMimeTypes.length > 0) {
+                contentSelectionIntent.putExtra(Intent.EXTRA_MIME_TYPES, acceptedMimeTypes);
+                contentSelectionIntent.setType("*/*");
             }
 
             Intent captureIntent = null;
@@ -530,11 +627,18 @@ public class MainActivity extends AppCompatActivity {
                         for (int i = 0; i < clipData.getItemCount(); i++) {
                             Uri uri = clipData.getItemAt(i).getUri();
                             if (uri != null) {
+                                String resolvedMimeType = resolveMimeType(uri);
+                                String displayName = resolveDisplayName(uri);
+                                Log.i(TAG, "[FILE_CHOOSER] selected uri=" + uri + " mime=" + resolvedMimeType + " name=" + displayName);
                                 result[i] = uri;
                             }
                         }
                     } else if (data.getData() != null) {
-                        result = new Uri[]{data.getData()};
+                        Uri uri = data.getData();
+                        String resolvedMimeType = resolveMimeType(uri);
+                        String displayName = resolveDisplayName(uri);
+                        Log.i(TAG, "[FILE_CHOOSER] selected uri=" + uri + " mime=" + resolvedMimeType + " name=" + displayName);
+                        result = new Uri[]{uri};
                     }
                 }
 
