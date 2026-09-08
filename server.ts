@@ -7,6 +7,8 @@ import "dotenv/config";
 import express, { Request, Response, NextFunction } from "express";
 import path from "path";
 import crypto from "crypto";
+import { promises as fsPromises } from "fs";
+import multer from "multer";
 import { createServer as createViteServer } from "vite";
 import { store } from "./backend/store";
 import { dbQuery, initializeMobileTables } from "./backend/postgres";
@@ -31,6 +33,37 @@ interface AuthenticatedRequest extends Request {
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3001;
+const uploadStorageDir = path.join(process.cwd(), "uploads", "absence-justifications");
+
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: uploadStorageDir,
+    filename: (_req, file, cb) => {
+      const randomSuffix = crypto.randomBytes(16).toString("hex");
+      const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_");
+      cb(null, `${Date.now()}-${randomSuffix}-${safeName}`);
+    }
+  }),
+  limits: {
+    fileSize: 5 * 1024 * 1024,
+  },
+  fileFilter: (_req, file, cb) => {
+    const allowedTypes = ["application/pdf", "image/png", "image/jpeg"];
+    if (!allowedTypes.includes(file.mimetype)) {
+      return cb(new Error("Unsupported file type"));
+    }
+    cb(null, true);
+  }
+});
+
+const handleSingleFileUpload = (req: Request, res: Response, next: NextFunction) => {
+  upload.single("file")(req, res, (err: any) => {
+    if (err) {
+      return res.status(400).json({ error: err.message || "Invalid file upload", code: "UPLOAD_INVALID" });
+    }
+    return next();
+  });
+};
 
 app.use(express.json());
 
@@ -415,6 +448,135 @@ app.put("/api/absences/:absenceId/justify", requireAuth, requireParentRoleOnly, 
     return res.json(updatedAbsence);
   } catch (err: any) {
     console.error("Failed to justify absence:", err);
+    return res.status(500).json({
+      error: "Impossible de justifier l'absence pour le moment.",
+      code: "INTERNAL_ERROR"
+    });
+  }
+});
+
+app.put("/api/absences/:id/justify", requireAuth, requireParentRoleOnly, async (req: AuthenticatedRequest, res) => {
+  const { id } = req.params;
+  const { justificationReason } = req.body;
+  const parentId = req.parent!.id;
+
+  if (typeof justificationReason !== "string" || !justificationReason.trim()) {
+    return res.status(400).json({
+      error: "Veuillez fournir un motif de justification.",
+      code: "JUSTIFICATION_REQUIRED"
+    });
+  }
+
+  try {
+    const updatedAbsence = await store.justifyAbsence(id, parentId, justificationReason.trim());
+    if (!updatedAbsence) {
+      return res.status(404).json({
+        error: "Absence introuvable ou non rattachée à ce parent.",
+        code: "ABSENCE_NOT_FOUND"
+      });
+    }
+
+    return res.json(updatedAbsence);
+  } catch (err: any) {
+    console.error("Failed to justify absence:", err);
+    return res.status(500).json({
+      error: "Impossible de justifier l'absence pour le moment.",
+      code: "INTERNAL_ERROR"
+    });
+  }
+});
+
+app.post("/api/absences/:id/justifications", requireAuth, requireParentRoleOnly, handleSingleFileUpload, async (req: AuthenticatedRequest, res) => {
+  const { id } = req.params;
+  const parentId = req.parent!.id;
+  const justificationReason = typeof req.body?.justificationReason === "string" ? req.body.justificationReason.trim() : "";
+
+  if (!justificationReason) {
+    return res.status(400).json({
+      error: "Veuillez fournir un motif de justification.",
+      code: "JUSTIFICATION_REQUIRED"
+    });
+  }
+
+  if (!req.file) {
+    return res.status(400).json({
+      error: "Veuillez joindre un document justificatif valide.",
+      code: "JUSTIFICATION_FILE_REQUIRED"
+    });
+  }
+
+  try {
+    const updatedAbsence = await store.justifyAbsence(id, parentId, justificationReason);
+    if (!updatedAbsence) {
+      return res.status(404).json({
+        error: "Absence introuvable ou non rattachée à ce parent.",
+        code: "ABSENCE_NOT_FOUND"
+      });
+    }
+
+    const uploadedByValue = Number.isFinite(Number(parentId)) ? Number(parentId) : parentId;
+    const insertResult = await dbQuery<{ id: number; file_name: string; file_path: string; mime_type: string; file_size: number }>(`
+      INSERT INTO absence_justifications (absence_id, file_name, file_path, mime_type, file_size, uploaded_by)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING id, file_name, file_path, mime_type, file_size
+    `, [id, req.file.originalname, req.file.filename, req.file.mimetype, Number(req.file.size), uploadedByValue]);
+
+    return res.status(201).json({
+      ...updatedAbsence,
+      justificationFileId: insertResult.rows[0]?.id,
+      justificationFileName: insertResult.rows[0]?.file_name ?? req.file.originalname,
+    });
+  } catch (err: any) {
+    console.error("Failed to justify absence with file:", err);
+    return res.status(500).json({
+      error: "Impossible de justifier l'absence pour le moment.",
+      code: "INTERNAL_ERROR"
+    });
+  }
+});
+
+app.post("/api/absences/:absenceId/justifications", requireAuth, requireParentRoleOnly, handleSingleFileUpload, async (req: AuthenticatedRequest, res) => {
+  const { absenceId } = req.params;
+  const parentId = req.parent!.id;
+  const justificationReason = typeof req.body?.justificationReason === "string" ? req.body.justificationReason.trim() : "";
+
+  if (!justificationReason) {
+    return res.status(400).json({
+      error: "Veuillez fournir un motif de justification.",
+      code: "JUSTIFICATION_REQUIRED"
+    });
+  }
+
+  if (!req.file) {
+    return res.status(400).json({
+      error: "Veuillez joindre un document justificatif valide.",
+      code: "JUSTIFICATION_FILE_REQUIRED"
+    });
+  }
+
+  try {
+    const updatedAbsence = await store.justifyAbsence(absenceId, parentId, justificationReason);
+    if (!updatedAbsence) {
+      return res.status(404).json({
+        error: "Absence introuvable ou non rattachée à ce parent.",
+        code: "ABSENCE_NOT_FOUND"
+      });
+    }
+
+    const uploadedByValue = Number.isFinite(Number(parentId)) ? Number(parentId) : parentId;
+    const insertResult = await dbQuery<{ id: number; file_name: string; file_path: string; mime_type: string; file_size: number }>(`
+      INSERT INTO absence_justifications (absence_id, file_name, file_path, mime_type, file_size, uploaded_by)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING id, file_name, file_path, mime_type, file_size
+    `, [absenceId, req.file.originalname, req.file.filename, req.file.mimetype, Number(req.file.size), uploadedByValue]);
+
+    return res.status(201).json({
+      ...updatedAbsence,
+      justificationFileId: insertResult.rows[0]?.id,
+      justificationFileName: insertResult.rows[0]?.file_name ?? req.file.originalname,
+    });
+  } catch (err: any) {
+    console.error("Failed to justify absence with file:", err);
     return res.status(500).json({
       error: "Impossible de justifier l'absence pour le moment.",
       code: "INTERNAL_ERROR"
@@ -911,6 +1073,7 @@ app.post("/api/internal/info-notification", verifyInternalAuth, async (req: Requ
 // VITE OR STATIC FILE HOSTING (FULL-STACK CONFIG)
 // ====================================================================
 async function startServer() {
+  await fsPromises.mkdir(uploadStorageDir, { recursive: true });
   await initializeMobileTables();
 
   if (process.env.NODE_ENV !== "production") {

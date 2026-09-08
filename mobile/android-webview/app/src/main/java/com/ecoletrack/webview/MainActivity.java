@@ -4,33 +4,45 @@ import android.annotation.SuppressLint;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.content.BroadcastReceiver;
+import android.content.ClipData;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Build;
+import android.os.Environment;
+import android.provider.MediaStore;
 import android.util.Log;
 import android.view.ViewGroup;
-import android.widget.FrameLayout;
 import android.webkit.JavascriptInterface;
+import android.webkit.ValueCallback;
+import android.webkit.WebChromeClient;
+import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
+import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
-import android.webkit.WebChromeClient;
-import android.webkit.WebSettings;
+import android.widget.FrameLayout;
 
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
-import androidx.core.app.NotificationCompat;
 import androidx.core.content.ContextCompat;
+import androidx.core.content.FileProvider;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
+
+import java.io.File;
+import java.io.IOException;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
 
 import com.google.firebase.messaging.FirebaseMessaging;
 
@@ -38,8 +50,11 @@ public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "EcoleTrackAndroid";
     private static final int REQUEST_POST_NOTIFICATIONS = 1001;
+    private static final int FILE_CHOOSER_REQUEST_CODE = 1002;
     private String apiServerUrl;
     private static final String APP_INDEX_URL = "file:///android_asset/index.html";
+    private ValueCallback<Uri[]> filePathCallback;
+    private Uri cameraImageUri;
     private static final String LOADING_HTML = "<!doctype html><html lang='fr'><head><meta charset='utf-8' />" +
             "<meta name='viewport' content='width=device-width,initial-scale=1' />" +
             "<style>body{margin:0;background:#020617;color:#f8fafc;font-family:system-ui,-apple-system," +
@@ -348,7 +363,7 @@ public class MainActivity extends AppCompatActivity {
             }
         });
         Log.i(TAG, "API base URL configured: " + apiServerUrl);
-        webView.setWebChromeClient(new WebChromeClient());
+        webView.setWebChromeClient(new EcoleTrackWebChromeClient());
 
         FirebaseMessaging.getInstance().getToken()
             .addOnCompleteListener(task -> {
@@ -414,6 +429,124 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private File createCameraImageFile() throws IOException {
+        File imageDir = new File(getCacheDir(), "camera");
+        if (!imageDir.exists() && !imageDir.mkdirs()) {
+            throw new IOException("Unable to create camera directory");
+        }
+
+        String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date());
+        File imageFile = File.createTempFile("camera_" + timestamp + "_", ".jpg", imageDir);
+        cameraImageUri = FileProvider.getUriForFile(
+                this,
+                getPackageName() + ".fileprovider",
+                imageFile
+        );
+        return imageFile;
+    }
+
+    private void completeFileChooserRequest(Uri[] result) {
+        if (filePathCallback != null) {
+            filePathCallback.onReceiveValue(result);
+            filePathCallback = null;
+        }
+        cameraImageUri = null;
+    }
+
+    private void resetFileChooserCallback() {
+        if (filePathCallback != null) {
+            filePathCallback.onReceiveValue(null);
+            filePathCallback = null;
+        }
+        cameraImageUri = null;
+    }
+
+    private final class EcoleTrackWebChromeClient extends WebChromeClient {
+        @Override
+        public boolean onShowFileChooser(
+                WebView view,
+                ValueCallback<Uri[]> callback,
+                FileChooserParams params
+        ) {
+            if (filePathCallback != null) {
+                filePathCallback.onReceiveValue(null);
+            }
+            filePathCallback = callback;
+
+            Intent contentSelectionIntent = new Intent(Intent.ACTION_GET_CONTENT);
+            contentSelectionIntent.addCategory(Intent.CATEGORY_OPENABLE);
+            contentSelectionIntent.setType("*/*");
+
+            if (params != null && params.getAcceptTypes() != null && params.getAcceptTypes().length > 0) {
+                String[] acceptedTypes = params.getAcceptTypes();
+                if (acceptedTypes.length == 1 && !acceptedTypes[0].trim().isEmpty()) {
+                    contentSelectionIntent.setType(acceptedTypes[0]);
+                } else {
+                    contentSelectionIntent.putExtra(Intent.EXTRA_MIME_TYPES, acceptedTypes);
+                    contentSelectionIntent.setType("*/*");
+                }
+            }
+
+            Intent captureIntent = null;
+            PackageManager packageManager = getPackageManager();
+            if (packageManager != null) {
+                Intent cameraIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+                if (cameraIntent.resolveActivity(packageManager) != null) {
+                    try {
+                        File photoFile = createCameraImageFile();
+                        captureIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+                        captureIntent.putExtra(MediaStore.EXTRA_OUTPUT, cameraImageUri);
+                        captureIntent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                        captureIntent.putExtra("android.intent.extra.OUTPUT", cameraImageUri);
+                    } catch (IOException e) {
+                        Log.e(TAG, "Unable to create temporary photo file for capture", e);
+                        captureIntent = null;
+                    }
+                }
+            }
+
+            Intent chooserIntent = Intent.createChooser(contentSelectionIntent, "Choisir un fichier");
+            if (captureIntent != null) {
+                chooserIntent.putExtra(Intent.EXTRA_INITIAL_INTENTS, new Intent[]{captureIntent});
+            }
+
+            startActivityForResult(chooserIntent, FILE_CHOOSER_REQUEST_CODE);
+            return true;
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+
+        if (requestCode == FILE_CHOOSER_REQUEST_CODE) {
+            Uri[] result = null;
+
+            if (resultCode == RESULT_OK) {
+                if (data != null) {
+                    ClipData clipData = data.getClipData();
+                    if (clipData != null) {
+                        result = new Uri[clipData.getItemCount()];
+                        for (int i = 0; i < clipData.getItemCount(); i++) {
+                            Uri uri = clipData.getItemAt(i).getUri();
+                            if (uri != null) {
+                                result[i] = uri;
+                            }
+                        }
+                    } else if (data.getData() != null) {
+                        result = new Uri[]{data.getData()};
+                    }
+                }
+
+                if (result == null && cameraImageUri != null) {
+                    result = new Uri[]{cameraImageUri};
+                }
+            }
+
+            completeFileChooserRequest(result);
+        }
+    }
+
     @Override
     protected void onResume() {
         super.onResume();
@@ -436,6 +569,7 @@ public class MainActivity extends AppCompatActivity {
     protected void onDestroy() {
         super.onDestroy();
         unregisterReceiver(fcmTokenReceiver);
+        resetFileChooserCallback();
         Log.d(TAG, "[MainActivity] onDestroy ts=" + System.currentTimeMillis() + " url=" + (webView != null ? webView.getUrl() : "null"));
     }
 

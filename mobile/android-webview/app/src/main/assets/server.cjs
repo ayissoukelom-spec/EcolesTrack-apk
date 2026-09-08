@@ -26,6 +26,8 @@ var import_config = require("dotenv/config");
 var import_express = __toESM(require("express"), 1);
 var import_path2 = __toESM(require("path"), 1);
 var import_crypto2 = __toESM(require("crypto"), 1);
+var import_fs2 = require("fs");
+var import_multer = __toESM(require("multer"), 1);
 var import_vite = require("vite");
 
 // backend/store.ts
@@ -498,11 +500,29 @@ WHERE a.id = $2
     const childIdNum = Number(childId);
     if (!Number.isInteger(childIdNum)) return [];
     const { rows } = await dbQuery(`
-      SELECT g.id, e.subject, g.score, e.coefficient, e.title, e.date, e.max_score, g.created_at
+      SELECT g.id, g.evaluation_id, e.subject, g.score, e.coefficient, e.title, e.date, e.max_score, g.created_at
       FROM grades g
       JOIN evaluations e ON e.id = g.evaluation_id
       WHERE g.student_id = $1
     `, [childIdNum]);
+    const evaluationIds = Array.from(new Set(rows.map((row) => row.evaluation_id)));
+    const scoreRows = evaluationIds.length === 0 ? [] : (await dbQuery(`
+          SELECT g.evaluation_id, g.score, e.max_score
+          FROM grades g
+          JOIN evaluations e ON e.id = g.evaluation_id
+          WHERE g.evaluation_id = ANY($1::int[])
+        `, [evaluationIds])).rows;
+    const scoreBounds = /* @__PURE__ */ new Map();
+    for (const scoreRow of scoreRows) {
+      const rawScore = Number(String(scoreRow.score ?? "").trim().replace(",", "."));
+      const maxScore = Number(scoreRow.max_score);
+      if (!Number.isFinite(rawScore) || !Number.isFinite(maxScore) || maxScore <= 0) continue;
+      const normalizedScore = rawScore / maxScore * 20;
+      const current = scoreBounds.get(scoreRow.evaluation_id) ?? { minimum: null, maximum: null };
+      current.minimum = current.minimum == null ? normalizedScore : Math.min(current.minimum, normalizedScore);
+      current.maximum = current.maximum == null ? normalizedScore : Math.max(current.maximum, normalizedScore);
+      scoreBounds.set(scoreRow.evaluation_id, current);
+    }
     return rows.map((row) => {
       const rawScore = Number(row.score);
       const maxScore = row.max_score || 20;
@@ -510,11 +530,14 @@ WHERE a.id = $2
       return {
         id: String(row.id),
         childId,
+        evaluationId: String(row.evaluation_id),
         subject: row.subject,
         // `grade` is the normalized score on a /20 scale (backward compatible)
         grade: normalizedScore,
         // Keep original max score to allow clients to display raw values
         maxScore,
+        evaluationMinimumScore: scoreBounds.get(row.evaluation_id)?.minimum ?? null,
+        evaluationMaximumScore: scoreBounds.get(row.evaluation_id)?.maximum ?? null,
         // Expose the raw recorded score so clients can detect double-normalization
         rawScore,
         coefficient: Number(row.coefficient ?? 1),
@@ -1632,6 +1655,35 @@ var DevAddGradeSchema = import_zod.z.object({
 var logger7 = new Logger("ExpressServer");
 var app = (0, import_express.default)();
 var PORT = Number(process.env.PORT) || 3001;
+var uploadStorageDir = import_path2.default.join(process.cwd(), "uploads", "absence-justifications");
+var upload = (0, import_multer.default)({
+  storage: import_multer.default.diskStorage({
+    destination: uploadStorageDir,
+    filename: (_req, file, cb) => {
+      const randomSuffix = import_crypto2.default.randomBytes(16).toString("hex");
+      const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_");
+      cb(null, `${Date.now()}-${randomSuffix}-${safeName}`);
+    }
+  }),
+  limits: {
+    fileSize: 5 * 1024 * 1024
+  },
+  fileFilter: (_req, file, cb) => {
+    const allowedTypes = ["application/pdf", "image/png", "image/jpeg"];
+    if (!allowedTypes.includes(file.mimetype)) {
+      return cb(new Error("Unsupported file type"));
+    }
+    cb(null, true);
+  }
+});
+var handleSingleFileUpload = (req, res, next) => {
+  upload.single("file")(req, res, (err) => {
+    if (err) {
+      return res.status(400).json({ error: err.message || "Invalid file upload", code: "UPLOAD_INVALID" });
+    }
+    return next();
+  });
+};
 app.use(import_express.default.json());
 app.use(helmetHeaders);
 app.use(requestIdMiddleware);
@@ -1927,6 +1979,119 @@ app.put("/api/absences/:absenceId/justify", requireAuth, requireParentRoleOnly, 
     return res.json(updatedAbsence);
   } catch (err) {
     console.error("Failed to justify absence:", err);
+    return res.status(500).json({
+      error: "Impossible de justifier l'absence pour le moment.",
+      code: "INTERNAL_ERROR"
+    });
+  }
+});
+app.put("/api/absences/:id/justify", requireAuth, requireParentRoleOnly, async (req, res) => {
+  const { id } = req.params;
+  const { justificationReason } = req.body;
+  const parentId = req.parent.id;
+  if (typeof justificationReason !== "string" || !justificationReason.trim()) {
+    return res.status(400).json({
+      error: "Veuillez fournir un motif de justification.",
+      code: "JUSTIFICATION_REQUIRED"
+    });
+  }
+  try {
+    const updatedAbsence = await store.justifyAbsence(id, parentId, justificationReason.trim());
+    if (!updatedAbsence) {
+      return res.status(404).json({
+        error: "Absence introuvable ou non rattach\xE9e \xE0 ce parent.",
+        code: "ABSENCE_NOT_FOUND"
+      });
+    }
+    return res.json(updatedAbsence);
+  } catch (err) {
+    console.error("Failed to justify absence:", err);
+    return res.status(500).json({
+      error: "Impossible de justifier l'absence pour le moment.",
+      code: "INTERNAL_ERROR"
+    });
+  }
+});
+app.post("/api/absences/:id/justifications", requireAuth, requireParentRoleOnly, handleSingleFileUpload, async (req, res) => {
+  const { id } = req.params;
+  const parentId = req.parent.id;
+  const justificationReason = typeof req.body?.justificationReason === "string" ? req.body.justificationReason.trim() : "";
+  if (!justificationReason) {
+    return res.status(400).json({
+      error: "Veuillez fournir un motif de justification.",
+      code: "JUSTIFICATION_REQUIRED"
+    });
+  }
+  if (!req.file) {
+    return res.status(400).json({
+      error: "Veuillez joindre un document justificatif valide.",
+      code: "JUSTIFICATION_FILE_REQUIRED"
+    });
+  }
+  try {
+    const updatedAbsence = await store.justifyAbsence(id, parentId, justificationReason);
+    if (!updatedAbsence) {
+      return res.status(404).json({
+        error: "Absence introuvable ou non rattach\xE9e \xE0 ce parent.",
+        code: "ABSENCE_NOT_FOUND"
+      });
+    }
+    const uploadedByValue = Number.isFinite(Number(parentId)) ? Number(parentId) : parentId;
+    const insertResult = await dbQuery(`
+      INSERT INTO absence_justifications (absence_id, file_name, file_path, mime_type, file_size, uploaded_by)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING id, file_name, file_path, mime_type, file_size
+    `, [id, req.file.originalname, req.file.filename, req.file.mimetype, Number(req.file.size), uploadedByValue]);
+    return res.status(201).json({
+      ...updatedAbsence,
+      justificationFileId: insertResult.rows[0]?.id,
+      justificationFileName: insertResult.rows[0]?.file_name ?? req.file.originalname
+    });
+  } catch (err) {
+    console.error("Failed to justify absence with file:", err);
+    return res.status(500).json({
+      error: "Impossible de justifier l'absence pour le moment.",
+      code: "INTERNAL_ERROR"
+    });
+  }
+});
+app.post("/api/absences/:absenceId/justifications", requireAuth, requireParentRoleOnly, handleSingleFileUpload, async (req, res) => {
+  const { absenceId } = req.params;
+  const parentId = req.parent.id;
+  const justificationReason = typeof req.body?.justificationReason === "string" ? req.body.justificationReason.trim() : "";
+  if (!justificationReason) {
+    return res.status(400).json({
+      error: "Veuillez fournir un motif de justification.",
+      code: "JUSTIFICATION_REQUIRED"
+    });
+  }
+  if (!req.file) {
+    return res.status(400).json({
+      error: "Veuillez joindre un document justificatif valide.",
+      code: "JUSTIFICATION_FILE_REQUIRED"
+    });
+  }
+  try {
+    const updatedAbsence = await store.justifyAbsence(absenceId, parentId, justificationReason);
+    if (!updatedAbsence) {
+      return res.status(404).json({
+        error: "Absence introuvable ou non rattach\xE9e \xE0 ce parent.",
+        code: "ABSENCE_NOT_FOUND"
+      });
+    }
+    const uploadedByValue = Number.isFinite(Number(parentId)) ? Number(parentId) : parentId;
+    const insertResult = await dbQuery(`
+      INSERT INTO absence_justifications (absence_id, file_name, file_path, mime_type, file_size, uploaded_by)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING id, file_name, file_path, mime_type, file_size
+    `, [absenceId, req.file.originalname, req.file.filename, req.file.mimetype, Number(req.file.size), uploadedByValue]);
+    return res.status(201).json({
+      ...updatedAbsence,
+      justificationFileId: insertResult.rows[0]?.id,
+      justificationFileName: insertResult.rows[0]?.file_name ?? req.file.originalname
+    });
+  } catch (err) {
+    console.error("Failed to justify absence with file:", err);
     return res.status(500).json({
       error: "Impossible de justifier l'absence pour le moment.",
       code: "INTERNAL_ERROR"
@@ -2312,6 +2477,7 @@ app.post("/api/internal/info-notification", verifyInternalAuth, async (req, res)
   }
 });
 async function startServer() {
+  await import_fs2.promises.mkdir(uploadStorageDir, { recursive: true });
   await initializeMobileTables();
   if (process.env.NODE_ENV !== "production") {
     const vite = await (0, import_vite.createServer)({

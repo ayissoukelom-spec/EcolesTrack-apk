@@ -101,6 +101,7 @@ export default function ParentPortal({
   const [gradePeriodFilter, setGradePeriodFilter] = useState<"all" | "7d" | "30d" | "trimester">("all");
   const [showJustificationModal, setShowJustificationModal] = useState<Absence | null>(null);
   const [justificationReason, setJustificationReason] = useState("");
+  const [justificationAttachment, setJustificationAttachment] = useState<File | null>(null);
   const [isJustifying, setIsJustifying] = useState(false);
   const [justificationError, setJustificationError] = useState<string | null>(null);
 
@@ -401,6 +402,7 @@ export default function ParentPortal({
     setShowJustificationModal(null);
     setJustificationError(null);
     setJustificationReason("");
+    setJustificationAttachment(null);
   };
 
   const submitAbsenceJustification = async () => {
@@ -419,14 +421,33 @@ export default function ParentPortal({
     setJustificationError(null);
 
     try {
-      const response = await performProtectedRequest((authToken) => fetch(withApiBase(`/api/absences/${showJustificationModal.id}/justify`), {
-        method: "PUT",
-        headers: {
-          "Authorization": `Bearer ${authToken}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ justificationReason: justificationReason.trim() })
-      }));
+      const requestUrl = `/api/absences/${showJustificationModal.id}` + (justificationAttachment ? "/justifications" : "/justify");
+      const method = justificationAttachment ? "POST" : "PUT";
+
+      const response = await performProtectedRequest((authToken) => {
+        if (justificationAttachment) {
+          const formData = new FormData();
+          formData.append("file", justificationAttachment);
+          formData.append("justificationReason", justificationReason.trim());
+
+          return fetch(withApiBase(requestUrl), {
+            method,
+            headers: {
+              "Authorization": `Bearer ${authToken}`
+            },
+            body: formData
+          });
+        }
+
+        return fetch(withApiBase(requestUrl), {
+          method,
+          headers: {
+            "Authorization": `Bearer ${authToken}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ justificationReason: justificationReason.trim() })
+        });
+      });
 
       if (!response) {
         throw new Error("Impossible de justifier l'absence pour le moment.");
@@ -1294,6 +1315,29 @@ export default function ParentPortal({
                           rows={5}
                           className="w-full rounded-2xl border border-slate-300 bg-white p-3 text-sm text-slate-900 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:focus:ring-indigo-500/30"
                         />
+                        <div className="mt-4">
+                          <label className="mb-2 block text-[11px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400">
+                            Pièce justificative (facultative)
+                          </label>
+                          <input
+                            type="file"
+                            accept=".pdf,image/jpeg,image/png"
+                            onChange={(event) => setJustificationAttachment(event.target.files?.[0] ?? null)}
+                            className="block w-full rounded-2xl border border-slate-300 bg-white px-3 py-2 text-xs text-slate-700 file:mr-3 file:rounded-xl file:border-0 file:bg-indigo-600 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-white dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                          />
+                          {justificationAttachment && (
+                            <div className="mt-2 flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/50 dark:text-emerald-300">
+                              <span>Fichier : {justificationAttachment.name}</span>
+                              <button
+                                type="button"
+                                onClick={() => setJustificationAttachment(null)}
+                                className="font-semibold underline underline-offset-2"
+                              >
+                                Retirer
+                              </button>
+                            </div>
+                          )}
+                        </div>
                         {justificationError && (
                           <div className="mt-3 rounded-2xl border border-rose-300 bg-rose-50 px-3 py-2 text-[11px] text-rose-700 dark:border-rose-900 dark:bg-rose-950/50 dark:text-rose-300">
                             {justificationError}
