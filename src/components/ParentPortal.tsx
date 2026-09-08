@@ -104,6 +104,47 @@ export default function ParentPortal({
   const [justificationAttachment, setJustificationAttachment] = useState<File | null>(null);
   const [isJustifying, setIsJustifying] = useState(false);
   const [justificationError, setJustificationError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    const handleAndroidCameraResult = async (payload: string) => {
+      if (!payload) {
+        return;
+      }
+
+      try {
+        let file: File | null = null;
+
+        if (payload.startsWith("data:image/jpeg;base64,")) {
+          const base64 = payload.replace("data:image/jpeg;base64,", "");
+          const binaryString = atob(base64);
+          const bytes = new Uint8Array(binaryString.length);
+          for (let i = 0; i < binaryString.length; i += 1) {
+            bytes[i] = binaryString.charCodeAt(i);
+          }
+          file = new File([bytes], `photo-${Date.now()}.jpg`, { type: "image/jpeg" });
+        } else if (payload.startsWith("content://") || payload.startsWith("file://")) {
+          const response = await fetch(payload);
+          const blob = await response.blob();
+          file = new File([blob], `photo-${Date.now()}.jpg`, { type: "image/jpeg" });
+        }
+
+        if (!file) {
+          throw new Error("No valid photo payload received from Android");
+        }
+
+        setJustificationAttachment(file);
+      } catch (error) {
+        console.error("[ANDROID_CAMERA] Failed to load captured photo", error);
+        setJustificationError("Impossible de récupérer la photo prise. Merci de réessayer.");
+      }
+    };
+
+    (window as any).handleAndroidCameraResult = handleAndroidCameraResult;
+    return () => {
+      delete (window as any).handleAndroidCameraResult;
+    };
+  }, []);
 
   const handleSessionExpired = () => {
     if (!hasCompletedProtectedLoadRef.current) {
@@ -1319,12 +1360,57 @@ export default function ParentPortal({
                           <label className="mb-2 block text-[11px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400">
                             Pièce justificative (facultative)
                           </label>
+
+                          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                            <button
+                              type="button"
+                              onClick={() => fileInputRef.current?.click()}
+                              className="flex items-center justify-center gap-2 rounded-2xl border border-slate-300 bg-white px-3 py-2.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+                            >
+                              <span aria-hidden="true">📎</span>
+                              Choisir un fichier
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                console.log("[Camera] button clicked");
+                                console.log("[Camera] bridge:", (window as any).AndroidCamera);
+
+                                const androidCamera = (window as any).AndroidCamera;
+                                if (!androidCamera) {
+                                  console.error("[Camera] AndroidCamera bridge unavailable");
+                                  alert("La fonction caméra Android n'est pas disponible.");
+                                  return;
+                                }
+
+                                if (typeof androidCamera.takePhoto !== "function") {
+                                  console.error("[Camera] AndroidCamera.takePhoto unavailable");
+                                  alert("La fonction caméra Android n'est pas disponible.");
+                                  return;
+                                }
+
+                                androidCamera.takePhoto();
+                              }}
+                              className="flex items-center justify-center gap-2 rounded-2xl border border-indigo-300 bg-indigo-50 px-3 py-2.5 text-xs font-semibold text-indigo-700 transition hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-200 dark:hover:bg-indigo-900/60"
+                            >
+                              <span aria-hidden="true">📷</span>
+                              Prendre une photo
+                            </button>
+                          </div>
+
                           <input
+                            ref={fileInputRef}
                             type="file"
                             accept=".pdf,image/jpeg,image/png"
                             onChange={(event) => setJustificationAttachment(event.target.files?.[0] ?? null)}
-                            className="block w-full rounded-2xl border border-slate-300 bg-white px-3 py-2 text-xs text-slate-700 file:mr-3 file:rounded-xl file:border-0 file:bg-indigo-600 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-white dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                            className="hidden"
                           />
+
+                          <p className="mt-2 text-[10px] text-slate-500 dark:text-slate-400">
+                            PDF, PNG ou JPG — 5 Mo maximum
+                          </p>
+
                           {justificationAttachment && (
                             <div className="mt-2 flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/50 dark:text-emerald-300">
                               <span>Fichier : {justificationAttachment.name}</span>

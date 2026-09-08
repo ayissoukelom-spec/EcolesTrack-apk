@@ -15,6 +15,7 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Build;
 import android.os.Environment;
+import android.util.Base64;
 import android.provider.MediaStore;
 import android.util.Log;
 import android.view.ViewGroup;
@@ -55,10 +56,18 @@ public class MainActivity extends AppCompatActivity {
     private static final String TAG = "EcoleTrackAndroid";
     private static final int REQUEST_POST_NOTIFICATIONS = 1001;
     private static final int FILE_CHOOSER_REQUEST_CODE = 1002;
+    private static final int REQUEST_CAMERA_PERMISSION = 1003;
     private String apiServerUrl;
     private static final String APP_INDEX_URL = "file:///android_asset/index.html";
     private ValueCallback<Uri[]> filePathCallback;
+    private WebChromeClient.FileChooserParams pendingFileChooserParams;
+    private ValueCallback<Uri[]> pendingFileChooserCallback;
+    private boolean cameraPermissionRequested;
+    private boolean cameraCapturePending;
     private Uri cameraImageUri;
+    private static final String CAMERA_BRIDGE_NAME = "AndroidCamera";
+    private static final String CAMERA_CALLBACK_JS = "window.handleAndroidCameraResult && window.handleAndroidCameraResult('%s');";
+    private static final String CAMERA_CALLBACK_BASE64_JS = "window.handleAndroidCameraResult && window.handleAndroidCameraResult('data:image/jpeg;base64,%s');";
     private static final String LOADING_HTML = "<!doctype html><html lang='fr'><head><meta charset='utf-8' />" +
             "<meta name='viewport' content='width=device-width,initial-scale=1' />" +
             "<style>body{margin:0;background:#020617;color:#f8fafc;font-family:system-ui,-apple-system," +
@@ -261,6 +270,8 @@ public class MainActivity extends AppCompatActivity {
             }
         }, "AndroidBridge");
 
+        webView.addJavascriptInterface(new AndroidCameraBridge(), CAMERA_BRIDGE_NAME);
+
         ensureNotificationPermission();
         createNotificationChannel();
         registerReceiver(fcmTokenReceiver, new IntentFilter(FcmTokenHelper.ACTION_FCM_TOKEN_UPDATED), Context.RECEIVER_NOT_EXPORTED);
@@ -411,6 +422,31 @@ public class MainActivity extends AppCompatActivity {
         if (requestCode == REQUEST_POST_NOTIFICATIONS) {
             boolean granted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
             Log.i(TAG, "POST_NOTIFICATIONS permission result=" + granted);
+            return;
+        }
+
+        if (requestCode == REQUEST_CAMERA_PERMISSION) {
+            boolean granted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+            cameraPermissionRequested = false;
+            if (granted) {
+                Log.i(TAG, "CAMERA permission granted");
+                if (cameraCapturePending) {
+                    cameraCapturePending = false;
+                    launchCameraCapture();
+                    return;
+                }
+                if (pendingFileChooserCallback != null && pendingFileChooserParams != null) {
+                    openFileChooserWithCameraOption(pendingFileChooserCallback, pendingFileChooserParams);
+                }
+                return;
+            }
+
+            Log.w(TAG, "CAMERA permission denied; file picker remains available without camera capture");
+            cameraCapturePending = false;
+            if (pendingFileChooserCallback != null && pendingFileChooserParams != null) {
+                openFileChooserWithoutCameraOption(pendingFileChooserCallback, pendingFileChooserParams);
+            }
+            return;
         }
     }
 
@@ -545,11 +581,189 @@ public class MainActivity extends AppCompatActivity {
         return null;
     }
 
+    private boolean hasCameraPermission() {
+        return ContextCompat.checkSelfPermission(this, android.Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private void requestCameraPermissionIfNeeded() {
+        if (!cameraPermissionRequested && !hasCameraPermission()) {
+            cameraPermissionRequested = true;
+            ActivityCompat.requestPermissions(
+                    this,
+                    new String[]{android.Manifest.permission.CAMERA},
+                    REQUEST_CAMERA_PERMISSION
+            );
+            return;
+        }
+
+        if (hasCameraPermission() && pendingFileChooserCallback != null && pendingFileChooserParams != null) {
+            openFileChooserWithCameraOption(pendingFileChooserCallback, pendingFileChooserParams);
+        }
+    }
+
+    private void openFileChooserWithoutCameraOption(ValueCallback<Uri[]> callback, WebChromeClient.FileChooserParams params) {
+        if (filePathCallback != null) {
+            filePathCallback.onReceiveValue(null);
+        }
+        filePathCallback = callback;
+        pendingFileChooserCallback = callback;
+        pendingFileChooserParams = params;
+
+        Intent contentSelectionIntent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        contentSelectionIntent.addCategory(Intent.CATEGORY_OPENABLE);
+        contentSelectionIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        contentSelectionIntent.setType("*/*");
+
+        String[] acceptedMimeTypes = normalizeAcceptedMimeTypes(params != null ? params.getAcceptTypes() : null);
+        if (acceptedMimeTypes != null && acceptedMimeTypes.length > 0) {
+            contentSelectionIntent.putExtra(Intent.EXTRA_MIME_TYPES, acceptedMimeTypes);
+            contentSelectionIntent.setType("*/*");
+        }
+
+        Intent chooserIntent = Intent.createChooser(contentSelectionIntent, "Choisir un fichier");
+        startActivityForResult(chooserIntent, FILE_CHOOSER_REQUEST_CODE);
+    }
+
+    private void launchCameraCapture() {
+        Log.d("EcoleTrackCamera", "Launching camera");
+
+        if (!hasCameraPermission()) {
+            Log.w("EcoleTrackCamera", "Camera permission missing; requesting it first");
+            cameraCapturePending = true;
+            ActivityCompat.requestPermissions(
+                    this,
+                    new String[]{android.Manifest.permission.CAMERA},
+                    REQUEST_CAMERA_PERMISSION
+            );
+            return;
+        }
+
+        PackageManager packageManager = getPackageManager();
+        if (packageManager == null) {
+            Log.w("EcoleTrackCamera", "PackageManager unavailable while launching camera");
+            return;
+        }
+
+        Intent cameraIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+        if (cameraIntent.resolveActivity(packageManager) == null) {
+            Log.e("EcoleTrackCamera", "No camera application available");
+            return;
+        }
+
+        try {
+            createCameraImageFile();
+        } catch (IOException e) {
+            Log.e("EcoleTrackCamera", "Unable to create temporary photo file for direct camera capture", e);
+            return;
+        }
+
+        if (cameraImageUri == null) {
+            Log.e("EcoleTrackCamera", "Camera capture URI is null before launching camera");
+            return;
+        }
+
+        Log.d("EcoleTrackCamera", "Photo URI: " + cameraImageUri);
+        cameraIntent.putExtra(MediaStore.EXTRA_OUTPUT, cameraImageUri);
+        cameraIntent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        cameraIntent.putExtra("android.intent.extra.OUTPUT", cameraImageUri);
+        startActivityForResult(cameraIntent, FILE_CHOOSER_REQUEST_CODE);
+    }
+
+    private void openCameraCapture(ValueCallback<Uri[]> callback, WebChromeClient.FileChooserParams params) {
+        if (!hasCameraPermission()) {
+            requestCameraPermissionIfNeeded();
+            return;
+        }
+
+        launchCameraCapture();
+    }
+
+    private void openFileChooserWithCameraOption(ValueCallback<Uri[]> callback, WebChromeClient.FileChooserParams params) {
+        if (filePathCallback != null) {
+            filePathCallback.onReceiveValue(null);
+        }
+        filePathCallback = callback;
+        pendingFileChooserCallback = callback;
+        pendingFileChooserParams = params;
+
+        Intent contentSelectionIntent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        contentSelectionIntent.addCategory(Intent.CATEGORY_OPENABLE);
+        contentSelectionIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        contentSelectionIntent.setType("*/*");
+
+        String[] acceptedMimeTypes = normalizeAcceptedMimeTypes(params != null ? params.getAcceptTypes() : null);
+        if (acceptedMimeTypes != null && acceptedMimeTypes.length > 0) {
+            contentSelectionIntent.putExtra(Intent.EXTRA_MIME_TYPES, acceptedMimeTypes);
+            contentSelectionIntent.setType("*/*");
+        }
+
+        Intent captureIntent = null;
+        PackageManager packageManager = getPackageManager();
+        if (packageManager != null) {
+            Intent cameraIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+            if (cameraIntent.resolveActivity(packageManager) != null) {
+                if (!hasCameraPermission()) {
+                    requestCameraPermissionIfNeeded();
+                    return;
+                }
+                try {
+                    File photoFile = createCameraImageFile();
+                    captureIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+                    captureIntent.putExtra(MediaStore.EXTRA_OUTPUT, cameraImageUri);
+                    captureIntent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    captureIntent.putExtra("android.intent.extra.OUTPUT", cameraImageUri);
+                } catch (IOException e) {
+                    Log.e(TAG, "Unable to create temporary photo file for capture", e);
+                    captureIntent = null;
+                }
+            }
+        }
+
+        Intent chooserIntent = Intent.createChooser(contentSelectionIntent, "Choisir un fichier");
+        if (captureIntent != null) {
+            chooserIntent.putExtra(Intent.EXTRA_INITIAL_INTENTS, new Intent[]{captureIntent});
+        }
+
+        startActivityForResult(chooserIntent, FILE_CHOOSER_REQUEST_CODE);
+    }
+
+    private String readCameraPayloadAsBase64(Uri uri) {
+        if (uri == null) {
+            return null;
+        }
+
+        try {
+            java.io.InputStream inputStream = getContentResolver().openInputStream(uri);
+            if (inputStream == null) {
+                Log.w("EcoleTrackCamera", "openInputStream returned null for captured photo URI: " + uri);
+                return null;
+            }
+
+            java.io.ByteArrayOutputStream outputStream = new java.io.ByteArrayOutputStream();
+            byte[] buffer = new byte[4096];
+            int bytesRead;
+            while ((bytesRead = inputStream.read(buffer)) != -1) {
+                outputStream.write(buffer, 0, bytesRead);
+            }
+            inputStream.close();
+
+            byte[] photoBytes = outputStream.toByteArray();
+            String encoded = Base64.encodeToString(photoBytes, Base64.NO_WRAP);
+            Log.d("EcoleTrackCamera", "Captured photo base64 length: " + encoded.length());
+            return encoded;
+        } catch (Exception e) {
+            Log.e("EcoleTrackCamera", "Unable to read captured photo bytes from URI: " + uri, e);
+            return null;
+        }
+    }
+
     private void completeFileChooserRequest(Uri[] result) {
         if (filePathCallback != null) {
             filePathCallback.onReceiveValue(result);
             filePathCallback = null;
         }
+        pendingFileChooserCallback = null;
+        pendingFileChooserParams = null;
         cameraImageUri = null;
     }
 
@@ -558,7 +772,17 @@ public class MainActivity extends AppCompatActivity {
             filePathCallback.onReceiveValue(null);
             filePathCallback = null;
         }
+        pendingFileChooserCallback = null;
+        pendingFileChooserParams = null;
         cameraImageUri = null;
+    }
+
+    private final class AndroidCameraBridge {
+        @JavascriptInterface
+        public void takePhoto() {
+            Log.d("EcoleTrackCamera", "takePhoto() called");
+            runOnUiThread(() -> launchCameraCapture());
+        }
     }
 
     private final class EcoleTrackWebChromeClient extends WebChromeClient {
@@ -568,46 +792,17 @@ public class MainActivity extends AppCompatActivity {
                 ValueCallback<Uri[]> callback,
                 FileChooserParams params
         ) {
-            if (filePathCallback != null) {
-                filePathCallback.onReceiveValue(null);
-            }
-            filePathCallback = callback;
+            pendingFileChooserCallback = callback;
+            pendingFileChooserParams = params;
 
-            Intent contentSelectionIntent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-            contentSelectionIntent.addCategory(Intent.CATEGORY_OPENABLE);
-            contentSelectionIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            contentSelectionIntent.setType("*/*");
-
-            String[] acceptedMimeTypes = normalizeAcceptedMimeTypes(params != null ? params.getAcceptTypes() : null);
-            if (acceptedMimeTypes != null && acceptedMimeTypes.length > 0) {
-                contentSelectionIntent.putExtra(Intent.EXTRA_MIME_TYPES, acceptedMimeTypes);
-                contentSelectionIntent.setType("*/*");
+            if (params != null && params.isCaptureEnabled()) {
+                Log.i(TAG, "Detected direct camera capture request from file input; launching camera immediately");
+                openCameraCapture(callback, params);
+                return true;
             }
 
-            Intent captureIntent = null;
-            PackageManager packageManager = getPackageManager();
-            if (packageManager != null) {
-                Intent cameraIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
-                if (cameraIntent.resolveActivity(packageManager) != null) {
-                    try {
-                        File photoFile = createCameraImageFile();
-                        captureIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
-                        captureIntent.putExtra(MediaStore.EXTRA_OUTPUT, cameraImageUri);
-                        captureIntent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                        captureIntent.putExtra("android.intent.extra.OUTPUT", cameraImageUri);
-                    } catch (IOException e) {
-                        Log.e(TAG, "Unable to create temporary photo file for capture", e);
-                        captureIntent = null;
-                    }
-                }
-            }
-
-            Intent chooserIntent = Intent.createChooser(contentSelectionIntent, "Choisir un fichier");
-            if (captureIntent != null) {
-                chooserIntent.putExtra(Intent.EXTRA_INITIAL_INTENTS, new Intent[]{captureIntent});
-            }
-
-            startActivityForResult(chooserIntent, FILE_CHOOSER_REQUEST_CODE);
+            Log.i(TAG, "Detected regular file selection request; opening chooser with document picker");
+            openFileChooserWithCameraOption(callback, params);
             return true;
         }
     }
@@ -620,6 +815,7 @@ public class MainActivity extends AppCompatActivity {
             Uri[] result = null;
 
             if (resultCode == RESULT_OK) {
+                Log.d("EcoleTrackCamera", "onActivityResult resultCode=RESULT_OK");
                 if (data != null) {
                     ClipData clipData = data.getClipData();
                     if (clipData != null) {
@@ -644,7 +840,35 @@ public class MainActivity extends AppCompatActivity {
 
                 if (result == null && cameraImageUri != null) {
                     result = new Uri[]{cameraImageUri};
+                    Log.d("EcoleTrackCamera", "cameraImageUri after result = " + cameraImageUri);
+
+                    try {
+                        java.io.InputStream inputStream = getContentResolver().openInputStream(cameraImageUri);
+                        if (inputStream != null) {
+                            Log.d("EcoleTrackCamera", "camera stream opened successfully");
+                            int available = inputStream.available();
+                            Log.d("EcoleTrackCamera", "camera file size bytes = " + available);
+                            inputStream.close();
+                        } else {
+                            Log.w("EcoleTrackCamera", "camera stream could not be opened from URI: " + cameraImageUri);
+                        }
+                    } catch (Exception e) {
+                        Log.e("EcoleTrackCamera", "Unable to inspect captured photo stream", e);
+                    }
+
+                    String base64Payload = readCameraPayloadAsBase64(cameraImageUri);
+                    if (base64Payload != null && !base64Payload.isEmpty()) {
+                        String js = String.format(Locale.US, CAMERA_CALLBACK_BASE64_JS, base64Payload.replace("\n", "").replace("\r", ""));
+                        Log.d("EcoleTrackCamera", "Returning captured image to JS callback");
+                        webView.post(() -> webView.evaluateJavascript(js, null));
+                    } else {
+                        Log.w("EcoleTrackCamera", "Unable to read captured file bytes; falling back to URI callback");
+                        String js = String.format(Locale.US, CAMERA_CALLBACK_JS, cameraImageUri.toString().replace("'", "\\'"));
+                        webView.post(() -> webView.evaluateJavascript(js, null));
+                    }
                 }
+            } else {
+                Log.w("EcoleTrackCamera", "onActivityResult resultCode was not RESULT_OK: " + resultCode);
             }
 
             completeFileChooserRequest(result);
