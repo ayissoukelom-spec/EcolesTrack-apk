@@ -67,6 +67,15 @@ export interface AppNotification {
   read: boolean;
   createdAt: string;
   deepLink?: string;
+  attachments?: NotificationAttachment[];
+}
+
+export interface NotificationAttachment {
+  id: number;
+  notificationId: number;
+  fileName: string;
+  mimeType: string;
+  fileSize: number;
 }
 
 // Parent Device Registration

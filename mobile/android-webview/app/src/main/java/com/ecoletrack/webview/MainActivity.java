@@ -7,6 +7,7 @@ import android.content.BroadcastReceiver;
 import android.content.ClipData;
 import android.content.Context;
 import android.content.Intent;
+import android.content.ActivityNotFoundException;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
@@ -29,6 +30,7 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
+import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
@@ -779,11 +781,148 @@ public class MainActivity extends AppCompatActivity {
         cameraImageUri = null;
     }
 
+    private String normalizeAttachmentMimeType(String mimeType, String fileName) {
+        String normalized = mimeType == null ? "" : mimeType.trim().toLowerCase(Locale.US);
+        if (normalized.contains(";")) {
+            normalized = normalized.split(";", 2)[0].trim();
+        }
+
+        if (normalized.equals("image/jpg") || normalized.equals("image/pjpeg")) {
+            normalized = "image/jpeg";
+        }
+
+        if (normalized.equals("application/pdf")
+                || normalized.equals("image/png")
+                || normalized.equals("image/jpeg")) {
+            return normalized;
+        }
+
+        String lowerFileName = fileName == null ? "" : fileName.toLowerCase(Locale.US);
+        if (lowerFileName.endsWith(".pdf")) return "application/pdf";
+        if (lowerFileName.endsWith(".png")) return "image/png";
+        if (lowerFileName.endsWith(".jpg") || lowerFileName.endsWith(".jpeg")) return "image/jpeg";
+
+        return "";
+    }
+
+    private String buildAttachmentFileName(String fileName, String mimeType) {
+        String sanitizedName = new File(fileName == null ? "attachment" : fileName).getName().replaceAll("[^a-zA-Z0-9._-]", "_");
+        if (sanitizedName.isEmpty()) {
+            sanitizedName = "attachment";
+        }
+
+        String normalizedMimeType = normalizeAttachmentMimeType(mimeType, sanitizedName);
+        String extension;
+        if (normalizedMimeType.equals("application/pdf")) {
+            extension = ".pdf";
+        } else if (normalizedMimeType.equals("image/png")) {
+            extension = ".png";
+        } else if (normalizedMimeType.equals("image/jpeg")) {
+            extension = ".jpg";
+        } else {
+            extension = "";
+        }
+
+        int lastDot = sanitizedName.lastIndexOf('.');
+        String nameWithoutExtension = lastDot > 0 ? sanitizedName.substring(0, lastDot) : sanitizedName;
+        if (extension.isEmpty()) {
+            return sanitizedName;
+        }
+
+        return nameWithoutExtension + extension;
+    }
+
     private final class AndroidCameraBridge {
         @JavascriptInterface
         public void takePhoto() {
             Log.d("EcoleTrackCamera", "takePhoto() called");
             runOnUiThread(() -> launchCameraCapture());
+        }
+
+        @JavascriptInterface
+        public boolean openDownloadedFile(String base64, String fileName, String mimeType) {
+            Log.i(TAG, "[ATTACHMENT] bridge called fileName=" + fileName + " mime=" + mimeType + " base64Length=" + (base64 == null ? 0 : base64.length()));
+
+            if (base64 == null || base64.isEmpty() || fileName == null || fileName.trim().isEmpty()) {
+                Log.e(TAG, "[ATTACHMENT] bridge failed: missing base64 or fileName");
+                return false;
+            }
+
+            String normalizedMimeType = normalizeAttachmentMimeType(mimeType, fileName);
+            if (normalizedMimeType.isEmpty()) {
+                Log.e(TAG, "[ATTACHMENT] bridge failed: unsupported mimeType=" + mimeType + " fileName=" + fileName);
+                return false;
+            }
+
+            try {
+                File attachmentDirectory = new File(getCacheDir(), "attachments");
+                if (!attachmentDirectory.exists() && !attachmentDirectory.mkdirs()) {
+                    Log.e(TAG, "[ATTACHMENT] file write failed: cannot create cache dir");
+                    return false;
+                }
+
+                String safeFileName = buildAttachmentFileName(fileName, normalizedMimeType);
+                if (safeFileName.isEmpty()) {
+                    Log.e(TAG, "[ATTACHMENT] file write failed: empty target file name");
+                    return false;
+                }
+
+                File attachmentFile = new File(attachmentDirectory, safeFileName);
+                byte[] fileBytes = Base64.decode(base64, Base64.DEFAULT);
+                Log.i(TAG, "[ATTACHMENT] writing file path=" + attachmentFile.getAbsolutePath() + " size=" + fileBytes.length + " mime=" + normalizedMimeType);
+
+                try (java.io.FileOutputStream outputStream = new java.io.FileOutputStream(attachmentFile)) {
+                    outputStream.write(fileBytes);
+                    outputStream.flush();
+                    outputStream.getFD().sync();
+                }
+
+                Log.i(TAG, "[ATTACHMENT] file written path=" + attachmentFile.getAbsolutePath() + " size=" + attachmentFile.length());
+
+                Uri contentUri = FileProvider.getUriForFile(
+                        MainActivity.this,
+                        getPackageName() + ".fileprovider",
+                        attachmentFile
+                );
+                Log.i(TAG, "[ATTACHMENT] contentUri=" + contentUri);
+
+                Intent viewIntent = new Intent(Intent.ACTION_VIEW);
+                viewIntent.setDataAndType(contentUri, normalizedMimeType);
+                viewIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+
+                if (viewIntent.resolveActivity(getPackageManager()) == null) {
+                    Log.w(TAG, "[ATTACHMENT] no compatible Android activity for mime=" + normalizedMimeType + " uri=" + contentUri);
+                    Toast.makeText(
+                            MainActivity.this,
+                            "Aucune application compatible n’est installée pour ouvrir ce fichier.",
+                            Toast.LENGTH_LONG
+                    ).show();
+                    return false;
+                }
+
+                Log.i(TAG, "[ATTACHMENT] opening external app with intent mime=" + normalizedMimeType + " uri=" + contentUri);
+                runOnUiThread(() -> {
+                    try {
+                        startActivity(Intent.createChooser(viewIntent, "Ouvrir le fichier"));
+                    } catch (ActivityNotFoundException e) {
+                        Log.w(TAG, "[ATTACHMENT] no compatible Android activity", e);
+                        Toast.makeText(
+                                MainActivity.this,
+                                "Aucune application compatible n’est installée pour ouvrir ce fichier.",
+                                Toast.LENGTH_LONG
+                        ).show();
+                    }
+                });
+                return true;
+            } catch (Exception e) {
+                Log.e(TAG, "[ATTACHMENT] bridge failed", e);
+                Toast.makeText(
+                        MainActivity.this,
+                        "Impossible d’ouvrir ce fichier sur cet appareil.",
+                        Toast.LENGTH_LONG
+                ).show();
+                return false;
+            }
         }
     }
 

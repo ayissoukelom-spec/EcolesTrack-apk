@@ -34,6 +34,9 @@ interface AuthenticatedRequest extends Request {
 const app = express();
 const PORT = Number(process.env.PORT) || 3001;
 const uploadStorageDir = path.join(process.cwd(), "uploads", "absence-justifications");
+const notificationAttachmentStorageDir = process.env.NOTIFICATION_ATTACHMENTS_DIR
+  ? path.resolve(process.env.NOTIFICATION_ATTACHMENTS_DIR)
+  : path.resolve(process.cwd(), "..", "web ecoles", "uploads", "notification-attachments");
 
 const MAX_ABSENCE_ATTACHMENT_COUNT = 5;
 const allowedJustificationMimeTypes = ["application/pdf", "image/png", "image/jpeg"];
@@ -783,6 +786,44 @@ app.get("/api/mobile/parent/notifications", requireAuth, requireParentRoleOnly, 
   const parentId = req.parent!.id;
   const notifications = await store.getInAppNotifications(parentId);
   return res.json(notifications);
+});
+
+app.get("/api/mobile/parent/notifications/:notificationId/attachments/:attachmentId", requireAuth, requireParentRoleOnly, async (req: AuthenticatedRequest, res) => {
+  const notificationId = Number(req.params.notificationId);
+  const attachmentId = Number(req.params.attachmentId);
+  if (!Number.isInteger(notificationId) || !Number.isInteger(attachmentId)) {
+    return res.status(404).json({ error: "Fichier non disponible." });
+  }
+
+  const attachmentAccess = await store.getInAppNotificationAttachment(req.parent!.id, notificationId, attachmentId);
+  if (!attachmentAccess) {
+    return res.status(404).json({ error: "Fichier non disponible." });
+  }
+  if (!attachmentAccess.authorized) {
+    return res.status(403).json({ error: "Vous n'avez pas accès à ce fichier." });
+  }
+  const attachment = attachmentAccess.attachment;
+
+  const safeFileName = path.basename(attachment.filePath);
+  const absoluteFilePath = path.resolve(notificationAttachmentStorageDir, safeFileName);
+  const storageRoot = path.resolve(notificationAttachmentStorageDir) + path.sep;
+  if (!absoluteFilePath.startsWith(storageRoot)) {
+    return res.status(404).json({ error: "Fichier non disponible." });
+  }
+
+  try {
+    await fsPromises.access(absoluteFilePath);
+  } catch {
+    return res.status(404).json({ error: "Fichier non disponible." });
+  }
+
+  return res.download(absoluteFilePath, attachment.fileName, {
+    headers: { "Content-Type": attachment.mimeType },
+  }, (error) => {
+    if (error && !res.headersSent) {
+      res.status(500).json({ error: "Impossible de télécharger le fichier." });
+    }
+  });
 });
 
 // 8. PUT /api/mobile/parent/notifications/read-all

@@ -6,7 +6,7 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { 
   Lock, Mail, LogOut, User, Award, Calendar, Bell, Shield, 
-  CheckCircle2, XCircle, ChevronRight, School, Eye, EyeOff, AlertTriangle 
+  CheckCircle2, XCircle, ChevronRight, School, Eye, EyeOff, AlertTriangle, Paperclip, FileText, Image as ImageIcon
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import logoImage from "../assets/logo.png";
@@ -74,6 +74,8 @@ export default function ParentPortal({
   const [localNotifications, setLocalNotifications] = useState<AppNotification[]>(notifications);
   const [markingNotificationIds, setMarkingNotificationIds] = useState<string[]>([]);
   const [readOverrides, setReadOverrides] = useState<Set<string>>(new Set());
+  const [downloadingAttachmentKey, setDownloadingAttachmentKey] = useState<string | null>(null);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const hasCompletedProtectedLoadRef = useRef(false);
 
   // Keep a local copy of notifications so the badge updates immediately.
@@ -866,6 +868,130 @@ export default function ParentPortal({
     }
   };
 
+  const formatAttachmentSize = (fileSize: number) => {
+    if (fileSize < 1024) return `${fileSize} o`;
+    if (fileSize < 1024 * 1024) return `${(fileSize / 1024).toFixed(1)} Ko`;
+    return `${(fileSize / (1024 * 1024)).toFixed(1)} Mo`;
+  };
+
+  const handleAttachmentDownload = async (notification: AppNotification, attachment: NonNullable<AppNotification["attachments"]>[number]) => {
+    const key = `${notification.id}-${attachment.id}`;
+    setAttachmentError(null);
+    setDownloadingAttachmentKey(key);
+
+    console.log("[ATTACHMENT] click", {
+      notificationId: notification.id,
+      attachmentId: attachment.id,
+      fileName: attachment.fileName,
+      mimeType: attachment.mimeType,
+    });
+
+    try {
+      console.log("[ATTACHMENT] download started", {
+        notificationId: notification.id,
+        attachmentId: attachment.id,
+      });
+
+      const response = await performProtectedRequest((authToken) => fetch(withApiBase(`/api/mobile/parent/notifications/${notification.id}/attachments/${attachment.id}`), {
+        headers: { "Authorization": `Bearer ${authToken}` }
+      }));
+
+      if (!response) {
+        console.error("[ATTACHMENT] download failed: no response object");
+        throw Object.assign(new Error("network"), { code: "NETWORK" });
+      }
+      console.log("[ATTACHMENT] HTTP status=", response.status, { ok: response.ok });
+      if (response.status === 401) {
+        console.error("[ATTACHMENT] download failed: 401 unauthorized");
+        throw Object.assign(new Error("session"), { status: 401 });
+      }
+      if (response.status === 403) {
+        console.error("[ATTACHMENT] download failed: 403 forbidden");
+        throw Object.assign(new Error("forbidden"), { status: 403 });
+      }
+      if (response.status === 404) {
+        console.error("[ATTACHMENT] download failed: 404 missing");
+        throw Object.assign(new Error("missing"), { status: 404 });
+      }
+      if (!response.ok) {
+        console.error("[ATTACHMENT] download failed: unexpected HTTP status", response.status);
+        throw Object.assign(new Error("download"), { status: response.status });
+      }
+
+      const blob = await response.blob();
+      console.log("[ATTACHMENT] blob received size=", blob.size, { type: blob.type, fileName: attachment.fileName });
+
+      if (!blob.size) {
+        console.error("[ATTACHMENT] download failed: empty blob");
+        throw Object.assign(new Error("empty-blob"), { code: "EMPTY_BLOB" });
+      }
+
+      const nativeBridge = (window as Window & {
+        AndroidCamera?: { openDownloadedFile?: (base64: string, fileName: string, mimeType: string) => boolean };
+      }).AndroidCamera;
+
+      if (typeof nativeBridge?.openDownloadedFile === "function") {
+        const base64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const result = typeof reader.result === "string" ? reader.result : "";
+            const commaIndex = result.indexOf(",");
+            if (commaIndex < 0) {
+              console.error("[ATTACHMENT] bridge failed: invalid data URL");
+              reject(new Error("invalid-file"));
+              return;
+            }
+            resolve(result.slice(commaIndex + 1));
+          };
+          reader.onerror = () => {
+            console.error("[ATTACHMENT] bridge failed: FileReader error");
+            reject(new Error("invalid-file"));
+          };
+          reader.readAsDataURL(blob);
+        });
+
+        console.log("[ATTACHMENT] bridge called", {
+          fileName: attachment.fileName,
+          mimeType: attachment.mimeType,
+          base64Length: base64.length,
+        });
+
+        if (!nativeBridge.openDownloadedFile(base64, attachment.fileName, attachment.mimeType)) {
+          console.error("[ATTACHMENT] bridge failed: native open returned false");
+          throw Object.assign(new Error("unsupported"), { code: "UNSUPPORTED" });
+        }
+        console.log("[ATTACHMENT] bridge accepted file");
+        return;
+      }
+
+      console.log("[ATTACHMENT] native bridge unavailable; falling back to browser download");
+      const objectUrl = URL.createObjectURL(blob);
+      const downloadLink = document.createElement("a");
+      downloadLink.href = objectUrl;
+      downloadLink.download = attachment.fileName;
+      document.body.appendChild(downloadLink);
+      downloadLink.click();
+      downloadLink.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+    } catch (error: any) {
+      if (error?.status === 401) {
+        setAttachmentError("Votre session a expiré. Veuillez vous reconnecter.");
+      } else if (error?.status === 403) {
+        setAttachmentError("Vous n'avez pas accès à ce fichier.");
+      } else if (error?.status === 404) {
+        setAttachmentError("Ce fichier n'est plus disponible.");
+      } else if (error?.code === "UNSUPPORTED") {
+        setAttachmentError("Aucune application compatible n'est installée pour ouvrir ce fichier.");
+      } else if (error?.code === "EMPTY_BLOB") {
+        setAttachmentError("Le fichier téléchargé est vide.");
+      } else {
+        setAttachmentError("Impossible de télécharger le fichier. Vérifiez votre connexion.");
+      }
+    } finally {
+      setDownloadingAttachmentKey(null);
+    }
+  };
+
   const normalizeNotificationText = (text?: string) =>
     (text || "")
       .toLowerCase()
@@ -1450,7 +1576,7 @@ export default function ParentPortal({
                             accept=".pdf,image/jpeg,image/png"
                             multiple
                             onChange={(event) => {
-                              const files = Array.from(event.target.files ?? []);
+                              const files = Array.from(event.target.files ?? []) as File[];
                               if (files.length > 0) {
                                 appendAttachments(files);
                               }
@@ -1734,6 +1860,37 @@ export default function ParentPortal({
                             <p className="mt-2 text-[11px] font-medium leading-5 text-slate-700 dark:text-slate-300">
                               {notif.message}
                             </p>
+                            {notif.attachments && notif.attachments.length > 0 && (
+                              <div className="mt-3 space-y-1.5" onClick={(event) => event.stopPropagation()}>
+                                {notif.attachments.map((attachment) => {
+                                  const attachmentKey = `${notif.id}-${attachment.id}`;
+                                  const isImage = attachment.mimeType.startsWith("image/");
+                                  return (
+                                    <button
+                                      key={attachment.id}
+                                      type="button"
+                                      disabled={downloadingAttachmentKey === attachmentKey}
+                                      onClick={() => void handleAttachmentDownload(notif, attachment)}
+                                      className="flex w-full items-center gap-2 rounded-xl border border-slate-200 bg-white/80 px-2.5 py-2 text-left transition hover:border-indigo-300 hover:bg-indigo-50/70 disabled:cursor-wait disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900/70 dark:hover:border-indigo-700 dark:hover:bg-indigo-950/40"
+                                    >
+                                      {isImage ? <ImageIcon className="h-4 w-4 shrink-0 text-indigo-600" /> : <FileText className="h-4 w-4 shrink-0 text-indigo-600" />}
+                                      <span className="min-w-0 flex-1 truncate text-[11px] font-semibold text-slate-800 dark:text-slate-200">
+                                        {attachment.fileName}
+                                      </span>
+                                      <span className="shrink-0 text-[10px] text-slate-500 dark:text-slate-400">
+                                        {formatAttachmentSize(attachment.fileSize)}
+                                      </span>
+                                    </button>
+                                  );
+                                })}
+                                {attachmentError && (
+                                  <p role="alert" className="flex items-center gap-1 text-[10px] font-semibold text-rose-600 dark:text-rose-400">
+                                    <Paperclip className="h-3 w-3" />
+                                    {attachmentError}
+                                  </p>
+                                )}
+                              </div>
+                            )}
                           </div>
                         </div>
                         <div className="mt-3 flex flex-wrap items-center gap-2">

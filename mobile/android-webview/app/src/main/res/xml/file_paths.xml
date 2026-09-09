@@ -3,4 +3,7 @@
     <cache-path
         name="camera_images"
         path="camera/" />
+    <cache-path
+        name="notification_attachments"
+        path="attachments/" />
 </paths>

@@ -15,6 +15,15 @@ import { initializeMobileTables, dbQuery, pool } from './postgres';
 import { logger } from './utils/logger';
 import { mapWebParentToMobileParent, mapWebStudentToChild } from './mobileAdapter';
 
+export interface MobileNotificationAttachment {
+  id: number;
+  notificationId: number;
+  fileName: string;
+  mimeType: string;
+  fileSize: number;
+  filePath: string;
+}
+
 interface DatabaseSchema {
   parents: Array<Parent & { passwordHash: string; role: string }>;
   schools: Array<{ id: string; name: string; address: string }>;
@@ -671,11 +680,23 @@ WHERE a.id = $2
       ORDER BY created_at DESC
     `, [userId]);
 
-    // TEMP LOG: list notification ids and their is_read values for debugging
-    try {
-      logger.debug(`Fetched ${rows.length} notifications for parent=${parentId}`, { notifications: rows.map(r => ({ id: r.id, is_read: r.is_read })) });
-    } catch (e) {
-      // ignore logging errors
+    const notificationIds = rows.map((row) => row.id);
+    const attachmentsByNotification = new Map<number, MobileNotificationAttachment[]>();
+    if (notificationIds.length > 0) {
+      const attachmentRows = await dbQuery<MobileNotificationAttachment>(`
+        SELECT id, notification_id AS "notificationId", file_name AS "fileName",
+               mime_type AS "mimeType", file_size AS "fileSize", file_path AS "filePath"
+        FROM notification_attachments
+        WHERE notification_id = ANY($1::int[])
+        ORDER BY id ASC
+      `, [notificationIds]);
+
+      for (const attachment of attachmentRows.rows) {
+        const notificationId = Number(attachment.notificationId);
+        const existing = attachmentsByNotification.get(notificationId) ?? [];
+        existing.push(attachment);
+        attachmentsByNotification.set(notificationId, existing);
+      }
     }
 
     return rows.map((row) => ({
@@ -686,7 +707,33 @@ WHERE a.id = $2
       read: row.is_read,
       createdAt: row.created_at,
       deepLink: undefined,
+      attachments: (attachmentsByNotification.get(row.id) ?? []).map(({ filePath: _filePath, ...attachment }) => attachment),
     }));
+  }
+
+  public async getInAppNotificationAttachment(
+    parentId: string,
+    notificationId: number,
+    attachmentId: number,
+  ): Promise<{ attachment: MobileNotificationAttachment; authorized: boolean } | null> {
+    const userId = Number(parentId);
+    if (!Number.isInteger(userId)) return null;
+
+    const { rows } = await dbQuery<MobileNotificationAttachment & { notificationOwnerId: number }>(`
+      SELECT a.id, a.notification_id AS "notificationId", a.file_name AS "fileName",
+             a.mime_type AS "mimeType", a.file_size AS "fileSize", a.file_path AS "filePath",
+             n.user_id AS "notificationOwnerId"
+      FROM notification_attachments a
+      INNER JOIN notifications n ON n.id = a.notification_id
+      WHERE n.id = $1
+        AND a.id = $2
+        AND a.notification_id = $1
+      LIMIT 1
+    `, [notificationId, attachmentId]);
+
+    if (!rows[0]) return null;
+    const { notificationOwnerId, ...attachment } = rows[0];
+    return { attachment, authorized: Number(notificationOwnerId) === userId };
   }
 
   public async markAllInAppNotificationsAsRead(parentId: string) {
