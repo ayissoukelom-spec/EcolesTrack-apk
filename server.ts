@@ -34,6 +34,7 @@ interface AuthenticatedRequest extends Request {
 const app = express();
 const PORT = Number(process.env.PORT) || 3001;
 const uploadStorageDir = path.join(process.cwd(), "uploads", "absence-justifications");
+const webBackendUrl = () => (process.env.WEB_BACKEND_URL || "").trim().replace(/\/+$/, "");
 const notificationAttachmentStorageDir = process.env.NOTIFICATION_ATTACHMENTS_DIR
   ? path.resolve(process.env.NOTIFICATION_ATTACHMENTS_DIR)
   : path.resolve(process.cwd(), "..", "web ecoles", "uploads", "notification-attachments");
@@ -96,6 +97,56 @@ const handleAbsenceJustificationUpload = (req: Request, res: Response, next: Nex
     return next();
   });
 };
+
+async function forwardAbsenceJustificationToWeb(absenceId: string, parentId: string, justificationReason: string, uploadedFile: Express.Multer.File) {
+  const targetBaseUrl = webBackendUrl();
+  if (!targetBaseUrl) {
+    throw new Error("WEB_BACKEND_URL is not configured");
+  }
+
+  const fileBuffer = await fsPromises.readFile(uploadedFile.path);
+  const fileSha256 = crypto.createHash("sha256").update(fileBuffer).digest("hex");
+  const payload = {
+    absenceId: String(absenceId),
+    parentId: String(parentId),
+    justificationReason,
+    fileName: uploadedFile.originalname,
+    fileMimeType: uploadedFile.mimetype,
+    fileSize: String(uploadedFile.size),
+    fileSha256,
+  };
+  const timestamp = Date.now().toString();
+  const internalSecret = process.env.INTERNAL_SECRET;
+  if (!internalSecret || !internalSecret.trim()) {
+    throw new Error("INTERNAL_SECRET is not configured");
+  }
+  const hmac = crypto.createHmac("sha256", internalSecret);
+  hmac.update(`${JSON.stringify(payload)}${timestamp}`);
+  const signature = hmac.digest("hex");
+
+  const formData = new FormData();
+  formData.append("absenceId", payload.absenceId);
+  formData.append("parentId", payload.parentId);
+  formData.append("justificationReason", payload.justificationReason);
+  formData.append("fileName", payload.fileName);
+  formData.append("fileMimeType", payload.fileMimeType);
+  formData.append("fileSize", payload.fileSize);
+  formData.append("fileSha256", payload.fileSha256);
+  formData.append("file", new Blob([fileBuffer], { type: uploadedFile.mimetype }), uploadedFile.originalname);
+
+  const response = await fetch(`${targetBaseUrl}/api/internal/absence-justification`, {
+    method: "POST",
+    headers: {
+      "X-Internal-Signature": signature,
+      "X-Internal-Timestamp": timestamp,
+    },
+    body: formData,
+  });
+  if (!response.ok) {
+    const responseBody = await response.text().catch(() => "");
+    throw new Error(`Web justification upload failed with status ${response.status}: ${responseBody.slice(0, 300)}`);
+  }
+}
 
 app.use(express.json());
 
@@ -546,37 +597,18 @@ app.post("/api/absences/:id/justifications", requireAuth, requireParentRoleOnly,
   }
 
   try {
-    const updatedAbsence = await store.justifyAbsence(id, parentId, justificationReason);
-    if (!updatedAbsence) {
-      return res.status(404).json({
-        error: "Absence introuvable ou non rattachée à ce parent.",
-        code: "ABSENCE_NOT_FOUND"
+    for (const uploadedFile of uploadedFiles) {
+      await forwardAbsenceJustificationToWeb(id, parentId, justificationReason, uploadedFile);
+      await fsPromises.unlink(uploadedFile.path).catch((cleanupError: any) => {
+        console.error("Failed to remove temporary APK justification file:", cleanupError?.message || cleanupError);
       });
     }
 
-    const uploadedByValue = Number.isFinite(Number(parentId)) ? Number(parentId) : parentId;
-    const insertedFiles: Array<{ id: number; file_name: string; file_path: string; mime_type: string; file_size: number }> = [];
-
-    for (const uploadedFile of uploadedFiles) {
-      const insertResult = await dbQuery<{ id: number; file_name: string; file_path: string; mime_type: string; file_size: number }>(`
-        INSERT INTO absence_justifications (absence_id, file_name, file_path, mime_type, file_size, uploaded_by)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        RETURNING id, file_name, file_path, mime_type, file_size
-      `, [id, uploadedFile.originalname, uploadedFile.filename, uploadedFile.mimetype, Number(uploadedFile.size), uploadedByValue]);
-      insertedFiles.push(insertResult.rows[0]);
-    }
-
-    const lastInserted = insertedFiles[insertedFiles.length - 1];
-    return res.status(201).json({
-      ...updatedAbsence,
-      justificationFileId: lastInserted?.id,
-      justificationFileName: lastInserted?.file_name ?? uploadedFiles[uploadedFiles.length - 1].originalname,
-      justificationFiles: insertedFiles,
-    });
+    return res.status(201).json({ success: true });
   } catch (err: any) {
-    console.error("Failed to justify absence with file:", err);
+    console.error("Failed to forward absence justification to Web backend:", err?.message || err);
     return res.status(500).json({
-      error: "Impossible de justifier l'absence pour le moment.",
+      error: "Le justificatif n'a pas pu être transmis au serveur Web.",
       code: "INTERNAL_ERROR"
     });
   }
