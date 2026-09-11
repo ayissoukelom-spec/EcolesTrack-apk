@@ -7,6 +7,7 @@ import "dotenv/config";
 import express, { Request, Response, NextFunction } from "express";
 import path from "path";
 import crypto from "crypto";
+import { Readable } from "stream";
 import { promises as fsPromises } from "fs";
 import multer from "multer";
 import { createServer as createViteServer } from "vite";
@@ -35,9 +36,6 @@ const app = express();
 const PORT = Number(process.env.PORT) || 3001;
 const uploadStorageDir = path.join(process.cwd(), "uploads", "absence-justifications");
 const webBackendUrl = () => (process.env.WEB_BACKEND_URL || "").trim().replace(/\/+$/, "");
-const notificationAttachmentStorageDir = process.env.NOTIFICATION_ATTACHMENTS_DIR
-  ? path.resolve(process.env.NOTIFICATION_ATTACHMENTS_DIR)
-  : path.resolve(process.cwd(), "..", "web ecoles", "uploads", "notification-attachments");
 
 const MAX_ABSENCE_ATTACHMENT_COUNT = 5;
 const allowedJustificationMimeTypes = ["application/pdf", "image/png", "image/jpeg"];
@@ -834,28 +832,59 @@ app.get("/api/mobile/parent/notifications/:notificationId/attachments/:attachmen
   if (!attachmentAccess.authorized) {
     return res.status(403).json({ error: "Vous n'avez pas accès à ce fichier." });
   }
-  const attachment = attachmentAccess.attachment;
 
-  const safeFileName = path.basename(attachment.filePath);
-  const absoluteFilePath = path.resolve(notificationAttachmentStorageDir, safeFileName);
-  const storageRoot = path.resolve(notificationAttachmentStorageDir) + path.sep;
-  if (!absoluteFilePath.startsWith(storageRoot)) {
-    return res.status(404).json({ error: "Fichier non disponible." });
+  const targetBaseUrl = webBackendUrl();
+  const internalSecret = process.env.INTERNAL_SECRET;
+  if (!targetBaseUrl || !internalSecret || !internalSecret.trim()) {
+    console.error("Notification attachment relay is not configured");
+    return res.status(502).json({ error: "Le serveur de fichiers est indisponible." });
   }
 
+  const timestamp = Date.now().toString();
+  const payload = JSON.stringify({ attachmentId: String(attachmentId) });
+  const hmac = crypto.createHmac("sha256", internalSecret);
+  hmac.update(`${payload}${timestamp}`);
+  const signature = hmac.digest("hex");
+
+  let webResponse: globalThis.Response;
   try {
-    await fsPromises.access(absoluteFilePath);
-  } catch {
-    return res.status(404).json({ error: "Fichier non disponible." });
+    webResponse = await fetch(`${targetBaseUrl}/api/internal/notification-attachment/${attachmentId}`, {
+      method: "GET",
+      headers: {
+        "X-Internal-Timestamp": timestamp,
+        "X-Internal-Signature": signature,
+      },
+    });
+  } catch (error: any) {
+    console.error("Notification attachment relay request failed:", error?.message || error);
+    return res.status(502).json({ error: "Le serveur de fichiers est indisponible." });
   }
 
-  return res.download(absoluteFilePath, attachment.fileName, {
-    headers: { "Content-Type": attachment.mimeType },
-  }, (error) => {
-    if (error && !res.headersSent) {
-      res.status(500).json({ error: "Impossible de télécharger le fichier." });
+  if (!webResponse.ok) {
+    console.error("Notification attachment relay returned status:", webResponse.status);
+    if (webResponse.status === 404) {
+      return res.status(404).json({ error: "Fichier non disponible." });
     }
+    return res.status(502).json({ error: "Le serveur de fichiers est indisponible." });
+  }
+
+  if (!webResponse.body) {
+    console.error("Notification attachment relay returned an empty body");
+    return res.status(502).json({ error: "Le serveur de fichiers est indisponible." });
+  }
+
+  const contentType = webResponse.headers.get("content-type");
+  const contentLength = webResponse.headers.get("content-length");
+  const contentDisposition = webResponse.headers.get("content-disposition");
+  if (contentType) res.setHeader("Content-Type", contentType);
+  if (contentLength) res.setHeader("Content-Length", contentLength);
+  if (contentDisposition) res.setHeader("Content-Disposition", contentDisposition);
+
+  const relayStream = Readable.fromWeb(webResponse.body as any);
+  relayStream.on("error", (error: any) => {
+    console.error("Notification attachment relay stream failed:", error?.message || error);
   });
+  return relayStream.pipe(res);
 });
 
 // 8. PUT /api/mobile/parent/notifications/read-all
