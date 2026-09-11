@@ -220,7 +220,8 @@ export class QueueManager {
           token,
           title,
           message,
-          target = "home"
+          target = "home",
+          metadata = {}
         } = job.data;
 
         if (!token) {
@@ -233,7 +234,8 @@ export class QueueManager {
           token,
           title,
           message,
-          target
+          target,
+          metadata
         );
         logger.info("[NOTIF_TRACE] FCM envoyé avec succès", { token: tokenPreview, title, target });
 

@@ -44,6 +44,8 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
         String title = "EcoleTrack";
         String message = "Vous avez une nouvelle notification";
         String target = null;
+        String notificationId = null;
+        String attachmentCount = null;
 
         if (notificationTitle != null && !notificationTitle.isEmpty()) {
             title = notificationTitle;
@@ -67,13 +69,19 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
                 target = remoteMessage.getData().get("target");
                 Log.d(TAG, "[FCM_DEBUG] received target from payload: " + target);
             }
+            if (remoteMessage.getData().containsKey("notificationId")) {
+                notificationId = remoteMessage.getData().get("notificationId");
+            }
+            if (remoteMessage.getData().containsKey("attachmentCount")) {
+                attachmentCount = remoteMessage.getData().get("attachmentCount");
+            }
         }
 
-        Log.i(TAG, "final notification title=" + title + " body=" + message + " target=" + target);
-        showNotification(title, message, target);
+        Log.i(TAG, "final notification title=" + title + " body=" + message + " target=" + target + " notificationId=" + notificationId + " attachmentCount=" + attachmentCount);
+        showNotification(title, message, target, notificationId, attachmentCount);
     }
 
-    private void showNotification(String title, String message, String target) {
+    private void showNotification(String title, String message, String target, String notificationId, String attachmentCount) {
         NotificationManager manager =
                 (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
 
@@ -89,6 +97,12 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
         if (target != null && !target.trim().isEmpty()) {
             intent.putExtra("target", target);
             Log.d(TAG, "[FCM_DEBUG] attaching target to notification intent: " + target);
+        }
+        if (notificationId != null && !notificationId.trim().isEmpty()) {
+            intent.putExtra("notificationId", notificationId);
+        }
+        if (attachmentCount != null && !attachmentCount.trim().isEmpty()) {
+            intent.putExtra("attachmentCount", attachmentCount);
         }
 
         PendingIntent pendingIntent =

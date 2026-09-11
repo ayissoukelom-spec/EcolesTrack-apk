@@ -89,7 +89,11 @@ public class MainActivity extends AppCompatActivity {
     private WebView webView;
     private String pendingFcmToken;
     private String pendingTarget;
+    private String pendingNotificationId;
+    private String pendingAttachmentCount;
     private static final String EXTRA_TARGET = "target";
+    private static final String EXTRA_NOTIFICATION_ID = "notificationId";
+    private static final String EXTRA_ATTACHMENT_COUNT = "attachmentCount";
 
     private final BroadcastReceiver fcmTokenReceiver = new BroadcastReceiver() {
         @Override
@@ -113,6 +117,7 @@ public class MainActivity extends AppCompatActivity {
         Log.d(TAG, "[MainActivity] onNewIntent ts=" + System.currentTimeMillis() + " intent=" + intent);
         if (intent != null) {
             Log.d(TAG, "[MainActivity] onNewIntent targetExtra=" + intent.getStringExtra(EXTRA_TARGET));
+            Log.d(TAG, "[MainActivity] onNewIntent notificationIdExtra=" + intent.getStringExtra(EXTRA_NOTIFICATION_ID));
         }
         setIntent(intent);
         handleIncomingIntent(intent);
@@ -125,13 +130,24 @@ public class MainActivity extends AppCompatActivity {
         }
 
         String target = intent.getStringExtra(EXTRA_TARGET);
+        String notificationId = intent.getStringExtra(EXTRA_NOTIFICATION_ID);
+        String attachmentCount = intent.getStringExtra(EXTRA_ATTACHMENT_COUNT);
         Log.d(TAG, "[MainActivity] handleIncomingIntent targetExtra=" + target);
+        Log.d(TAG, "[MainActivity] handleIncomingIntent notificationIdExtra=" + notificationId + " attachmentCountExtra=" + attachmentCount);
+        if (notificationId != null && !notificationId.trim().isEmpty()) {
+            pendingNotificationId = notificationId;
+        }
+        if (attachmentCount != null && !attachmentCount.trim().isEmpty()) {
+            pendingAttachmentCount = attachmentCount;
+        }
         if (target != null && !target.trim().isEmpty()) {
             pendingTarget = target;
             Log.i(TAG, "[MainActivity] received target extra from intent: " + target);
             if (webView != null) {
-                dispatchTargetToWebView(target);
+                dispatchNotificationContextToWebView(target, pendingNotificationId, pendingAttachmentCount);
                 pendingTarget = null;
+                pendingNotificationId = null;
+                pendingAttachmentCount = null;
             }
         } else {
             Log.i(TAG, "[MainActivity] no target extra received; keeping default behavior");
@@ -203,13 +219,20 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void dispatchTargetToWebView(String target) {
+        dispatchNotificationContextToWebView(target, null, null);
+    }
+
+    private void dispatchNotificationContextToWebView(String target, String notificationId, String attachmentCount) {
         if (webView == null || target == null || target.trim().isEmpty()) {
             Log.d(TAG, "[MainActivity] dispatchTargetToWebView skipped because webView or target is null/empty");
             return;
         }
 
         String escapedTarget = target.replace("\\", "\\\\").replace("'", "\\'");
-        String js = "if (window.setNotificationTarget) { " +
+        String escapedNotificationId = notificationId == null ? "" : notificationId.replace("\\", "\\\\").replace("'", "\\'");
+        String escapedAttachmentCount = attachmentCount == null ? "" : attachmentCount.replace("\\", "\\\\").replace("'", "\\'");
+        String js = "window.__pendingNotificationContext = { notificationId: '" + escapedNotificationId + "', attachmentCount: '" + escapedAttachmentCount + "' }; " +
+                    "if (window.setNotificationTarget) { " +
                     "window.setNotificationTarget('" + escapedTarget + "'); " +
                     "console.log('[NOTIFICATION_DEBUG] window.setNotificationTarget exists'); " +
                     "} else { " +
@@ -354,8 +377,10 @@ public class MainActivity extends AppCompatActivity {
                 }
 
                 if (pendingTarget != null && !pendingTarget.trim().isEmpty()) {
-                    dispatchTargetToWebView(pendingTarget);
+                    dispatchNotificationContextToWebView(pendingTarget, pendingNotificationId, pendingAttachmentCount);
                     pendingTarget = null;
+                    pendingNotificationId = null;
+                    pendingAttachmentCount = null;
                 }
             }
 

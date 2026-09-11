@@ -80,22 +80,47 @@ export async function sendPushNotification(
   token: string,
   title: string,
   body: string,
-  target: string = "home"
+  target: string = "home",
+  metadata: Record<string, unknown> = {}
 ) {
+  const attachments = Array.isArray(metadata.attachments)
+    ? metadata.attachments.filter((attachment): attachment is Record<string, unknown> => Boolean(attachment) && typeof attachment === "object")
+    : [];
+  const attachmentCount = Number(metadata.attachmentCount ?? attachments.length);
+  const validAttachmentCount = Number.isInteger(attachmentCount) && attachmentCount > 0
+    ? attachmentCount
+    : 0;
+  const attachmentNames = attachments
+    .map((attachment) => typeof attachment.fileName === "string" ? attachment.fileName.trim() : "")
+    .filter(Boolean);
+  const attachmentSummary = validAttachmentCount === 0
+    ? ""
+    : validAttachmentCount === 1 && attachmentNames[0]
+      ? `\n📎 1 pièce jointe : ${attachmentNames[0]}`
+      : `\n📎 ${validAttachmentCount} pièces jointes`;
+  const notificationBody = `${body}${attachmentSummary}`;
   const maskedToken = token ? `${token.slice(0, 10)}...` : "<missing>";
-  logger.info("[NOTIF_TRACE] sendPushNotification start", { token: maskedToken, title, body, target });
+  logger.info("[NOTIF_TRACE] sendPushNotification start", { token: maskedToken, title, body: notificationBody, target });
+
+  const data: Record<string, string> = {
+    title,
+    body: notificationBody,
+    target,
+  };
+  if (metadata.notificationId != null) {
+    data.notificationId = String(metadata.notificationId);
+  }
+  if (validAttachmentCount > 0) {
+    data.attachmentCount = String(validAttachmentCount);
+  }
 
   const message = {
     token,
     notification: {
       title,
-      body,
+      body: notificationBody,
     },
-    data: {
-      title,
-      body,
-      target,
-    },
+    data,
     android: {
       priority: "high" as const,
       notification: {
@@ -108,7 +133,7 @@ export async function sendPushNotification(
   } as const;
 
   try {
-    logger.info("[NOTIF_TRACE] sendPushNotification payload", { token: maskedToken, title, body, target });
+    logger.info("[NOTIF_TRACE] sendPushNotification payload", { token: maskedToken, title, body: notificationBody, target });
     const response = await getMessaging().send(message);
 
     logger.info("[NOTIF_TRACE] sendPushNotification response", { messageId: response });
