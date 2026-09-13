@@ -1502,20 +1502,6 @@ export default function ParentPortal({
                           event.target.value = "";
                         }}
                       />
-                      <button
-                        type="button"
-                        onClick={openChildPhotoCamera}
-                        className="rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-[10px] font-bold text-indigo-700 dark:border-indigo-800 dark:bg-indigo-950/50 dark:text-indigo-300"
-                      >
-                        Caméra
-                      </button>
-                      <button
-                        type="button"
-                        onClick={openChildPhotoGallery}
-                        className="rounded-full border border-slate-200 bg-white px-3 py-1 text-[10px] font-bold text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
-                      >
-                        Galerie
-                      </button>
                       <div className="min-w-0">
                         <div className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">Actif</div>
                         <h4 className="text-sm font-black text-slate-900 dark:text-white truncate">{currentChild.firstName} {currentChild.lastName}</h4>
