@@ -41,3 +41,19 @@ test('maps the web student row to the mobile child shape', () => {
   assert.equal(result.birthDate, '2014-09-01');
   assert.equal(result.avatarUrl, '');
 });
+
+test('maps a photo-enabled child row to the secure child photo endpoint', () => {
+  const result = mapWebStudentToChild({
+    id: 12,
+    firstName: 'Lina',
+    lastName: 'Parent',
+    birthDate: '2014-09-01',
+    schoolId: 7,
+    classId: 3,
+    className: '6ème A',
+    parentId: 42,
+    photoAvailable: true,
+  });
+
+  assert.equal(result.avatarUrl, '/api/mobile/parent/children/12/photo');
+});

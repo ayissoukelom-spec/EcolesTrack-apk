@@ -391,8 +391,9 @@ export class PostgresStore {
     const userId = Number(parentId);
     if (!Number.isInteger(userId)) return [];
 
-    const { rows } = await dbQuery<{ id: number; first_name: string; last_name: string; birth_date: string | null; parent_id: number | null; class_name: string | null }>(`
+    const { rows } = await dbQuery<{ id: number; first_name: string; last_name: string; birth_date: string | null; parent_id: number | null; class_name: string | null; photo_available: boolean }>(`
       SELECT s.id, s.first_name, s.last_name, s.birth_date, s.parent_id,
+             (s.photo_data IS NOT NULL) AS photo_available,
              c.name AS class_name
       FROM students s
       LEFT JOIN classes c ON c.id = s.class_id
@@ -413,7 +414,31 @@ export class PostgresStore {
       birthDate: row.birth_date ?? '',
       parentId: row.parent_id ?? null,
       className: row.class_name ?? '',
+      photoAvailable: row.photo_available,
     }));
+  }
+
+  public async getChildPhoto(childId: string): Promise<{ photoData: Buffer; mimeType: string } | null> {
+    const childIdNum = Number(childId);
+    if (!Number.isInteger(childIdNum) || childIdNum <= 0) return null;
+
+    const { rows } = await dbQuery<{ photo_data: Buffer | null; photo_mime_type: string | null }>(`
+      SELECT photo_data, photo_mime_type
+      FROM students
+      WHERE id = $1
+    `, [childIdNum]);
+    const row = rows[0];
+    if (!row?.photo_data || !row.photo_mime_type) return null;
+    return { photoData: row.photo_data, mimeType: row.photo_mime_type };
+  }
+
+  public async saveChildPhoto(childId: string, photoData: Buffer, mimeType: string): Promise<void> {
+    const childIdNum = Number(childId);
+    await dbQuery(`
+      UPDATE students
+      SET photo_data = $1, photo_mime_type = $2, photo_updated_at = now()
+      WHERE id = $3
+    `, [photoData, mimeType, childIdNum]);
   }
 
   public async getParentIdsForChildren(childIds: Array<string | number>): Promise<string[]> {

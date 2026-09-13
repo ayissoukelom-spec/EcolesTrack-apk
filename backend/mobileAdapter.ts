@@ -39,6 +39,7 @@ export interface WebStudentRow {
   classId?: number | null;
   className?: string | null;
   parentId?: number | null;
+  photoAvailable?: boolean;
 }
 
 export function mapWebParentToMobileParent(row: WebParentRow): MobileParentProfile {
@@ -65,6 +66,6 @@ export function mapWebStudentToChild(row: WebStudentRow): MobileChild {
     className: row.className ?? '',
     birthDate: row.birthDate ?? '',
     gender: row.gender ?? undefined,
-    avatarUrl: '',
+    avatarUrl: row.photoAvailable ? `/api/mobile/parent/children/${row.id}/photo` : '',
   };
 }

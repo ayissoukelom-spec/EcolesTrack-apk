@@ -109,6 +109,13 @@ export default function ParentPortal({
   const [justificationError, setJustificationError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  const childPhotoInputRef = useRef<HTMLInputElement | null>(null);
+  const childPhotoObjectUrlRef = useRef<string | null>(null);
+  const [childPhotoUrl, setChildPhotoUrl] = useState<string | null>(null);
+  const [childPhotoLoading, setChildPhotoLoading] = useState(false);
+  const [childPhotoError, setChildPhotoError] = useState<string | null>(null);
+  const childPhotoCaptureRequestedRef = useRef(false);
+
   const allowedJustificationMimeTypes = new Set(["application/pdf", "image/png", "image/jpeg"]);
   const formatFileSize = (bytes: number) => {
     if (bytes < 1024) return `${bytes} o`;
@@ -174,9 +181,20 @@ export default function ParentPortal({
           throw new Error("No valid photo payload received from Android");
         }
 
+        if (childPhotoCaptureRequestedRef.current) {
+          childPhotoCaptureRequestedRef.current = false;
+          await uploadCurrentChildPhoto(file);
+          return;
+        }
+
         appendAttachments([file]);
       } catch (error) {
         console.error("[ANDROID_CAMERA] Failed to load captured photo", error);
+        if (childPhotoCaptureRequestedRef.current) {
+          childPhotoCaptureRequestedRef.current = false;
+          setChildPhotoError("Impossible de récupérer la photo prise. Merci de réessayer.");
+          return;
+        }
         setJustificationError("Impossible de récupérer la photo prise. Merci de réessayer.");
       }
     };
@@ -186,6 +204,8 @@ export default function ParentPortal({
       delete (window as any).handleAndroidCameraResult;
     };
   }, []);
+
+  const currentChild = selectedChild || children[0] || null;
 
   const handleSessionExpired = () => {
     if (!hasCompletedProtectedLoadRef.current) {
@@ -198,6 +218,104 @@ export default function ParentPortal({
     setTermAverageApi(null);
     setChildrenLoadError(null);
     onLogout();
+  };
+
+  const loadCurrentChildPhoto = async (childId: string) => {
+    if (!token) {
+      setChildPhotoUrl(null);
+      return;
+    }
+
+    try {
+      const response = await performProtectedRequest((authToken) => fetch(withApiBase(`/api/mobile/parent/children/${childId}/photo`), {
+        headers: { "Authorization": `Bearer ${authToken}` }
+      }));
+
+      if (!response) {
+        setChildPhotoUrl(null);
+        return;
+      }
+
+      if (response.status === 404) {
+        setChildPhotoUrl(null);
+        return;
+      }
+
+      if (!response.ok) {
+        setChildPhotoUrl(null);
+        return;
+      }
+
+      const blob = await response.blob();
+      if (childPhotoObjectUrlRef.current) {
+        URL.revokeObjectURL(childPhotoObjectUrlRef.current);
+      }
+      const url = URL.createObjectURL(blob);
+      childPhotoObjectUrlRef.current = url;
+      setChildPhotoUrl(url);
+    } catch (e) {
+      console.error("[CHILD_PHOTO] Failed to fetch child photo", e);
+      setChildPhotoUrl(null);
+    }
+  };
+
+  const uploadCurrentChildPhoto = async (file: File) => {
+    if (!currentChild?.id || childPhotoLoading || !token) {
+      return;
+    }
+
+    const mimeAllowed = file.type === "image/jpeg" || file.type === "image/png" || file.type === "image/webp";
+    if (!mimeAllowed || file.size > 5 * 1024 * 1024) {
+      setChildPhotoError("Veuillez choisir une image JPEG, PNG ou WebP de moins de 5 Mo.");
+      return;
+    }
+
+    setChildPhotoLoading(true);
+    setChildPhotoError(null);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", file, file.name || `photo-${Date.now()}.jpg`);
+
+      const response = await performProtectedRequest((authToken) => fetch(withApiBase(`/api/mobile/parent/children/${currentChild.id}/photo`), {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${authToken}` },
+        body: formData
+      }));
+
+      if (!response) {
+        throw new Error("No response from child photo upload endpoint");
+      }
+
+      if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        throw new Error(text || `Photo upload failed: ${response.status}`);
+      }
+
+      await loadCurrentChildPhoto(currentChild.id);
+    } catch (e: any) {
+      console.error("[CHILD_PHOTO] Failed to upload child photo", e);
+      setChildPhotoError(e?.message || "Impossible d'envoyer la photo.");
+    } finally {
+      setChildPhotoLoading(false);
+    }
+  };
+
+  const openChildPhotoGallery = () => {
+    if (childPhotoInputRef.current) {
+      childPhotoInputRef.current.accept = "image/png,image/jpeg,image/webp";
+      childPhotoInputRef.current.click();
+    }
+  };
+
+  const openChildPhotoCamera = () => {
+    const androidCamera = (window as any).AndroidCamera;
+    if (!androidCamera || typeof androidCamera.takePhoto !== "function") {
+      setChildPhotoError("La caméra Android n'est pas disponible.");
+      return;
+    }
+    childPhotoCaptureRequestedRef.current = true;
+    androidCamera.takePhoto();
   };
 
   const performProtectedRequest = async (requestFactory: (authToken: string) => Promise<Response>) => {
@@ -253,6 +371,14 @@ export default function ParentPortal({
       setSelectedChild(children[0]);
     }
   }, [children, selectedChild]);
+
+  useEffect(() => {
+    if (!currentChild?.id) {
+      setChildPhotoUrl(null);
+      return;
+    }
+    loadCurrentChildPhoto(currentChild.id);
+  }, [currentChild?.id, token]);
 
   // Load specific child details when selected
   const selectedChildId = selectedChild?.id;
@@ -733,8 +859,6 @@ export default function ParentPortal({
   const unjustifiedAbsenceCount = currentTrimesterAbsences.filter((abs) => !abs.justified).length;
   console.log("Absences reçues API :", absences);
   console.log("Nombre calculé :", absenceCount);
-
-  const currentChild = selectedChild || children[0] || null;
 
   const formatBirthDate = (dateString: string) => {
     try {
@@ -1347,11 +1471,51 @@ export default function ParentPortal({
                 {currentChild && (
                   <div className="theme-card rounded-2xl border theme-border p-4 shadow-sm space-y-4">
                     <div className="flex items-center gap-3">
-                      <img
-                        src={currentChild.avatarUrl}
-                        alt={currentChild.firstName}
-                        className="h-14 w-14 rounded-full object-cover border border-slate-200 dark:border-slate-700 shrink-0"
+                      <button
+                        type="button"
+                        className="relative h-14 w-14 rounded-full border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 overflow-hidden shrink-0 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        onClick={openChildPhotoGallery}
+                        title="Ajouter ou remplacer la photo"
+                        disabled={childPhotoLoading}
+                      >
+                        {childPhotoUrl ? (
+                          <img src={childPhotoUrl} alt={currentChild.firstName} className="h-full w-full object-cover" />
+                        ) : (
+                          <span className="flex h-full w-full items-center justify-center text-slate-500 dark:text-slate-300">
+                            <ImageIcon className="h-7 w-7" />
+                          </span>
+                        )}
+                        <span className="absolute -bottom-1 -right-1 rounded-full border border-white bg-indigo-600 text-[9px] font-bold text-white px-1.5 py-0.5 shadow-sm">
+                          {childPhotoLoading ? "..." : "+"}
+                        </span>
+                      </button>
+                      <input
+                        ref={childPhotoInputRef}
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp"
+                        className="hidden"
+                        onChange={(event) => {
+                          const file = event.target.files?.[0];
+                          if (file) {
+                            uploadCurrentChildPhoto(file);
+                          }
+                          event.target.value = "";
+                        }}
                       />
+                      <button
+                        type="button"
+                        onClick={openChildPhotoCamera}
+                        className="rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-[10px] font-bold text-indigo-700 dark:border-indigo-800 dark:bg-indigo-950/50 dark:text-indigo-300"
+                      >
+                        Caméra
+                      </button>
+                      <button
+                        type="button"
+                        onClick={openChildPhotoGallery}
+                        className="rounded-full border border-slate-200 bg-white px-3 py-1 text-[10px] font-bold text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                      >
+                        Galerie
+                      </button>
                       <div className="min-w-0">
                         <div className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">Actif</div>
                         <h4 className="text-sm font-black text-slate-900 dark:text-white truncate">{currentChild.firstName} {currentChild.lastName}</h4>
@@ -1359,6 +1523,10 @@ export default function ParentPortal({
                         <p className="text-[11px] text-slate-700 dark:text-slate-300 font-medium">Date de naissance : {formatBirthDate(currentChild.birthDate)} {currentChild.gender ? `• ${currentChild.gender}` : ""}</p>
                       </div>
                     </div>
+
+                    {childPhotoError && (
+                      <div className="text-[10px] font-semibold text-rose-700 dark:text-rose-300">{childPhotoError}</div>
+                    )}
 
                     <div className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/70 p-3">
                       <div className="flex items-center justify-between gap-3">
