@@ -29,6 +29,10 @@ interface ParentPortalProps {
   notificationAlertMenu?: "notes" | "homework" | "absences" | "info" | null;
 }
 
+const formatChildName = (child: Pick<Child, "firstName" | "lastName"> | null | undefined): string => (
+  child ? `${child.lastName} ${child.firstName}`.trim() : ""
+);
+
 export default function ParentPortal({
   token,
   parent,
@@ -744,7 +748,7 @@ export default function ParentPortal({
             try { return new Date(gd.date).getTime() >= trimesterStart.getTime(); } catch { return false; }
           });
 
-          const studentName = currentChild ? `${currentChild.firstName} ${currentChild.lastName}` : 'unknown';
+          const studentName = formatChildName(currentChild) || 'unknown';
           const displayedAverage = (gradePeriodFilter === 'trimester' && chosenAverage != null)
             ? Number(chosenAverage).toFixed(2)
             : (calculateAverage(trimesterGrades) ?? '—');
@@ -1504,7 +1508,7 @@ export default function ParentPortal({
                       />
                       <div className="min-w-0">
                         <div className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">Actif</div>
-                        <h4 className="text-sm font-black text-slate-900 dark:text-white truncate">{currentChild.firstName} {currentChild.lastName}</h4>
+                        <h4 className="text-sm font-black text-slate-900 dark:text-white truncate">{formatChildName(currentChild)}</h4>
                         <p className="text-[11px] text-slate-700 dark:text-slate-300 font-medium">Classe : {currentChild.className}</p>
                         <p className="text-[11px] text-slate-700 dark:text-slate-300 font-medium">Date de naissance : {formatBirthDate(currentChild.birthDate)} {currentChild.gender ? `• ${currentChild.gender}` : ""}</p>
                       </div>
@@ -1619,7 +1623,7 @@ export default function ParentPortal({
                           }`}
                         >
                           <div className="min-w-0">
-                            <div className="text-xs font-bold truncate">{child.firstName} {child.lastName}</div>
+                            <div className="text-xs font-bold truncate">{formatChildName(child)}</div>
                           </div>
                           <div className="flex items-center gap-1.5 shrink-0">
                             {isActiveChild && (
@@ -1663,7 +1667,7 @@ export default function ParentPortal({
                           <div>
                             <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">Justifier l'absence</h2>
                             <p className="text-[11px] text-slate-600 dark:text-slate-400 mt-1">
-                              {currentChild ? `${currentChild.firstName} ${currentChild.lastName}` : "Motif de l'absence"}
+                              {formatChildName(currentChild) || "Motif de l'absence"}
                             </p>
                           </div>
                           <button
@@ -1803,7 +1807,7 @@ export default function ParentPortal({
                   <h3 className="text-[10px] font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider">Absences de l&apos;élève</h3>
                   {currentChild && (
                     <span className="text-[10px] text-indigo-700 dark:text-indigo-400 font-bold">
-                      {currentChild.firstName} {currentChild.lastName}
+                      {formatChildName(currentChild)}
                     </span>
                   )}
                 </div>
@@ -1815,7 +1819,12 @@ export default function ParentPortal({
                   </div>
                 ) : (
                   <div className="space-y-2.5">
-                    {absences.map((abs) => (
+                    {absences.map((abs) => {
+                      const justificationStatus = abs.justificationStatus ?? (abs.justified ? "APPROVED" : null);
+                      const isApproved = justificationStatus === "APPROVED";
+                      const isPending = justificationStatus === "PENDING";
+                      const isRejected = justificationStatus === "REJECTED";
+                      return (
                       <div key={abs.id} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl p-3 shadow-sm">
                         <div className="flex items-start justify-between gap-2">
                           <div>
@@ -1836,7 +1845,15 @@ export default function ParentPortal({
   Motif : {abs.reason}
 </h4>
                           </div>
-                          {abs.justified ? (
+                          {isPending ? (
+                            <span className="shrink-0 text-[10px] font-bold text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-900 px-2 py-0.5 rounded-full">
+                              En attente de validation
+                            </span>
+                          ) : isRejected ? (
+                            <span className="shrink-0 text-[10px] font-bold text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900 px-2 py-0.5 rounded-full">
+                              Justification refusée
+                            </span>
+                          ) : isApproved ? (
                             <span className="shrink-0 text-[10px] font-bold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-900 px-2 py-0.5 rounded-full flex items-center gap-1">
                               <CheckCircle2 className="h-3 w-3" />
                               Justifiée
@@ -1848,12 +1865,22 @@ export default function ParentPortal({
                             </span>
                           )}
                         </div>
-                        {abs.justified && (
-                          <p className="text-[11px] text-slate-700 dark:text-slate-300 mt-2 leading-normal font-medium">
-                            {abs.justificationText || "Justification validée par l’établissement."}
+                        {isRejected && abs.rejectionReason && (
+                          <p className="text-[11px] text-rose-700 dark:text-rose-300 mt-2 leading-normal font-medium">
+                            Motif du refus : {abs.rejectionReason}
                           </p>
                         )}
-                        {!abs.justified && (
+                        {isPending && (
+                          <p className="text-[11px] text-amber-700 dark:text-amber-300 mt-2 leading-normal font-medium">
+                            Justification en attente de traitement.
+                          </p>
+                        )}
+                        {isApproved && (
+                          <p className="text-[11px] text-slate-700 dark:text-slate-300 mt-2 leading-normal font-medium">
+                            {abs.justificationText || "Justification acceptée."}
+                          </p>
+                        )}
+                        {(!justificationStatus || isRejected) && (
                           <button
                             type="button"
                             onClick={() => handleOpenJustificationModal(abs)}
@@ -1863,7 +1890,8 @@ export default function ParentPortal({
                           </button>
                         )}
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </motion.div>
