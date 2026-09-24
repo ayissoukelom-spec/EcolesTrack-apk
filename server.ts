@@ -334,6 +334,16 @@ app.post("/api/mobile/parent/login", rateLimit(15, 60000), async (req, res) => {
   }
 
   const session = await AuthService.createSession(user.id, user.role);
+
+  try {
+    await dbQuery(`
+      INSERT INTO user_login_events (user_id, role, school_id, client_type)
+      VALUES ($1, $2, $3, $4)
+    `, [Number(user.id), user.role, user.activeSchoolId ? Number(user.activeSchoolId) : null, "android"]);
+  } catch {
+    logger.warn("Impossible d'enregistrer l'événement de connexion Android; le login continue.");
+  }
+
   const parentDetails = {
     id: user.id,
     name: user.name,
