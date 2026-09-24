@@ -615,11 +615,17 @@ public class MainActivity extends AppCompatActivity {
     private void requestCameraPermissionIfNeeded() {
         if (!cameraPermissionRequested && !hasCameraPermission()) {
             cameraPermissionRequested = true;
-            ActivityCompat.requestPermissions(
-                    this,
-                    new String[]{android.Manifest.permission.CAMERA},
-                    REQUEST_CAMERA_PERMISSION
-            );
+            try {
+                ActivityCompat.requestPermissions(
+                        this,
+                        new String[]{android.Manifest.permission.CAMERA},
+                        REQUEST_CAMERA_PERMISSION
+                );
+            } catch (IllegalStateException | SecurityException e) {
+                cameraPermissionRequested = false;
+                cameraCapturePending = false;
+                Log.e("EcoleTrackCamera", "Unable to request CAMERA permission", e);
+            }
             return;
         }
 
@@ -680,7 +686,7 @@ public class MainActivity extends AppCompatActivity {
 
         try {
             createCameraImageFile();
-        } catch (IOException e) {
+        } catch (IOException | IllegalArgumentException e) {
             Log.e("EcoleTrackCamera", "Unable to create temporary photo file for direct camera capture", e);
             return;
         }
@@ -693,16 +699,27 @@ public class MainActivity extends AppCompatActivity {
         Log.d("EcoleTrackCamera", "Photo URI: " + cameraImageUri);
         cameraIntent.putExtra(MediaStore.EXTRA_OUTPUT, cameraImageUri);
         cameraIntent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        cameraIntent.setClipData(ClipData.newRawUri("camera_output", cameraImageUri));
         cameraIntent.putExtra("android.intent.extra.OUTPUT", cameraImageUri);
-        startActivityForResult(cameraIntent, FILE_CHOOSER_REQUEST_CODE);
+        try {
+            startActivityForResult(cameraIntent, FILE_CHOOSER_REQUEST_CODE);
+        } catch (ActivityNotFoundException | SecurityException | IllegalStateException e) {
+            Log.e("EcoleTrackCamera", "Unable to launch camera capture", e);
+            cameraImageUri = null;
+        }
     }
 
     private void openCameraCapture(ValueCallback<Uri[]> callback, WebChromeClient.FileChooserParams params) {
+        pendingFileChooserCallback = callback;
+        pendingFileChooserParams = params;
+        cameraCapturePending = true;
+
         if (!hasCameraPermission()) {
             requestCameraPermissionIfNeeded();
             return;
         }
 
+        cameraCapturePending = false;
         launchCameraCapture();
     }
 
@@ -741,7 +758,7 @@ public class MainActivity extends AppCompatActivity {
                     captureIntent.putExtra(MediaStore.EXTRA_OUTPUT, cameraImageUri);
                     captureIntent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION);
                     captureIntent.putExtra("android.intent.extra.OUTPUT", cameraImageUri);
-                } catch (IOException e) {
+                } catch (IOException | IllegalArgumentException e) {
                     Log.e(TAG, "Unable to create temporary photo file for capture", e);
                     captureIntent = null;
                 }
@@ -750,10 +767,16 @@ public class MainActivity extends AppCompatActivity {
 
         Intent chooserIntent = Intent.createChooser(contentSelectionIntent, "Choisir un fichier");
         if (captureIntent != null) {
+            captureIntent.setClipData(ClipData.newRawUri("camera_output", cameraImageUri));
             chooserIntent.putExtra(Intent.EXTRA_INITIAL_INTENTS, new Intent[]{captureIntent});
         }
 
-        startActivityForResult(chooserIntent, FILE_CHOOSER_REQUEST_CODE);
+        try {
+            startActivityForResult(chooserIntent, FILE_CHOOSER_REQUEST_CODE);
+        } catch (ActivityNotFoundException | SecurityException | IllegalStateException e) {
+            Log.e(TAG, "Unable to launch file chooser with camera option", e);
+            resetFileChooserCallback();
+        }
     }
 
     private String readCameraPayloadAsBase64(Uri uri) {
@@ -1064,6 +1087,8 @@ public class MainActivity extends AppCompatActivity {
         super.onDestroy();
         unregisterReceiver(fcmTokenReceiver);
         resetFileChooserCallback();
+        cameraPermissionRequested = false;
+        cameraCapturePending = false;
         Log.d(TAG, "[MainActivity] onDestroy ts=" + System.currentTimeMillis() + " url=" + (webView != null ? webView.getUrl() : "null"));
     }
 
