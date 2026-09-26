@@ -19,6 +19,7 @@ import ParentPortal from "./components/ParentPortal";
 import ThemeToggle from "./components/ThemeToggle";
 import { Parent, Child, AppNotification } from "./types";
 import { parseJsonSafe, withApiBase } from "./utils/http";
+import { getConfirmedPushAssociationKey, getPushAssociationKey, PushAssociationQueue, shouldRegisterPushAssociation, withPushAssociationTimeout } from "./utils/pushAssociation";
 
 export default function App() {
   const [token, setToken] = useState<string | null>(() => localStorage.getItem("ecoletrack_token"));
@@ -203,8 +204,14 @@ export default function App() {
   const [notificationTarget, setNotificationTarget] = useState<string | null>(null);
   const [notificationTargetSignal, setNotificationTargetSignal] = useState(0);
   const [notificationAlertMenu, setNotificationAlertMenu] = useState<"notes" | "homework" | "absences" | "info" | null>(null);
-  const lastRegisteredPushTokenRef = useRef<string | null>(null);
-  const registeringPushTokenRef = useRef<string | null>(null);
+  const lastRegisteredPushAssociationRef = useRef<string | null>(null);
+  const registeringPushAssociationRef = useRef<string | null>(null);
+  const pushSessionGenerationRef = useRef(0);
+  const activePushAssociationRef = useRef<string | null>(null);
+  const pushAssociationQueueRef = useRef<PushAssociationQueue | null>(null);
+  if (pushAssociationQueueRef.current === null) {
+    pushAssociationQueueRef.current = new PushAssociationQueue();
+  }
   const deviceIdRef = useRef<string | null>(null);
 
   const getDeviceId = () => {
@@ -312,30 +319,66 @@ export default function App() {
 
   useEffect(() => {
     const pushToken = fcmToken;
-    if (!token || !pushToken) {
+    if (!token || !parent?.id || !pushToken) {
+      activePushAssociationRef.current = null;
       console.log("[FCM_DEBUG] registerPushToken skipped because token or pushToken missing", { token: !!token, pushToken: !!pushToken });
       return;
     }
 
-    console.log("[FCM_DEBUG] useEffect triggering registerPushToken", { token: !!token, pushTokenLength: pushToken.length });
-
-    if (lastRegisteredPushTokenRef.current === pushToken || registeringPushTokenRef.current === pushToken) {
+    const deviceId = getDeviceId();
+    const associationKey = getPushAssociationKey(parent.id, deviceId, pushToken);
+    if (!associationKey) {
+      activePushAssociationRef.current = null;
       return;
     }
 
-    registeringPushTokenRef.current = pushToken;
+    activePushAssociationRef.current = associationKey;
+    const sessionGeneration = pushSessionGenerationRef.current;
+    const registrationAttemptKey = JSON.stringify([sessionGeneration, associationKey]);
+    console.log("[FCM_DEBUG] useEffect triggering registerPushToken", { parentId: parent.id, tokenPresent: !!pushToken });
+
+    if (!shouldRegisterPushAssociation(
+      associationKey,
+      lastRegisteredPushAssociationRef.current,
+      registeringPushAssociationRef.current,
+    )) {
+      return;
+    }
+
+    registeringPushAssociationRef.current = registrationAttemptKey;
     console.log("[FCM_DEBUG] Calling registerPushTokenWithBackoff from App.tsx");
 
-    void (async () => {
-      const success = await tryRegisterPushTokenWithBackoff(pushToken);
-      if (success) {
-        lastRegisteredPushTokenRef.current = pushToken;
+    const registration = pushAssociationQueueRef.current.enqueue(async () => {
+      if (activePushAssociationRef.current !== associationKey
+        || pushSessionGenerationRef.current !== sessionGeneration) {
+        return false;
       }
-      if (registeringPushTokenRef.current === pushToken) {
-        registeringPushTokenRef.current = null;
-      }
-    })();
-  }, [token, fcmToken]);
+
+      return tryRegisterPushTokenWithBackoff(pushToken, () =>
+        activePushAssociationRef.current === associationKey
+        && pushSessionGenerationRef.current === sessionGeneration
+      );
+    });
+
+    void registration
+      .then((success) => {
+        const confirmedKey = getConfirmedPushAssociationKey(
+          success,
+          associationKey,
+          activePushAssociationRef.current,
+          pushSessionGenerationRef.current === sessionGeneration,
+        );
+        if (confirmedKey) lastRegisteredPushAssociationRef.current = confirmedKey;
+      })
+      .catch((error) => {
+        console.error("[FCM_DEBUG] queued token registration failed", error);
+      })
+      .finally(() => {
+        if (registeringPushAssociationRef.current === registrationAttemptKey) {
+          registeringPushAssociationRef.current = null;
+        }
+      });
+  }, [token, fcmToken, parent?.id]);
 
   const isMobileProductionMode = (() => {
     const envFlag = (import.meta as any)?.env?.VITE_MOBILE_PRODUCTION === "true";
@@ -362,14 +405,17 @@ export default function App() {
 
     try {
       console.log("[FCM] URL register:", withApiBase("/api/mobile/parent/devices/register-push-token"));
-      const response = await performProtectedRequest((authToken) => fetch(withApiBase("/api/mobile/parent/devices/register-push-token"), {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${authToken}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ pushToken, platform: "android", appVersion: "1.0.0", deviceId })
-      }));
+      const response = await withPushAssociationTimeout((signal) =>
+        performProtectedRequest((authToken) => fetch(withApiBase("/api/mobile/parent/devices/register-push-token"), {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${authToken}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ pushToken, platform: "android", appVersion: "1.0.0", deviceId }),
+          signal
+        }))
+      );
 
       if (!response) {
         // performProtectedRequest returned null (likely auth refresh failed)
@@ -401,10 +447,11 @@ export default function App() {
     }
   };
 
-  const tryRegisterPushTokenWithBackoff = async (pushToken: string) => {
+  const tryRegisterPushTokenWithBackoff = async (pushToken: string, shouldContinue: () => boolean = () => true) => {
     const MAX_ATTEMPTS = 5;
     const BASE_DELAY_MS = 1000;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      if (!shouldContinue()) return false;
       try {
         const result = await registerPushToken(pushToken);
         if (result.success) return true;
@@ -461,6 +508,8 @@ export default function App() {
 
   // Handlers for session authentication
   const handleLoginSuccess = (newToken: string, newParent: Parent, newRefreshToken: string) => {
+    pushSessionGenerationRef.current += 1;
+    activePushAssociationRef.current = getPushAssociationKey(newParent.id, deviceIdRef.current, fcmToken);
     console.log("[AUTH_DEBUG] handleLoginSuccess new session stored", {
       hasToken: !!newToken,
       tokenLength: newToken.length,
@@ -495,6 +544,10 @@ export default function App() {
       url: typeof window !== "undefined" ? window.location.href : null
     });
 
+    pushSessionGenerationRef.current += 1;
+    activePushAssociationRef.current = null;
+    lastRegisteredPushAssociationRef.current = null;
+
     localStorage.removeItem("ecoletrack_token");
     localStorage.removeItem("ecoletrack_refresh_token");
     localStorage.removeItem("ecoletrack_parent");
@@ -517,14 +570,24 @@ export default function App() {
       logoutPayload.deviceId = currentDeviceId;
     }
 
-    void fetch(withApiBase("/api/mobile/parent/logout"), {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${currentToken}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(logoutPayload)
-    }).catch(() => undefined);
+    const logoutRequest = pushAssociationQueueRef.current.enqueue(async () => {
+      const response = await withPushAssociationTimeout((signal) => fetch(withApiBase("/api/mobile/parent/logout"), {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${currentToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(logoutPayload),
+        signal
+      }));
+      if (!response.ok) {
+        throw new Error(`FCM association logout failed with HTTP ${response.status}`);
+      }
+    });
+
+    void logoutRequest.catch((error) => {
+      console.warn("[FCM_DEBUG] Logout association status is uncertain; next login will register again", error);
+    });
   };
 
   // Deep link push click handling
