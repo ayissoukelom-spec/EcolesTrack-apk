@@ -17,4 +17,5 @@ login_webview_logs.txt
 .gradle/
 **/.gradle/
 # Android generated web assets
-mobile/android-webview/app/src/main/assets/assets/
+app/release.keystore
+mobile/android-webview/app/release.keystore
