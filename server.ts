@@ -14,6 +14,7 @@ import { createServer as createViteServer } from "vite";
 import { store } from "./backend/store";
 import { dbQuery, initializeMobileTables } from "./backend/postgres";
 import { getExpectedPeriodTypeForCycle } from "./src/utils/schoolPeriod";
+import { calculateCurrentTermAverage } from "./src/utils/termAverage";
 import { helmetHeaders, requestIdMiddleware, sanitizePayload } from "./backend/middlewares/security";
 import { Logger } from "./backend/utils/logger";
 import { AuthService } from "./backend/services/auth";
@@ -775,74 +776,25 @@ app.get("/api/mobile/parent/children/:childId/grades", requireAuth, requireParen
     );
 
     const gradesByEvaluation = new Map<number, typeof rawRows.rows>();
-    rawRows.rows.forEach((row) => {
-      const existing = gradesByEvaluation.get(row.evaluation_id) ?? [];
-      existing.push(row);
-      gradesByEvaluation.set(row.evaluation_id, existing);
-    });
-
-    const usedEvaluations: string[] = [];
-    const ignoredEvaluations: string[] = [];
-    let totalWeighted = 0;
-    let totalCoefficient = 0;
-
-    if (activeTerm) {
-      for (const [evaluationId, rows] of gradesByEvaluation.entries()) {
-        const evaluation = rows[0];
-        const evaluationDate = String(evaluation.date).slice(0, 10);
-        const termMatches = evaluation.term_id === activeTerm.id || (
-          evaluation.term_id == null &&
-          evaluationDate >= activeTerm.start_date &&
-          evaluationDate <= activeTerm.end_date
-        );
-        const countInBulletin = evaluation.count_in_bulletin !== false;
-
-        if (!termMatches) {
-          ignoredEvaluations.push(`${evaluation.subject} ${evaluation.score}/${evaluation.max_score ?? 20} -> term_id=${evaluation.term_id}`);
-          continue;
-        }
-
-        termEvaluationCount += 1;
-
-        if (!countInBulletin) {
-          ignoredEvaluations.push(`${evaluation.subject} ${evaluation.score}/${evaluation.max_score ?? 20} -> countInBulletin=false`);
-          continue;
-        }
-
-        const latestGrade = rows.sort((a, b) => {
-          const aTime = new Date(a.updated_at || a.created_at).getTime();
-          const bTime = new Date(b.updated_at || b.created_at).getTime();
-          return bTime - aTime;
-        })[0];
-
-        const rawScore = latestGrade.score.trim().replace(',', '.');
-        const rawValue = Number(rawScore);
-        if (!Number.isFinite(rawValue)) {
-          ignoredEvaluations.push(`${evaluation.subject} ${latestGrade.score} -> invalid raw score`);
-          continue;
-        }
-
-        const maxScore = Number(evaluation.max_score ?? 20);
-        if (!Number.isFinite(maxScore) || maxScore <= 0) {
-          ignoredEvaluations.push(`${evaluation.subject} ${rawValue}/${evaluation.max_score} -> invalid maxScore`);
-          continue;
-        }
-
-        const coefficient = Number(evaluation.coefficient ?? 1);
-        if (!Number.isFinite(coefficient) || coefficient <= 0) {
-          ignoredEvaluations.push(`${evaluation.subject} ${rawValue}/${maxScore} -> invalid coefficient`);
-          continue;
-        }
-
-        const normalizedScore = (rawValue / maxScore) * 20;
-        totalWeighted += normalizedScore * coefficient;
-        totalCoefficient += coefficient;
-
-        usedEvaluations.push(`${evaluation.subject} ${rawValue}/${maxScore} coef ${coefficient}`);
-      }
-
-      termAverage = totalCoefficient > 0 ? Number((totalWeighted / totalCoefficient).toFixed(2)) : null;
-    }
+    const averageResult = calculateCurrentTermAverage(rawRows.rows.map((row) => ({
+      evaluationId: row.evaluation_id,
+      termId: row.term_id,
+      subject: row.subject,
+      coefficient: row.coefficient,
+      maxScore: row.max_score,
+      countInBulletin: row.count_in_bulletin,
+      date: row.date,
+      score: row.score,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    })), activeTerm ? {
+      id: activeTerm.id,
+      startDate: activeTerm.start_date,
+      endDate: activeTerm.end_date,
+    } : null);
+    termAverage = averageResult.termAverage;
+    termEvaluationCount = averageResult.termEvaluationCount;
+    const { usedEvaluations, ignoredEvaluations } = averageResult;
 
     console.log('[SERVER TERM AVERAGE DEBUG]');
     console.log('[SERVER TERM AVERAGE DEBUG] Student:', studentName);
