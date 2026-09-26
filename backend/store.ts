@@ -391,12 +391,15 @@ export class PostgresStore {
     const userId = Number(parentId);
     if (!Number.isInteger(userId)) return [];
 
-    const { rows } = await dbQuery<{ id: number; first_name: string; last_name: string; birth_date: string | null; parent_id: number | null; class_name: string | null; photo_available: boolean }>(`
+        const { rows } = await dbQuery<{ id: number; first_name: string; last_name: string; birth_date: string | null; parent_id: number | null; class_name: string | null; cycle_code: string | null; photo_available: boolean }>(`
       SELECT s.id, s.first_name, s.last_name, s.birth_date, s.parent_id,
              (s.photo_data IS NOT NULL) AS photo_available,
-             c.name AS class_name
+            c.name AS class_name,
+            cy.code AS cycle_code
       FROM students s
       LEFT JOIN classes c ON c.id = s.class_id
+          LEFT JOIN levels l ON l.id = c.level_id
+          LEFT JOIN cycles cy ON cy.id = l.cycle_id
       LEFT JOIN parents p ON p.id = s.parent_id
       WHERE p.user_id = $1
     `, [userId]);
@@ -414,6 +417,7 @@ export class PostgresStore {
       birthDate: row.birth_date ?? '',
       parentId: row.parent_id ?? null,
       className: row.class_name ?? '',
+      cycleCode: row.cycle_code,
       photoAvailable: row.photo_available,
     }));
   }
@@ -637,8 +641,8 @@ WHERE a.id = $2
     const childIdNum = Number(childId);
     if (!Number.isInteger(childIdNum)) return [];
 
-    const { rows } = await dbQuery<{ id: number; evaluation_id: number; subject: string; score: string; coefficient: number | null; title: string; date: string; max_score: number; created_at: string }>(`
-      SELECT g.id, g.evaluation_id, e.subject, g.score, e.coefficient, e.title, e.date, e.max_score, g.created_at
+    const { rows } = await dbQuery<{ id: number; evaluation_id: number; term_id: number | null; subject: string; score: string; coefficient: number | null; title: string; date: string; max_score: number; created_at: string }>(`
+      SELECT g.id, g.evaluation_id, e.term_id, e.subject, g.score, e.coefficient, e.title, e.date, e.max_score, g.created_at
       FROM grades g
       JOIN evaluations e ON e.id = g.evaluation_id
       WHERE g.student_id = $1
@@ -677,6 +681,7 @@ WHERE a.id = $2
         id: String(row.id),
         childId,
         evaluationId: String(row.evaluation_id),
+        termId: row.term_id != null ? String(row.term_id) : null,
         subject: row.subject,
         // `grade` is the normalized score on a /20 scale (backward compatible)
         grade: normalizedScore,

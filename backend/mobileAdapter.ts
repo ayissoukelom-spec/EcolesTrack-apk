@@ -14,6 +14,7 @@ export interface MobileChild {
   firstName: string;
   lastName: string;
   className: string;
+  cycleCode?: string | null;
   birthDate: string;
   gender?: string;
   avatarUrl: string;
@@ -38,6 +39,7 @@ export interface WebStudentRow {
   schoolId?: number | null;
   classId?: number | null;
   className?: string | null;
+  cycleCode?: string | null;
   parentId?: number | null;
   photoAvailable?: boolean;
 }
@@ -64,6 +66,7 @@ export function mapWebStudentToChild(row: WebStudentRow): MobileChild {
     firstName: row.firstName,
     lastName: row.lastName,
     className: row.className ?? '',
+    cycleCode: row.cycleCode ?? null,
     birthDate: row.birthDate ?? '',
     gender: row.gender ?? undefined,
     avatarUrl: row.photoAvailable ? `/api/mobile/parent/children/${row.id}/photo` : '',

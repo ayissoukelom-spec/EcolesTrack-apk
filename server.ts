@@ -13,6 +13,7 @@ import multer from "multer";
 import { createServer as createViteServer } from "vite";
 import { store } from "./backend/store";
 import { dbQuery, initializeMobileTables } from "./backend/postgres";
+import { getExpectedPeriodTypeForCycle } from "./src/utils/schoolPeriod";
 import { helmetHeaders, requestIdMiddleware, sanitizePayload } from "./backend/middlewares/security";
 import { Logger } from "./backend/utils/logger";
 import { AuthService } from "./backend/services/auth";
@@ -700,24 +701,55 @@ app.get("/api/mobile/parent/children/:childId/grades", requireAuth, requireParen
 
   const grades = await store.getGradesOfChild(childId);
   let termAverage: number | null = null;
+  let cycleCode: string | null = null;
+  let activeTerm: { id: number; name: string; period_type: string; start_date: string; end_date: string } | null = null;
+  let termEvaluationCount = 0;
 
   try {
     const childIdNum = Number(childId);
-    const studentResult = await dbQuery<{ first_name: string; last_name: string; school_id: number | null }>(
-      `SELECT first_name, last_name, school_id FROM students WHERE id = $1`,
+    const studentResult = await dbQuery<{
+      first_name: string;
+      last_name: string;
+      school_id: number | null;
+      academic_year_id: number | null;
+      cycle_id: number | null;
+      cycle_code: string | null;
+    }>(
+      `SELECT s.first_name, s.last_name, s.school_id, cls.academic_year_id,
+              cy.id AS cycle_id, cy.code AS cycle_code
+       FROM students s
+       LEFT JOIN classes cls ON cls.id = s.class_id
+       LEFT JOIN levels lvl ON lvl.id = cls.level_id
+       LEFT JOIN cycles cy ON cy.id = lvl.cycle_id
+       WHERE s.id = $1`,
       [childIdNum]
     );
     const studentRow = studentResult.rows[0];
     const studentName = studentRow ? `${studentRow.first_name} ${studentRow.last_name}` : 'Unknown';
+    cycleCode = studentRow?.cycle_code ?? null;
+    const expectedPeriodType = getExpectedPeriodTypeForCycle(cycleCode);
 
-    const termResult = studentRow?.school_id != null
-      ? await dbQuery<{ id: number; name: string }>(
-          `SELECT id, name FROM school_terms WHERE school_id = $1 AND is_active = true ORDER BY order_index DESC LIMIT 1`,
-          [studentRow.school_id]
+    const termResult = expectedPeriodType && studentRow?.academic_year_id != null && studentRow.cycle_id != null
+      ? await dbQuery<{ id: number; name: string; period_type: string; start_date: string; end_date: string }>(
+          `SELECT st.id, st.name, COALESCE(st.period_type, template.period_type) AS period_type,
+                  st.start_date, st.end_date
+           FROM school_terms st
+           LEFT JOIN cycle_period_templates template ON template.id = st.template_id
+           WHERE (st.school_id = $1 OR st.school_id IS NULL)
+             AND st.academic_year_id = $2
+             AND st.is_active = true
+             AND (st.cycle_id = $3 OR st.cycle_id IS NULL)
+             AND COALESCE(st.period_type, template.period_type) = $4
+             AND st.start_date IS NOT NULL
+             AND st.end_date IS NOT NULL
+             AND to_char(CURRENT_DATE, 'YYYY-MM-DD') BETWEEN st.start_date AND st.end_date
+           ORDER BY (st.school_id = $1) DESC, st.start_date DESC, st.order_index DESC
+           LIMIT 1`,
+          [studentRow.school_id, studentRow.academic_year_id, studentRow.cycle_id, expectedPeriodType]
         )
       : { rows: [] };
 
-    const activeTerm = termResult.rows[0] ?? null;
+    activeTerm = termResult.rows[0] ?? null;
     const termName = activeTerm ? activeTerm.name : 'Aucun terme actif';
 
     const rawRows = await dbQuery<{
@@ -757,13 +789,20 @@ app.get("/api/mobile/parent/children/:childId/grades", requireAuth, requireParen
     if (activeTerm) {
       for (const [evaluationId, rows] of gradesByEvaluation.entries()) {
         const evaluation = rows[0];
-        const termMatches = evaluation.term_id === activeTerm.id || evaluation.term_id == null;
+        const evaluationDate = String(evaluation.date).slice(0, 10);
+        const termMatches = evaluation.term_id === activeTerm.id || (
+          evaluation.term_id == null &&
+          evaluationDate >= activeTerm.start_date &&
+          evaluationDate <= activeTerm.end_date
+        );
         const countInBulletin = evaluation.count_in_bulletin !== false;
 
         if (!termMatches) {
           ignoredEvaluations.push(`${evaluation.subject} ${evaluation.score}/${evaluation.max_score ?? 20} -> term_id=${evaluation.term_id}`);
           continue;
         }
+
+        termEvaluationCount += 1;
 
         if (!countInBulletin) {
           ignoredEvaluations.push(`${evaluation.subject} ${evaluation.score}/${evaluation.max_score ?? 20} -> countInBulletin=false`);
@@ -818,7 +857,17 @@ app.get("/api/mobile/parent/children/:childId/grades", requireAuth, requireParen
     termAverage = null;
   }
 
-  return res.json({ grades, termAverage });
+  const period = activeTerm && getExpectedPeriodTypeForCycle(cycleCode) === activeTerm.period_type
+    ? {
+        id: String(activeTerm.id),
+        name: activeTerm.name,
+        periodType: activeTerm.period_type,
+        startDate: activeTerm.start_date,
+        endDate: activeTerm.end_date,
+      }
+    : null;
+
+  return res.json({ grades, cycleCode, period, termAverage, termEvaluationCount });
 });
 
 // 7. GET /api/mobile/parent/notifications

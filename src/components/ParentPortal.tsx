@@ -11,8 +11,9 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import logoImage from "../assets/logo.png";
 import ThemeToggle from "./ThemeToggle";
-import { Parent, Child, Absence, Grade, AppNotification } from "../types";
+import { Parent, Child, Absence, Grade, AppNotification, ChildGradesResponse } from "../types";
 import { getApiErrorMessage, parseJsonSafe, withApiBase } from "../utils/http";
+import { getSchoolPeriodLabel, isGradeInSchoolPeriod, SCHOOL_PERIOD_FALLBACK_LABEL } from "../utils/schoolPeriod";
 
 interface ParentPortalProps {
   token: string | null;
@@ -73,6 +74,9 @@ export default function ParentPortal({
   const [absences, setAbsences] = useState<Absence[]>([]);
   const [grades, setGrades] = useState<Grade[]>([]);
   const [termAverageApi, setTermAverageApi] = useState<number | null>(null);
+  const [termPeriod, setTermPeriod] = useState<ChildGradesResponse["period"]>(null);
+  const [termCycleCode, setTermCycleCode] = useState<string | null>(null);
+  const [termEvaluationCount, setTermEvaluationCount] = useState(0);
 
   const [activeSchoolId, setActiveSchoolId] = useState("");
   const [localNotifications, setLocalNotifications] = useState<AppNotification[]>(notifications);
@@ -104,7 +108,7 @@ export default function ParentPortal({
     }
   }, [notificationAlertMenu, setActiveTab]);
   const [gradeSubjectFilter, setGradeSubjectFilter] = useState("all");
-  const [gradePeriodFilter, setGradePeriodFilter] = useState<"all" | "7d" | "30d" | "trimester">("all");
+  const [gradePeriodFilter, setGradePeriodFilter] = useState<"all" | "7d" | "30d" | "school-period">("all");
   const MAX_JUSTIFICATION_ATTACHMENTS = 5;
   const [showJustificationModal, setShowJustificationModal] = useState<Absence | null>(null);
   const [justificationReason, setJustificationReason] = useState("");
@@ -210,6 +214,9 @@ export default function ParentPortal({
   }, []);
 
   const currentChild = selectedChild || children[0] || null;
+  const activeSchoolPeriod = !currentChild?.cycleCode || currentChild.cycleCode === termCycleCode ? termPeriod : null;
+  const schoolPeriodLabel = getSchoolPeriodLabel(termCycleCode, activeSchoolPeriod?.periodType);
+  const hasConfiguredSchoolPeriod = schoolPeriodLabel !== SCHOOL_PERIOD_FALLBACK_LABEL;
 
   const handleSessionExpired = () => {
     if (!hasCompletedProtectedLoadRef.current) {
@@ -390,6 +397,10 @@ export default function ParentPortal({
     if (token && selectedChildId) {
       fetchChildAbsences(selectedChildId);
       fetchChildGrades(selectedChildId);
+      setTermAverageApi(null);
+      setTermCycleCode(null);
+      setTermPeriod(null);
+      setTermEvaluationCount(0);
       setGradeSubjectFilter("all");
       setGradePeriodFilter("all");
     }
@@ -409,16 +420,22 @@ export default function ParentPortal({
       return [...subjectFiltered].sort((a, b) => new Date(b.publishedAt ?? b.date).getTime() - new Date(a.publishedAt ?? a.date).getTime());
     }
 
+    if (gradePeriodFilter === "school-period") {
+      return subjectFiltered
+        .filter((grade) => isGradeInSchoolPeriod(grade, activeSchoolPeriod))
+        .sort((a, b) => new Date(b.publishedAt ?? b.date).getTime() - new Date(a.publishedAt ?? a.date).getTime());
+    }
+
     const now = Date.now();
-    const days = gradePeriodFilter === "7d" ? 7 : gradePeriodFilter === "30d" ? 30 : 90;
+    const days = gradePeriodFilter === "7d" ? 7 : 30;
     const threshold = now - (days * 24 * 60 * 60 * 1000);
 
     return subjectFiltered
       .filter((g) => new Date(g.date).getTime() >= threshold)
       .sort((a, b) => new Date(b.publishedAt ?? b.date).getTime() - new Date(a.publishedAt ?? a.date).getTime());
-  }, [grades, gradeSubjectFilter, gradePeriodFilter]);
+  }, [grades, gradeSubjectFilter, gradePeriodFilter, activeSchoolPeriod]);
 
-  const displayedGradesAverage = (gradePeriodFilter === "trimester" && termAverageApi != null)
+  const displayedGradesAverage = (gradePeriodFilter === "school-period" && termAverageApi != null)
     ? termAverageApi.toFixed(2)
     : calculateAverage(displayedGrades);
 
@@ -726,17 +743,26 @@ export default function ParentPortal({
       if (!response) {
         return;
       }
-      const serverAverageHeader = response.headers.get('X-Student-Term-Average');
       if (response.ok) {
         hasCompletedProtectedLoadRef.current = true;
-        const data = await parseJsonSafe<{ grades?: Grade[]; termAverage?: number }>(response);
-        const gradesData = Array.isArray((data as any)) ? (data as any) : (data && Array.isArray((data as any).grades) ? (data as any).grades : []);
+        const data = await parseJsonSafe<ChildGradesResponse | Grade[]>(response);
+        const payload = Array.isArray(data) ? null : data;
+        const gradesData = Array.isArray(data) ? data : (Array.isArray(data?.grades) ? data.grades : []);
         console.log("[APK DEBUG] Grades received from API:", gradesData.length, "items");
-        // Determine average from body or header
-        const bodyAverage = (data && (data as any).termAverage != null) ? Number((data as any).termAverage) : null;
-        const headerAverage = serverAverageHeader ? Number(serverAverageHeader) : null;
-        const chosenAverage = bodyAverage != null ? bodyAverage : headerAverage;
-        if (chosenAverage != null) {
+        const bodyAverage = payload?.termAverage != null ? Number(payload.termAverage) : null;
+        const chosenAverage = bodyAverage;
+        const requestedChild = children.find((child) => child.id === childId)
+          ?? (selectedChild?.id === childId ? selectedChild : null);
+        const cycleMatchesChild = !requestedChild?.cycleCode || requestedChild.cycleCode === payload?.cycleCode;
+        const periodIsConfigured = Boolean(
+          payload?.period &&
+          cycleMatchesChild &&
+          getSchoolPeriodLabel(payload.cycleCode, payload.period.periodType) !== SCHOOL_PERIOD_FALLBACK_LABEL
+        );
+        setTermCycleCode(payload?.cycleCode ?? null);
+        setTermPeriod(periodIsConfigured ? payload?.period ?? null : null);
+        setTermEvaluationCount(periodIsConfigured ? Number(payload?.termEvaluationCount ?? 0) : 0);
+        if (periodIsConfigured && chosenAverage != null) {
           console.log(`[APK DEBUG] Average received from API: ${chosenAverage}`);
           setTermAverageApi(chosenAverage);
         } else {
@@ -744,14 +770,14 @@ export default function ParentPortal({
         }
 
         try {
-          const trimesterGrades = gradesData.filter((gd: any) => {
-            try { return new Date(gd.date).getTime() >= trimesterStart.getTime(); } catch { return false; }
-          });
+          const periodGrades = periodIsConfigured
+            ? gradesData.filter((grade) => isGradeInSchoolPeriod(grade, payload?.period))
+            : [];
 
           const studentName = formatChildName(currentChild) || 'unknown';
-          const displayedAverage = (gradePeriodFilter === 'trimester' && chosenAverage != null)
+          const displayedAverage = (gradePeriodFilter === 'school-period' && chosenAverage != null && periodIsConfigured)
             ? Number(chosenAverage).toFixed(2)
-            : (calculateAverage(trimesterGrades) ?? '—');
+            : (calculateAverage(periodGrades) ?? '—');
 
           console.log('[DEBUG AVERAGE] START');
           console.log('[DEBUG AVERAGE] childId:', childId);
@@ -759,7 +785,7 @@ export default function ParentPortal({
           console.log('[DEBUG AVERAGE] serverAverage:', chosenAverage != null ? Number(chosenAverage).toFixed(2) : 'null');
           console.log('[DEBUG AVERAGE] displayedAverage:', displayedAverage);
 
-          trimesterGrades.forEach((g: any) => {
+          periodGrades.forEach((g: any) => {
             const raw = typeof g.rawScore === 'number' ? g.rawScore : g.grade;
             const max = g.maxScore ?? 20;
             const coeff = g.coefficient ?? 1;
@@ -849,9 +875,11 @@ export default function ParentPortal({
     return date;
   }, []);
 
-  const currentTrimesterGrades = useMemo(
-    () => grades.filter((grade) => new Date(grade.date).getTime() >= trimesterStart.getTime()),
-    [grades, trimesterStart]
+  const currentPeriodGrades = useMemo(
+    () => hasConfiguredSchoolPeriod
+      ? grades.filter((grade) => isGradeInSchoolPeriod(grade, activeSchoolPeriod))
+      : [],
+    [grades, activeSchoolPeriod, hasConfiguredSchoolPeriod]
   );
 
   const currentTrimesterAbsences = useMemo(
@@ -887,21 +915,22 @@ export default function ParentPortal({
     return weekdays;
   };
 
-  const currentTrimesterAverage = termAverageApi != null ? termAverageApi.toFixed(2) : calculateAverage(currentTrimesterGrades);
+  const currentPeriodAverage = hasConfiguredSchoolPeriod && termAverageApi != null ? termAverageApi.toFixed(2) : null;
   
   // Debug: Log current trimester info
   console.log("[APK DEBUG] Trimester filter info:", JSON.stringify({
-    trimesterStart: trimesterStart.toISOString(),
+    periodId: activeSchoolPeriod?.id ?? null,
+    periodType: activeSchoolPeriod?.periodType ?? null,
     currentDate: new Date().toISOString(),
     totalGradesCount: grades.length,
-    trimesterGradesCount: currentTrimesterGrades.length,
-    trimesterGrades: currentTrimesterGrades.map(g => ({
+    periodGradesCount: currentPeriodGrades.length,
+    periodGrades: currentPeriodGrades.map(g => ({
       subject: g.subject,
       grade: g.grade,
       rawScore: (g as any).rawScore,
       coefficient: g.coefficient,
       date: g.date,
-      inRange: new Date(g.date).getTime() >= trimesterStart.getTime()
+      inPeriod: isGradeInSchoolPeriod(g, activeSchoolPeriod)
     }))
   }, null, 2));
   
@@ -1531,11 +1560,15 @@ export default function ParentPortal({
 
                       <div className="mt-3 grid grid-cols-2 gap-2">
                         <div className="rounded-xl border border-indigo-200 dark:border-indigo-900 bg-indigo-50/90 dark:bg-indigo-950/60 p-3">
-                          <p className="text-[9px] font-bold uppercase tracking-wider text-indigo-700 dark:text-indigo-300">Note du trimestre</p>
-                          <p className="text-xl font-black text-indigo-900 dark:text-indigo-100 mt-1">
-                            {currentTrimesterAverage ? `${currentTrimesterAverage} / 20` : "-- / 20"}
+                          <p className="text-[9px] font-bold uppercase tracking-wider text-indigo-700 dark:text-indigo-300">
+                            {hasConfiguredSchoolPeriod ? schoolPeriodLabel : SCHOOL_PERIOD_FALLBACK_LABEL}
                           </p>
-                          <p className="text-[10px] text-indigo-700/80 dark:text-indigo-300/80 font-medium mt-0.5">{currentTrimesterGrades.length} évaluation(s)</p>
+                          <p className="text-xl font-black text-indigo-900 dark:text-indigo-100 mt-1">
+                            {currentPeriodAverage ? `${currentPeriodAverage} / 20` : "-- / 20"}
+                          </p>
+                          <p className="text-[10px] text-indigo-700/80 dark:text-indigo-300/80 font-medium mt-0.5">
+                            {hasConfiguredSchoolPeriod ? `${termEvaluationCount} évaluation(s)` : "Aucune période active disponible"}
+                          </p>
                         </div>
                         <div className="rounded-xl border border-rose-200 dark:border-rose-900 bg-rose-50/90 dark:bg-rose-950/50 p-3">
                           <p className="text-[9px] font-bold uppercase tracking-wider text-rose-700 dark:text-rose-300">Assiduité</p>
@@ -2150,13 +2183,15 @@ export default function ParentPortal({
                             <select
                               id="grade-period-filter"
                               value={gradePeriodFilter}
-                              onChange={(e) => setGradePeriodFilter(e.target.value as "all" | "7d" | "30d" | "trimester")}
+                              onChange={(e) => setGradePeriodFilter(e.target.value as "all" | "7d" | "30d" | "school-period")}
                               className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg py-1.5 px-2 text-[10px] font-semibold text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-full max-w-[190px]"
                             >
                               <option value="all">Toute periode</option>
                               <option value="7d">7 derniers jours</option>
                               <option value="30d">30 derniers jours</option>
-                              <option value="trimester">Trimestre</option>
+                              <option value="school-period" disabled={!hasConfiguredSchoolPeriod}>
+                                {activeSchoolPeriod?.name || SCHOOL_PERIOD_FALLBACK_LABEL}
+                              </option>
                             </select>
                           </div>
                         </div>

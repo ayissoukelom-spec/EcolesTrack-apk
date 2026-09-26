@@ -25,6 +25,7 @@ export interface Child {
   firstName: string;
   lastName: string;
   className: string;
+  cycleCode?: string | null;
   birthDate: string;
   gender?: string; // 'M' | 'F' or 'male' | 'female'
   avatarUrl: string;
@@ -56,6 +57,25 @@ export interface Grade {
   coefficient: number;
   examName: string;
   date: string;
+  termId?: string | null;
+}
+
+export type SchoolPeriodType = 'trimester' | 'semester';
+
+export interface ChildSchoolPeriod {
+  id: string;
+  name: string;
+  periodType: SchoolPeriodType;
+  startDate: string;
+  endDate: string;
+}
+
+export interface ChildGradesResponse {
+  grades: Grade[];
+  cycleCode: string | null;
+  period: ChildSchoolPeriod | null;
+  termAverage: number | null;
+  termEvaluationCount: number;
 }
 
 // App Push Notification types

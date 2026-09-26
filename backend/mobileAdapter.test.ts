@@ -30,6 +30,7 @@ test('maps the web student row to the mobile child shape', () => {
     schoolId: 7,
     classId: 3,
     className: '6ème A',
+    cycleCode: 'college',
     parentId: 42,
   });
 
@@ -38,6 +39,7 @@ test('maps the web student row to the mobile child shape', () => {
   assert.equal(result.firstName, 'Lina');
   assert.equal(result.lastName, 'Parent');
   assert.equal(result.className, '6ème A');
+  assert.equal(result.cycleCode, 'college');
   assert.equal(result.birthDate, '2014-09-01');
   assert.equal(result.avatarUrl, '');
 });
