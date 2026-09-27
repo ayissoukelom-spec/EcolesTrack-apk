@@ -14,6 +14,7 @@ import {
 import { initializeMobileTables, dbQuery, pool } from './postgres';
 import { logger } from './utils/logger';
 import { mapWebParentToMobileParent, mapWebStudentToChild } from './mobileAdapter';
+import { mapParentAbsenceRow, submitAbsenceJustificationForReview } from './absenceJustification';
 
 export interface MobileNotificationAttachment {
   id: number;
@@ -525,6 +526,8 @@ export class PostgresStore {
     period: string | null;
     is_justified: boolean;
     justification_reason: string | null;
+    justification_status: 'PENDING' | 'APPROVED' | 'REJECTED' | null;
+    rejection_reason: string | null;
     subject_name: string | null;
     start_time: string | null;
     end_time: string | null;
@@ -535,6 +538,8 @@ export class PostgresStore {
       a.period,
       a.is_justified,
       a.justification_reason,
+      a.justification_status,
+      a.rejection_reason,
       s.name AS subject_name,
       a.start_time,
       a.end_time
@@ -543,51 +548,11 @@ export class PostgresStore {
     WHERE a.student_id = $1
   `, [childIdNum]);
 
-  return rows.map((row) => ({
-    id: String(row.id),
-    childId,
-    date: row.date,
-    reason: row.is_justified ? 'Absence justifiée' : 'Absence non justifiée',
-    justified: row.is_justified,
-    justificationText: row.justification_reason ?? undefined,
-    subjectName: row.subject_name ?? undefined,
-    startTime: row.start_time ?? undefined,
-    endTime: row.end_time ?? undefined,
-    period: row.period ?? undefined,
-  }));
+  return rows.map((row) => mapParentAbsenceRow(row, childId));
 }
 
   public async justifyAbsence(absenceId: string, parentId: string, justificationReason: string): Promise<Absence | null> {
-    const { rows } = await dbQuery<{
-      id: string;
-student_id: string;
-date: string;
-reason: string;
-is_justified: boolean;
-justification_reason: string | null;
-    }>(`
-      UPDATE absences AS a
-      SET is_justified = true,
-          justification_reason = $1
-      FROM students AS s
-JOIN parents AS p ON p.id = s.parent_id
-WHERE a.id = $2
-  AND a.student_id = s.id
-  AND p.user_id = $3
-      RETURNING a.id, a.student_id, a.date, a.is_justified, a.justification_reason
-    `, [justificationReason, absenceId, parentId]);
-
-    if (rows.length === 0) return null;
-
-    const row = rows[0];
-    return {
-  id: String(row.id),
-  childId: String(row.student_id),
-  date: row.date,
-  reason: row.is_justified ? 'Absence justifiée' : 'Absence non justifiée',
-  justified: row.is_justified,
-  justificationText: row.justification_reason ?? undefined,
-};
+    return submitAbsenceJustificationForReview(dbQuery, absenceId, parentId, justificationReason);
   }
 
   public async addGrade(grade: Omit<Grade, 'id'>): Promise<Grade> {

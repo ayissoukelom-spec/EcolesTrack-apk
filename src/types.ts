@@ -38,6 +38,8 @@ export interface Absence {
   reason: string;
   justified: boolean;
   justificationText?: string;
+  justificationStatus?: 'PENDING' | 'APPROVED' | 'REJECTED' | null;
+  rejectionReason?: string;
   period?: string;
   subject?: string;
   subjectName?: string;
