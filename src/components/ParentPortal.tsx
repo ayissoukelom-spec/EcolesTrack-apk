@@ -1903,6 +1903,11 @@ export default function ParentPortal({
                             Motif du refus : {abs.rejectionReason}
                           </p>
                         )}
+                        {isRejected && (
+                          <p className="text-[11px] text-rose-700 dark:text-rose-300 mt-2 leading-normal font-medium">
+                            Veuillez vous présenter à l’établissement avec les justificatifs nécessaires.
+                          </p>
+                        )}
                         {isPending && (
                           <p className="text-[11px] text-amber-700 dark:text-amber-300 mt-2 leading-normal font-medium">
                             Justification en attente de traitement.
@@ -1913,7 +1918,7 @@ export default function ParentPortal({
                             {abs.justificationText || "Justification acceptée."}
                           </p>
                         )}
-                        {(!justificationStatus || isRejected) && (
+                        {!justificationStatus && (
                           <button
                             type="button"
                             onClick={() => handleOpenJustificationModal(abs)}

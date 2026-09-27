@@ -12,6 +12,7 @@ import { promises as fsPromises } from "fs";
 import multer from "multer";
 import { createServer as createViteServer } from "vite";
 import { store } from "./backend/store";
+import { AbsenceJustificationAlreadyRejectedError } from "./backend/absenceJustification";
 import { dbQuery, initializeMobileTables } from "./backend/postgres";
 import { getExpectedPeriodTypeForCycle } from "./src/utils/schoolPeriod";
 import { calculateCurrentTermAverage } from "./src/utils/termAverage";
@@ -98,6 +99,14 @@ const handleAbsenceJustificationUpload = (req: Request, res: Response, next: Nex
   });
 };
 
+async function removeTemporaryAbsenceJustificationFiles(files: Express.Multer.File[]) {
+  await Promise.all(files.map((file) => fsPromises.unlink(file.path).catch((error: any) => {
+    if (error?.code !== "ENOENT") {
+      console.error("Failed to remove temporary absence justification file:", error?.message || error);
+    }
+  })));
+}
+
 async function forwardAbsenceJustificationToWeb(absenceId: string, parentId: string, justificationReason: string, uploadedFile: Express.Multer.File) {
   const targetBaseUrl = webBackendUrl();
   if (!targetBaseUrl) {
@@ -144,6 +153,14 @@ async function forwardAbsenceJustificationToWeb(absenceId: string, parentId: str
   });
   if (!response.ok) {
     const responseBody = await response.text().catch(() => "");
+    try {
+      const errorPayload = JSON.parse(responseBody);
+      if (response.status === 409 && errorPayload?.code === "JUSTIFICATION_ALREADY_REJECTED") {
+        throw new AbsenceJustificationAlreadyRejectedError();
+      }
+    } catch (error) {
+      if (error instanceof AbsenceJustificationAlreadyRejectedError) throw error;
+    }
     throw new Error(`Web justification upload failed with status ${response.status}: ${responseBody.slice(0, 300)}`);
   }
 }
@@ -540,6 +557,9 @@ app.put("/api/absences/:absenceId/justify", requireAuth, requireParentRoleOnly, 
 
     return res.json(updatedAbsence);
   } catch (err: any) {
+    if (err instanceof AbsenceJustificationAlreadyRejectedError) {
+      return res.status(409).json({ error: err.message, code: err.code });
+    }
     console.error("Failed to justify absence:", err);
     return res.status(500).json({
       error: "Impossible de justifier l'absence pour le moment.",
@@ -571,6 +591,9 @@ app.put("/api/absences/:id/justify", requireAuth, requireParentRoleOnly, async (
 
     return res.json(updatedAbsence);
   } catch (err: any) {
+    if (err instanceof AbsenceJustificationAlreadyRejectedError) {
+      return res.status(409).json({ error: err.message, code: err.code });
+    }
     console.error("Failed to justify absence:", err);
     return res.status(500).json({
       error: "Impossible de justifier l'absence pour le moment.",
@@ -609,18 +632,20 @@ app.post("/api/absences/:id/justifications", requireAuth, requireParentRoleOnly,
   try {
     for (const uploadedFile of uploadedFiles) {
       await forwardAbsenceJustificationToWeb(id, parentId, justificationReason, uploadedFile);
-      await fsPromises.unlink(uploadedFile.path).catch((cleanupError: any) => {
-        console.error("Failed to remove temporary APK justification file:", cleanupError?.message || cleanupError);
-      });
     }
 
     return res.status(201).json({ success: true });
   } catch (err: any) {
+    if (err instanceof AbsenceJustificationAlreadyRejectedError) {
+      return res.status(409).json({ error: err.message, code: err.code });
+    }
     console.error("Failed to forward absence justification to Web backend:", err?.message || err);
     return res.status(500).json({
       error: "Le justificatif n'a pas pu être transmis au serveur Web.",
       code: "INTERNAL_ERROR"
     });
+  } finally {
+    await removeTemporaryAbsenceJustificationFiles(uploadedFiles);
   }
 });
 
@@ -680,6 +705,10 @@ app.post("/api/absences/:absenceId/justifications", requireAuth, requireParentRo
       justificationFiles: insertedFiles,
     });
   } catch (err: any) {
+    if (err instanceof AbsenceJustificationAlreadyRejectedError) {
+      await removeTemporaryAbsenceJustificationFiles(uploadedFiles);
+      return res.status(409).json({ error: err.message, code: err.code });
+    }
     console.error("Failed to justify absence with file:", err);
     return res.status(500).json({
       error: "Impossible de justifier l'absence pour le moment.",

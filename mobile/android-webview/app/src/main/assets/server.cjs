@@ -26,6 +26,7 @@ var import_config = require("dotenv/config");
 var import_express = __toESM(require("express"), 1);
 var import_path2 = __toESM(require("path"), 1);
 var import_crypto2 = __toESM(require("crypto"), 1);
+var import_stream = require("stream");
 var import_fs2 = require("fs");
 var import_multer = __toESM(require("multer"), 1);
 var import_vite = require("vite");
@@ -245,11 +246,70 @@ function mapWebStudentToChild(row) {
     firstName: row.firstName,
     lastName: row.lastName,
     className: row.className ?? "",
+    cycleCode: row.cycleCode ?? null,
     birthDate: row.birthDate ?? "",
     gender: row.gender ?? void 0,
-    avatarUrl: ""
+    avatarUrl: row.photoAvailable ? `/api/mobile/parent/children/${row.id}/photo` : ""
   };
 }
+
+// backend/absenceJustification.ts
+var JUSTIFICATION_ALREADY_REJECTED_CODE = "JUSTIFICATION_ALREADY_REJECTED";
+var JUSTIFICATION_ALREADY_REJECTED_MESSAGE = "Cette justification a d\xE9j\xE0 \xE9t\xE9 rejet\xE9e. Veuillez vous rapprocher de l\u2019\xE9tablissement avec les justificatifs n\xE9cessaires.";
+var AbsenceJustificationAlreadyRejectedError = class extends Error {
+  constructor() {
+    super(JUSTIFICATION_ALREADY_REJECTED_MESSAGE);
+    this.code = JUSTIFICATION_ALREADY_REJECTED_CODE;
+    this.name = "AbsenceJustificationAlreadyRejectedError";
+  }
+};
+var mapParentAbsenceRow = (row, childId) => ({
+  id: String(row.id),
+  childId: String(row.student_id ?? childId),
+  date: row.date,
+  reason: row.is_justified ? "Absence justifi\xE9e" : "Absence non justifi\xE9e",
+  justified: row.is_justified,
+  justificationText: row.justification_reason ?? void 0,
+  justificationStatus: row.justification_status ?? null,
+  rejectionReason: row.rejection_reason ?? void 0,
+  subjectName: row.subject_name ?? void 0,
+  startTime: row.start_time ?? void 0,
+  endTime: row.end_time ?? void 0,
+  period: row.period ?? void 0
+});
+var submitAbsenceJustificationForReview = async (query, absenceId, parentId, justificationReason) => {
+  const { rows } = await query(`
+    UPDATE absences AS a
+    SET is_justified = false,
+        justification_reason = $1,
+        justification_status = 'PENDING',
+        rejection_reason = NULL,
+        reviewed_by = NULL,
+        reviewed_at = NULL
+    FROM students AS s
+    JOIN parents AS p ON p.id = s.parent_id
+    WHERE a.id = $2
+      AND a.student_id = s.id
+      AND p.user_id = $3
+      AND a.justification_status IS DISTINCT FROM 'REJECTED'
+    RETURNING a.id, a.student_id, a.date, a.is_justified,
+      a.justification_reason, a.justification_status, a.rejection_reason
+  `, [justificationReason, absenceId, parentId]);
+  if (rows.length === 0) {
+    const existing = await query(`
+      SELECT a.justification_status
+      FROM absences AS a
+      JOIN students AS s ON s.id = a.student_id
+      JOIN parents AS p ON p.id = s.parent_id
+      WHERE a.id = $1 AND p.user_id = $2
+    `, [absenceId, parentId]);
+    if (existing.rows[0]?.justification_status === "REJECTED") {
+      throw new AbsenceJustificationAlreadyRejectedError();
+    }
+    return null;
+  }
+  return mapParentAbsenceRow(rows[0], rows[0].student_id == null ? "" : String(rows[0].student_id));
+};
 
 // backend/store.ts
 var PostgresStore = class {
@@ -334,9 +394,13 @@ var PostgresStore = class {
     if (!Number.isInteger(userId)) return [];
     const { rows } = await dbQuery(`
       SELECT s.id, s.first_name, s.last_name, s.birth_date, s.parent_id,
-             c.name AS class_name
+             (s.photo_data IS NOT NULL) AS photo_available,
+            c.name AS class_name,
+            cy.code AS cycle_code
       FROM students s
       LEFT JOIN classes c ON c.id = s.class_id
+          LEFT JOIN levels l ON l.id = c.level_id
+          LEFT JOIN cycles cy ON cy.id = l.cycle_id
       LEFT JOIN parents p ON p.id = s.parent_id
       WHERE p.user_id = $1
     `, [userId]);
@@ -351,8 +415,30 @@ var PostgresStore = class {
       lastName: row.last_name,
       birthDate: row.birth_date ?? "",
       parentId: row.parent_id ?? null,
-      className: row.class_name ?? ""
+      className: row.class_name ?? "",
+      cycleCode: row.cycle_code,
+      photoAvailable: row.photo_available
     }));
+  }
+  async getChildPhoto(childId) {
+    const childIdNum = Number(childId);
+    if (!Number.isInteger(childIdNum) || childIdNum <= 0) return null;
+    const { rows } = await dbQuery(`
+      SELECT photo_data, photo_mime_type
+      FROM students
+      WHERE id = $1
+    `, [childIdNum]);
+    const row = rows[0];
+    if (!row?.photo_data || !row.photo_mime_type) return null;
+    return { photoData: row.photo_data, mimeType: row.photo_mime_type };
+  }
+  async saveChildPhoto(childId, photoData, mimeType) {
+    const childIdNum = Number(childId);
+    await dbQuery(`
+      UPDATE students
+      SET photo_data = $1, photo_mime_type = $2, photo_updated_at = now()
+      WHERE id = $3
+    `, [photoData, mimeType, childIdNum]);
   }
   async getParentIdsForChildren(childIds) {
     const numericChildIds = childIds.map((childId) => Number(childId)).filter((childId) => Number.isInteger(childId) && childId > 0);
@@ -419,6 +505,8 @@ var PostgresStore = class {
       a.period,
       a.is_justified,
       a.justification_reason,
+      a.justification_status,
+      a.rejection_reason,
       s.name AS subject_name,
       a.start_time,
       a.end_time
@@ -426,41 +514,10 @@ var PostgresStore = class {
     LEFT JOIN subjects s ON s.id = a.subject_id
     WHERE a.student_id = $1
   `, [childIdNum]);
-    return rows.map((row) => ({
-      id: String(row.id),
-      childId,
-      date: row.date,
-      reason: row.is_justified ? "Absence justifi\xE9e" : "Absence non justifi\xE9e",
-      justified: row.is_justified,
-      justificationText: row.justification_reason ?? void 0,
-      subjectName: row.subject_name ?? void 0,
-      startTime: row.start_time ?? void 0,
-      endTime: row.end_time ?? void 0,
-      period: row.period ?? void 0
-    }));
+    return rows.map((row) => mapParentAbsenceRow(row, childId));
   }
   async justifyAbsence(absenceId, parentId, justificationReason) {
-    const { rows } = await dbQuery(`
-      UPDATE absences AS a
-      SET is_justified = true,
-          justification_reason = $1
-      FROM students AS s
-JOIN parents AS p ON p.id = s.parent_id
-WHERE a.id = $2
-  AND a.student_id = s.id
-  AND p.user_id = $3
-      RETURNING a.id, a.student_id, a.date, a.is_justified, a.justification_reason
-    `, [justificationReason, absenceId, parentId]);
-    if (rows.length === 0) return null;
-    const row = rows[0];
-    return {
-      id: String(row.id),
-      childId: String(row.student_id),
-      date: row.date,
-      reason: row.is_justified ? "Absence justifi\xE9e" : "Absence non justifi\xE9e",
-      justified: row.is_justified,
-      justificationText: row.justification_reason ?? void 0
-    };
+    return submitAbsenceJustificationForReview(dbQuery, absenceId, parentId, justificationReason);
   }
   async addGrade(grade) {
     const childIds = Array.isArray(grade.childIds) ? grade.childIds : [grade.childId];
@@ -500,7 +557,7 @@ WHERE a.id = $2
     const childIdNum = Number(childId);
     if (!Number.isInteger(childIdNum)) return [];
     const { rows } = await dbQuery(`
-      SELECT g.id, g.evaluation_id, e.subject, g.score, e.coefficient, e.title, e.date, e.max_score, g.created_at
+      SELECT g.id, g.evaluation_id, e.term_id, e.subject, g.score, e.coefficient, e.title, e.date, e.max_score, g.created_at
       FROM grades g
       JOIN evaluations e ON e.id = g.evaluation_id
       WHERE g.student_id = $1
@@ -531,6 +588,7 @@ WHERE a.id = $2
         id: String(row.id),
         childId,
         evaluationId: String(row.evaluation_id),
+        termId: row.term_id != null ? String(row.term_id) : null,
         subject: row.subject,
         // `grade` is the normalized score on a /20 scale (backward compatible)
         grade: normalizedScore,
@@ -556,9 +614,22 @@ WHERE a.id = $2
       WHERE user_id = $1
       ORDER BY created_at DESC
     `, [userId]);
-    try {
-      logger.debug(`Fetched ${rows.length} notifications for parent=${parentId}`, { notifications: rows.map((r) => ({ id: r.id, is_read: r.is_read })) });
-    } catch (e) {
+    const notificationIds = rows.map((row) => row.id);
+    const attachmentsByNotification = /* @__PURE__ */ new Map();
+    if (notificationIds.length > 0) {
+      const attachmentRows = await dbQuery(`
+        SELECT id, notification_id AS "notificationId", file_name AS "fileName",
+               mime_type AS "mimeType", file_size AS "fileSize", file_path AS "filePath"
+        FROM notification_attachments
+        WHERE notification_id = ANY($1::int[])
+        ORDER BY id ASC
+      `, [notificationIds]);
+      for (const attachment of attachmentRows.rows) {
+        const notificationId = Number(attachment.notificationId);
+        const existing = attachmentsByNotification.get(notificationId) ?? [];
+        existing.push(attachment);
+        attachmentsByNotification.set(notificationId, existing);
+      }
     }
     return rows.map((row) => ({
       id: String(row.id),
@@ -567,8 +638,27 @@ WHERE a.id = $2
       message: row.body,
       read: row.is_read,
       createdAt: row.created_at,
-      deepLink: void 0
+      deepLink: void 0,
+      attachments: (attachmentsByNotification.get(row.id) ?? []).map(({ filePath: _filePath, ...attachment }) => attachment)
     }));
+  }
+  async getInAppNotificationAttachment(parentId, notificationId, attachmentId) {
+    const userId = Number(parentId);
+    if (!Number.isInteger(userId)) return null;
+    const { rows } = await dbQuery(`
+      SELECT a.id, a.notification_id AS "notificationId", a.file_name AS "fileName",
+             a.mime_type AS "mimeType", a.file_size AS "fileSize", a.file_path AS "filePath",
+             n.user_id AS "notificationOwnerId"
+      FROM notification_attachments a
+      INNER JOIN notifications n ON n.id = a.notification_id
+      WHERE n.id = $1
+        AND a.id = $2
+        AND a.notification_id = $1
+      LIMIT 1
+    `, [notificationId, attachmentId]);
+    if (!rows[0]) return null;
+    const { notificationOwnerId, ...attachment } = rows[0];
+    return { attachment, authorized: Number(notificationOwnerId) === userId };
   }
   async markAllInAppNotificationsAsRead(parentId) {
     const userId = Number(parentId);
@@ -918,6 +1008,72 @@ WHERE a.id = $2
 };
 var store = new PostgresStore();
 
+// src/utils/schoolPeriod.ts
+function getExpectedPeriodTypeForCycle(cycleCode) {
+  if (cycleCode === "college") return "trimester";
+  if (cycleCode === "lycee") return "semester";
+  return null;
+}
+
+// src/utils/termAverage.ts
+function calculateCurrentTermAverage(gradeRows, activeTerm) {
+  const usedEvaluations = [];
+  const ignoredEvaluations = [];
+  if (!activeTerm) {
+    return { termAverage: null, termEvaluationCount: 0, usedEvaluations, ignoredEvaluations };
+  }
+  const gradesByEvaluation = /* @__PURE__ */ new Map();
+  for (const row of gradeRows) {
+    const existing = gradesByEvaluation.get(row.evaluationId) ?? [];
+    existing.push(row);
+    gradesByEvaluation.set(row.evaluationId, existing);
+  }
+  let totalWeighted = 0;
+  let totalCoefficient = 0;
+  let termEvaluationCount = 0;
+  for (const rows of gradesByEvaluation.values()) {
+    const evaluation = rows[0];
+    const evaluationDate = String(evaluation.date).slice(0, 10);
+    const termMatches = evaluation.termId === activeTerm.id || evaluation.termId == null && evaluationDate >= activeTerm.startDate && evaluationDate <= activeTerm.endDate;
+    if (!termMatches) {
+      ignoredEvaluations.push(`${evaluation.subject} ${evaluation.score}/${evaluation.maxScore ?? 20} -> term_id=${evaluation.termId}`);
+      continue;
+    }
+    termEvaluationCount += 1;
+    const latestGrade = [...rows].sort((a, b) => {
+      const aTime = new Date(a.updatedAt || a.createdAt || 0).getTime();
+      const bTime = new Date(b.updatedAt || b.createdAt || 0).getTime();
+      return bTime - aTime;
+    })[0];
+    const rawScore = latestGrade.score.trim().replace(",", ".");
+    const rawValue = Number(rawScore);
+    if (!Number.isFinite(rawValue)) {
+      ignoredEvaluations.push(`${evaluation.subject} ${latestGrade.score} -> invalid raw score`);
+      continue;
+    }
+    const maxScore = Number(evaluation.maxScore ?? 20);
+    if (!Number.isFinite(maxScore) || maxScore <= 0) {
+      ignoredEvaluations.push(`${evaluation.subject} ${rawValue}/${evaluation.maxScore} -> invalid maxScore`);
+      continue;
+    }
+    const coefficient = Number(evaluation.coefficient ?? 1);
+    if (!Number.isFinite(coefficient) || coefficient <= 0) {
+      ignoredEvaluations.push(`${evaluation.subject} ${rawValue}/${maxScore} -> invalid coefficient`);
+      continue;
+    }
+    const normalizedScore = rawValue / maxScore * 20;
+    totalWeighted += normalizedScore * coefficient;
+    totalCoefficient += coefficient;
+    usedEvaluations.push(`${evaluation.subject} ${rawValue}/${maxScore} coef ${coefficient}`);
+  }
+  return {
+    termAverage: totalCoefficient > 0 ? Number((totalWeighted / totalCoefficient).toFixed(2)) : null,
+    termEvaluationCount,
+    usedEvaluations,
+    ignoredEvaluations
+  };
+}
+
 // backend/middlewares/security.ts
 var logger2 = new Logger("SecurityMiddleware");
 function helmetHeaders(req, res, next) {
@@ -1186,20 +1342,35 @@ function isInvalidFcmTokenError(error) {
   }
   return false;
 }
-async function sendPushNotification(token, title, body, target = "home") {
+async function sendPushNotification(token, title, body, target = "home", metadata = {}) {
+  const attachments = Array.isArray(metadata.attachments) ? metadata.attachments.filter((attachment) => Boolean(attachment) && typeof attachment === "object") : [];
+  const attachmentCount = Number(metadata.attachmentCount ?? attachments.length);
+  const validAttachmentCount = Number.isInteger(attachmentCount) && attachmentCount > 0 ? attachmentCount : 0;
+  const attachmentNames = attachments.map((attachment) => typeof attachment.fileName === "string" ? attachment.fileName.trim() : "").filter(Boolean);
+  const attachmentSummary = validAttachmentCount === 0 ? "" : validAttachmentCount === 1 && attachmentNames[0] ? `
+\u{1F4CE} 1 pi\xE8ce jointe : ${attachmentNames[0]}` : `
+\u{1F4CE} ${validAttachmentCount} pi\xE8ces jointes`;
+  const notificationBody = `${body}${attachmentSummary}`;
   const maskedToken = token ? `${token.slice(0, 10)}...` : "<missing>";
-  logger4.info("[NOTIF_TRACE] sendPushNotification start", { token: maskedToken, title, body, target });
+  logger4.info("[NOTIF_TRACE] sendPushNotification start", { token: maskedToken, title, body: notificationBody, target });
+  const data = {
+    title,
+    body: notificationBody,
+    target
+  };
+  if (metadata.notificationId != null) {
+    data.notificationId = String(metadata.notificationId);
+  }
+  if (validAttachmentCount > 0) {
+    data.attachmentCount = String(validAttachmentCount);
+  }
   const message = {
     token,
     notification: {
       title,
-      body
+      body: notificationBody
     },
-    data: {
-      title,
-      body,
-      target
-    },
+    data,
     android: {
       priority: "high",
       notification: {
@@ -1211,7 +1382,7 @@ async function sendPushNotification(token, title, body, target = "home") {
     }
   };
   try {
-    logger4.info("[NOTIF_TRACE] sendPushNotification payload", { token: maskedToken, title, body, target });
+    logger4.info("[NOTIF_TRACE] sendPushNotification payload", { token: maskedToken, title, body: notificationBody, target });
     const response = await (0, import_messaging.getMessaging)().send(message);
     logger4.info("[NOTIF_TRACE] sendPushNotification response", { messageId: response });
     logger4.info("[FCM] Succ\xE8s", { messageId: response });
@@ -1396,7 +1567,8 @@ var QueueManager = class {
           token,
           title,
           message,
-          target = "home"
+          target = "home",
+          metadata = {}
         } = job.data;
         if (!token) {
           throw new Error("FCM token missing");
@@ -1407,7 +1579,8 @@ var QueueManager = class {
           token,
           title,
           message,
-          target
+          target,
+          metadata
         );
         logger5.info("[NOTIF_TRACE] FCM envoy\xE9 avec succ\xE8s", { token: tokenPreview, title, target });
         logger5.info("Push notification sent successfully", {
@@ -1656,6 +1829,9 @@ var logger7 = new Logger("ExpressServer");
 var app = (0, import_express.default)();
 var PORT = Number(process.env.PORT) || 3001;
 var uploadStorageDir = import_path2.default.join(process.cwd(), "uploads", "absence-justifications");
+var webBackendUrl = () => (process.env.WEB_BACKEND_URL || "").trim().replace(/\/+$/, "");
+var MAX_ABSENCE_ATTACHMENT_COUNT = 5;
+var allowedJustificationMimeTypes = ["application/pdf", "image/png", "image/jpeg"];
 var upload = (0, import_multer.default)({
   storage: import_multer.default.diskStorage({
     destination: uploadStorageDir,
@@ -1666,24 +1842,100 @@ var upload = (0, import_multer.default)({
     }
   }),
   limits: {
-    fileSize: 5 * 1024 * 1024
+    fileSize: 5 * 1024 * 1024,
+    files: MAX_ABSENCE_ATTACHMENT_COUNT
   },
   fileFilter: (_req, file, cb) => {
-    const allowedTypes = ["application/pdf", "image/png", "image/jpeg"];
-    if (!allowedTypes.includes(file.mimetype)) {
+    if (!allowedJustificationMimeTypes.includes(file.mimetype)) {
       return cb(new Error("Unsupported file type"));
     }
     cb(null, true);
   }
 });
-var handleSingleFileUpload = (req, res, next) => {
-  upload.single("file")(req, res, (err) => {
+var handleAbsenceJustificationUpload = (req, res, next) => {
+  upload.fields([
+    { name: "files", maxCount: MAX_ABSENCE_ATTACHMENT_COUNT },
+    { name: "file", maxCount: 1 }
+  ])(req, res, (err) => {
     if (err) {
       return res.status(400).json({ error: err.message || "Invalid file upload", code: "UPLOAD_INVALID" });
     }
+    const uploadedFiles = [];
+    if (Array.isArray(req.files)) {
+      uploadedFiles.push(...req.files);
+    } else if (req.files && typeof req.files === "object") {
+      for (const fieldFiles of Object.values(req.files)) {
+        uploadedFiles.push(...fieldFiles);
+      }
+    }
+    if (req.file) {
+      uploadedFiles.push(req.file);
+    }
+    req.uploadedFiles = uploadedFiles;
     return next();
   });
 };
+async function removeTemporaryAbsenceJustificationFiles(files) {
+  await Promise.all(files.map((file) => import_fs2.promises.unlink(file.path).catch((error) => {
+    if (error?.code !== "ENOENT") {
+      console.error("Failed to remove temporary absence justification file:", error?.message || error);
+    }
+  })));
+}
+async function forwardAbsenceJustificationToWeb(absenceId, parentId, justificationReason, uploadedFile) {
+  const targetBaseUrl = webBackendUrl();
+  if (!targetBaseUrl) {
+    throw new Error("WEB_BACKEND_URL is not configured");
+  }
+  const fileBuffer = await import_fs2.promises.readFile(uploadedFile.path);
+  const fileSha256 = import_crypto2.default.createHash("sha256").update(fileBuffer).digest("hex");
+  const payload = {
+    absenceId: String(absenceId),
+    parentId: String(parentId),
+    justificationReason,
+    fileName: uploadedFile.originalname,
+    fileMimeType: uploadedFile.mimetype,
+    fileSize: String(uploadedFile.size),
+    fileSha256
+  };
+  const timestamp = Date.now().toString();
+  const internalSecret = process.env.INTERNAL_SECRET;
+  if (!internalSecret || !internalSecret.trim()) {
+    throw new Error("INTERNAL_SECRET is not configured");
+  }
+  const hmac = import_crypto2.default.createHmac("sha256", internalSecret);
+  hmac.update(`${JSON.stringify(payload)}${timestamp}`);
+  const signature = hmac.digest("hex");
+  const formData = new FormData();
+  formData.append("absenceId", payload.absenceId);
+  formData.append("parentId", payload.parentId);
+  formData.append("justificationReason", payload.justificationReason);
+  formData.append("fileName", payload.fileName);
+  formData.append("fileMimeType", payload.fileMimeType);
+  formData.append("fileSize", payload.fileSize);
+  formData.append("fileSha256", payload.fileSha256);
+  formData.append("file", new Blob([fileBuffer], { type: uploadedFile.mimetype }), uploadedFile.originalname);
+  const response = await fetch(`${targetBaseUrl}/api/internal/absence-justification`, {
+    method: "POST",
+    headers: {
+      "X-Internal-Signature": signature,
+      "X-Internal-Timestamp": timestamp
+    },
+    body: formData
+  });
+  if (!response.ok) {
+    const responseBody = await response.text().catch(() => "");
+    try {
+      const errorPayload = JSON.parse(responseBody);
+      if (response.status === 409 && errorPayload?.code === "JUSTIFICATION_ALREADY_REJECTED") {
+        throw new AbsenceJustificationAlreadyRejectedError();
+      }
+    } catch (error) {
+      if (error instanceof AbsenceJustificationAlreadyRejectedError) throw error;
+    }
+    throw new Error(`Web justification upload failed with status ${response.status}: ${responseBody.slice(0, 300)}`);
+  }
+}
 app.use(import_express.default.json());
 app.use(helmetHeaders);
 app.use(requestIdMiddleware);
@@ -1821,6 +2073,14 @@ app.post("/api/mobile/parent/login", rateLimit(15, 6e4), async (req, res) => {
     }
   }
   const session = await AuthService.createSession(user.id, user.role);
+  try {
+    await dbQuery(`
+      INSERT INTO user_login_events (user_id, role, school_id, client_type)
+      VALUES ($1, $2, $3, $4)
+    `, [Number(user.id), user.role, user.activeSchoolId ? Number(user.activeSchoolId) : null, "android"]);
+  } catch {
+    logger7.warn("Impossible d'enregistrer l'\xE9v\xE9nement de connexion Android; le login continue.");
+  }
   const parentDetails = {
     id: user.id,
     name: user.name,
@@ -1978,6 +2238,9 @@ app.put("/api/absences/:absenceId/justify", requireAuth, requireParentRoleOnly, 
     }
     return res.json(updatedAbsence);
   } catch (err) {
+    if (err instanceof AbsenceJustificationAlreadyRejectedError) {
+      return res.status(409).json({ error: err.message, code: err.code });
+    }
     console.error("Failed to justify absence:", err);
     return res.status(500).json({
       error: "Impossible de justifier l'absence pour le moment.",
@@ -2005,6 +2268,9 @@ app.put("/api/absences/:id/justify", requireAuth, requireParentRoleOnly, async (
     }
     return res.json(updatedAbsence);
   } catch (err) {
+    if (err instanceof AbsenceJustificationAlreadyRejectedError) {
+      return res.status(409).json({ error: err.message, code: err.code });
+    }
     console.error("Failed to justify absence:", err);
     return res.status(500).json({
       error: "Impossible de justifier l'absence pour le moment.",
@@ -2012,63 +2278,68 @@ app.put("/api/absences/:id/justify", requireAuth, requireParentRoleOnly, async (
     });
   }
 });
-app.post("/api/absences/:id/justifications", requireAuth, requireParentRoleOnly, handleSingleFileUpload, async (req, res) => {
+app.post("/api/absences/:id/justifications", requireAuth, requireParentRoleOnly, handleAbsenceJustificationUpload, async (req, res) => {
   const { id } = req.params;
   const parentId = req.parent.id;
   const justificationReason = typeof req.body?.justificationReason === "string" ? req.body.justificationReason.trim() : "";
+  const uploadedFiles = req.uploadedFiles ?? [];
   if (!justificationReason) {
     return res.status(400).json({
       error: "Veuillez fournir un motif de justification.",
       code: "JUSTIFICATION_REQUIRED"
     });
   }
-  if (!req.file) {
+  if (!uploadedFiles.length) {
     return res.status(400).json({
       error: "Veuillez joindre un document justificatif valide.",
       code: "JUSTIFICATION_FILE_REQUIRED"
+    });
+  }
+  if (uploadedFiles.length > MAX_ABSENCE_ATTACHMENT_COUNT) {
+    return res.status(400).json({
+      error: `Vous pouvez joindre jusqu'\xE0 ${MAX_ABSENCE_ATTACHMENT_COUNT} fichiers maximum.`,
+      code: "JUSTIFICATION_FILE_LIMIT_EXCEEDED"
     });
   }
   try {
-    const updatedAbsence = await store.justifyAbsence(id, parentId, justificationReason);
-    if (!updatedAbsence) {
-      return res.status(404).json({
-        error: "Absence introuvable ou non rattach\xE9e \xE0 ce parent.",
-        code: "ABSENCE_NOT_FOUND"
-      });
+    for (const uploadedFile of uploadedFiles) {
+      await forwardAbsenceJustificationToWeb(id, parentId, justificationReason, uploadedFile);
     }
-    const uploadedByValue = Number.isFinite(Number(parentId)) ? Number(parentId) : parentId;
-    const insertResult = await dbQuery(`
-      INSERT INTO absence_justifications (absence_id, file_name, file_path, mime_type, file_size, uploaded_by)
-      VALUES ($1, $2, $3, $4, $5, $6)
-      RETURNING id, file_name, file_path, mime_type, file_size
-    `, [id, req.file.originalname, req.file.filename, req.file.mimetype, Number(req.file.size), uploadedByValue]);
-    return res.status(201).json({
-      ...updatedAbsence,
-      justificationFileId: insertResult.rows[0]?.id,
-      justificationFileName: insertResult.rows[0]?.file_name ?? req.file.originalname
-    });
+    return res.status(201).json({ success: true });
   } catch (err) {
-    console.error("Failed to justify absence with file:", err);
+    if (err instanceof AbsenceJustificationAlreadyRejectedError) {
+      return res.status(409).json({ error: err.message, code: err.code });
+    }
+    console.error("Failed to forward absence justification to Web backend:", err?.message || err);
     return res.status(500).json({
-      error: "Impossible de justifier l'absence pour le moment.",
+      error: "Le justificatif n'a pas pu \xEAtre transmis au serveur Web.",
       code: "INTERNAL_ERROR"
     });
+  } finally {
+    await removeTemporaryAbsenceJustificationFiles(uploadedFiles);
   }
 });
-app.post("/api/absences/:absenceId/justifications", requireAuth, requireParentRoleOnly, handleSingleFileUpload, async (req, res) => {
+app.post("/api/absences/:absenceId/justifications", requireAuth, requireParentRoleOnly, handleAbsenceJustificationUpload, async (req, res) => {
   const { absenceId } = req.params;
   const parentId = req.parent.id;
   const justificationReason = typeof req.body?.justificationReason === "string" ? req.body.justificationReason.trim() : "";
+  const uploadedFiles = req.uploadedFiles ?? [];
   if (!justificationReason) {
     return res.status(400).json({
       error: "Veuillez fournir un motif de justification.",
       code: "JUSTIFICATION_REQUIRED"
     });
   }
-  if (!req.file) {
+  if (!uploadedFiles.length) {
     return res.status(400).json({
       error: "Veuillez joindre un document justificatif valide.",
       code: "JUSTIFICATION_FILE_REQUIRED"
+    });
+  }
+  if (uploadedFiles.length > MAX_ABSENCE_ATTACHMENT_COUNT) {
+    return res.status(400).json({
+      error: `Vous pouvez joindre jusqu'\xE0 ${MAX_ABSENCE_ATTACHMENT_COUNT} fichiers maximum.`,
+      code: "JUSTIFICATION_FILE_LIMIT_EXCEEDED"
     });
   }
   try {
@@ -2080,17 +2351,27 @@ app.post("/api/absences/:absenceId/justifications", requireAuth, requireParentRo
       });
     }
     const uploadedByValue = Number.isFinite(Number(parentId)) ? Number(parentId) : parentId;
-    const insertResult = await dbQuery(`
-      INSERT INTO absence_justifications (absence_id, file_name, file_path, mime_type, file_size, uploaded_by)
-      VALUES ($1, $2, $3, $4, $5, $6)
-      RETURNING id, file_name, file_path, mime_type, file_size
-    `, [absenceId, req.file.originalname, req.file.filename, req.file.mimetype, Number(req.file.size), uploadedByValue]);
+    const insertedFiles = [];
+    for (const uploadedFile of uploadedFiles) {
+      const insertResult = await dbQuery(`
+        INSERT INTO absence_justifications (absence_id, file_name, file_path, mime_type, file_size, uploaded_by)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING id, file_name, file_path, mime_type, file_size
+      `, [absenceId, uploadedFile.originalname, uploadedFile.filename, uploadedFile.mimetype, Number(uploadedFile.size), uploadedByValue]);
+      insertedFiles.push(insertResult.rows[0]);
+    }
+    const lastInserted = insertedFiles[insertedFiles.length - 1];
     return res.status(201).json({
       ...updatedAbsence,
-      justificationFileId: insertResult.rows[0]?.id,
-      justificationFileName: insertResult.rows[0]?.file_name ?? req.file.originalname
+      justificationFileId: lastInserted?.id,
+      justificationFileName: lastInserted?.file_name ?? uploadedFiles[uploadedFiles.length - 1].originalname,
+      justificationFiles: insertedFiles
     });
   } catch (err) {
+    if (err instanceof AbsenceJustificationAlreadyRejectedError) {
+      await removeTemporaryAbsenceJustificationFiles(uploadedFiles);
+      return res.status(409).json({ error: err.message, code: err.code });
+    }
     console.error("Failed to justify absence with file:", err);
     return res.status(500).json({
       error: "Impossible de justifier l'absence pour le moment.",
@@ -2109,19 +2390,43 @@ app.get("/api/mobile/parent/children/:childId/grades", requireAuth, requireParen
   }
   const grades = await store.getGradesOfChild(childId);
   let termAverage = null;
+  let cycleCode = null;
+  let activeTerm = null;
+  let termEvaluationCount = 0;
   try {
     const childIdNum = Number(childId);
     const studentResult = await dbQuery(
-      `SELECT first_name, last_name, school_id FROM students WHERE id = $1`,
+      `SELECT s.first_name, s.last_name, s.school_id, cls.academic_year_id,
+              cy.id AS cycle_id, cy.code AS cycle_code
+       FROM students s
+       LEFT JOIN classes cls ON cls.id = s.class_id
+       LEFT JOIN levels lvl ON lvl.id = cls.level_id
+       LEFT JOIN cycles cy ON cy.id = lvl.cycle_id
+       WHERE s.id = $1`,
       [childIdNum]
     );
     const studentRow = studentResult.rows[0];
     const studentName = studentRow ? `${studentRow.first_name} ${studentRow.last_name}` : "Unknown";
-    const termResult = studentRow?.school_id != null ? await dbQuery(
-      `SELECT id, name FROM school_terms WHERE school_id = $1 AND is_active = true ORDER BY order_index DESC LIMIT 1`,
-      [studentRow.school_id]
+    cycleCode = studentRow?.cycle_code ?? null;
+    const expectedPeriodType = getExpectedPeriodTypeForCycle(cycleCode);
+    const termResult = expectedPeriodType && studentRow?.academic_year_id != null && studentRow.cycle_id != null ? await dbQuery(
+      `SELECT st.id, st.name, COALESCE(st.period_type, template.period_type) AS period_type,
+                  st.start_date, st.end_date
+           FROM school_terms st
+           LEFT JOIN cycle_period_templates template ON template.id = st.template_id
+           WHERE (st.school_id = $1 OR st.school_id IS NULL)
+             AND st.academic_year_id = $2
+             AND st.is_active = true
+             AND (st.cycle_id = $3 OR st.cycle_id IS NULL)
+             AND COALESCE(st.period_type, template.period_type) = $4
+             AND st.start_date IS NOT NULL
+             AND st.end_date IS NOT NULL
+             AND to_char(CURRENT_DATE, 'YYYY-MM-DD') BETWEEN st.start_date AND st.end_date
+           ORDER BY (st.school_id = $1) DESC, st.start_date DESC, st.order_index DESC
+           LIMIT 1`,
+      [studentRow.school_id, studentRow.academic_year_id, studentRow.cycle_id, expectedPeriodType]
     ) : { rows: [] };
-    const activeTerm = termResult.rows[0] ?? null;
+    activeTerm = termResult.rows[0] ?? null;
     const termName = activeTerm ? activeTerm.name : "Aucun terme actif";
     const rawRows = await dbQuery(
       `SELECT e.id AS evaluation_id, e.term_id, e.subject, e.title, e.coefficient, e.max_score, e.count_in_bulletin,
@@ -2132,56 +2437,25 @@ app.get("/api/mobile/parent/children/:childId/grades", requireAuth, requireParen
       [childIdNum]
     );
     const gradesByEvaluation = /* @__PURE__ */ new Map();
-    rawRows.rows.forEach((row) => {
-      const existing = gradesByEvaluation.get(row.evaluation_id) ?? [];
-      existing.push(row);
-      gradesByEvaluation.set(row.evaluation_id, existing);
-    });
-    const usedEvaluations = [];
-    const ignoredEvaluations = [];
-    let totalWeighted = 0;
-    let totalCoefficient = 0;
-    if (activeTerm) {
-      for (const [evaluationId, rows] of gradesByEvaluation.entries()) {
-        const evaluation = rows[0];
-        const termMatches = evaluation.term_id === activeTerm.id || evaluation.term_id == null;
-        const countInBulletin = evaluation.count_in_bulletin !== false;
-        if (!termMatches) {
-          ignoredEvaluations.push(`${evaluation.subject} ${evaluation.score}/${evaluation.max_score ?? 20} -> term_id=${evaluation.term_id}`);
-          continue;
-        }
-        if (!countInBulletin) {
-          ignoredEvaluations.push(`${evaluation.subject} ${evaluation.score}/${evaluation.max_score ?? 20} -> countInBulletin=false`);
-          continue;
-        }
-        const latestGrade = rows.sort((a, b) => {
-          const aTime = new Date(a.updated_at || a.created_at).getTime();
-          const bTime = new Date(b.updated_at || b.created_at).getTime();
-          return bTime - aTime;
-        })[0];
-        const rawScore = latestGrade.score.trim().replace(",", ".");
-        const rawValue = Number(rawScore);
-        if (!Number.isFinite(rawValue)) {
-          ignoredEvaluations.push(`${evaluation.subject} ${latestGrade.score} -> invalid raw score`);
-          continue;
-        }
-        const maxScore = Number(evaluation.max_score ?? 20);
-        if (!Number.isFinite(maxScore) || maxScore <= 0) {
-          ignoredEvaluations.push(`${evaluation.subject} ${rawValue}/${evaluation.max_score} -> invalid maxScore`);
-          continue;
-        }
-        const coefficient = Number(evaluation.coefficient ?? 1);
-        if (!Number.isFinite(coefficient) || coefficient <= 0) {
-          ignoredEvaluations.push(`${evaluation.subject} ${rawValue}/${maxScore} -> invalid coefficient`);
-          continue;
-        }
-        const normalizedScore = rawValue / maxScore * 20;
-        totalWeighted += normalizedScore * coefficient;
-        totalCoefficient += coefficient;
-        usedEvaluations.push(`${evaluation.subject} ${rawValue}/${maxScore} coef ${coefficient}`);
-      }
-      termAverage = totalCoefficient > 0 ? Number((totalWeighted / totalCoefficient).toFixed(2)) : null;
-    }
+    const averageResult = calculateCurrentTermAverage(rawRows.rows.map((row) => ({
+      evaluationId: row.evaluation_id,
+      termId: row.term_id,
+      subject: row.subject,
+      coefficient: row.coefficient,
+      maxScore: row.max_score,
+      countInBulletin: row.count_in_bulletin,
+      date: row.date,
+      score: row.score,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    })), activeTerm ? {
+      id: activeTerm.id,
+      startDate: activeTerm.start_date,
+      endDate: activeTerm.end_date
+    } : null);
+    termAverage = averageResult.termAverage;
+    termEvaluationCount = averageResult.termEvaluationCount;
+    const { usedEvaluations, ignoredEvaluations } = averageResult;
     console.log("[SERVER TERM AVERAGE DEBUG]");
     console.log("[SERVER TERM AVERAGE DEBUG] Student:", studentName);
     console.log("[SERVER TERM AVERAGE DEBUG] Term:", termName);
@@ -2194,12 +2468,79 @@ app.get("/api/mobile/parent/children/:childId/grades", requireAuth, requireParen
     console.log("[SERVER TERM AVERAGE DEBUG] Failed to compute term average:", String(e));
     termAverage = null;
   }
-  return res.json({ grades, termAverage });
+  const period = activeTerm && getExpectedPeriodTypeForCycle(cycleCode) === activeTerm.period_type ? {
+    id: String(activeTerm.id),
+    name: activeTerm.name,
+    periodType: activeTerm.period_type,
+    startDate: activeTerm.start_date,
+    endDate: activeTerm.end_date
+  } : null;
+  return res.json({ grades, cycleCode, period, termAverage, termEvaluationCount });
 });
 app.get("/api/mobile/parent/notifications", requireAuth, requireParentRoleOnly, async (req, res) => {
   const parentId = req.parent.id;
   const notifications = await store.getInAppNotifications(parentId);
   return res.json(notifications);
+});
+app.get("/api/mobile/parent/notifications/:notificationId/attachments/:attachmentId", requireAuth, requireParentRoleOnly, async (req, res) => {
+  const notificationId = Number(req.params.notificationId);
+  const attachmentId = Number(req.params.attachmentId);
+  if (!Number.isInteger(notificationId) || !Number.isInteger(attachmentId)) {
+    return res.status(404).json({ error: "Fichier non disponible." });
+  }
+  const attachmentAccess = await store.getInAppNotificationAttachment(req.parent.id, notificationId, attachmentId);
+  if (!attachmentAccess) {
+    return res.status(404).json({ error: "Fichier non disponible." });
+  }
+  if (!attachmentAccess.authorized) {
+    return res.status(403).json({ error: "Vous n'avez pas acc\xE8s \xE0 ce fichier." });
+  }
+  const targetBaseUrl = webBackendUrl();
+  const internalSecret = process.env.INTERNAL_SECRET;
+  if (!targetBaseUrl || !internalSecret || !internalSecret.trim()) {
+    console.error("Notification attachment relay is not configured");
+    return res.status(502).json({ error: "Le serveur de fichiers est indisponible." });
+  }
+  const timestamp = Date.now().toString();
+  const payload = JSON.stringify({ attachmentId: String(attachmentId) });
+  const hmac = import_crypto2.default.createHmac("sha256", internalSecret);
+  hmac.update(`${payload}${timestamp}`);
+  const signature = hmac.digest("hex");
+  let webResponse;
+  try {
+    webResponse = await fetch(`${targetBaseUrl}/api/internal/notification-attachment/${attachmentId}`, {
+      method: "GET",
+      headers: {
+        "X-Internal-Timestamp": timestamp,
+        "X-Internal-Signature": signature
+      }
+    });
+  } catch (error) {
+    console.error("Notification attachment relay request failed:", error?.message || error);
+    return res.status(502).json({ error: "Le serveur de fichiers est indisponible." });
+  }
+  if (!webResponse.ok) {
+    console.error("Notification attachment relay returned status:", webResponse.status);
+    if (webResponse.status === 404) {
+      return res.status(404).json({ error: "Fichier non disponible." });
+    }
+    return res.status(502).json({ error: "Le serveur de fichiers est indisponible." });
+  }
+  if (!webResponse.body) {
+    console.error("Notification attachment relay returned an empty body");
+    return res.status(502).json({ error: "Le serveur de fichiers est indisponible." });
+  }
+  const contentType = webResponse.headers.get("content-type");
+  const contentLength = webResponse.headers.get("content-length");
+  const contentDisposition = webResponse.headers.get("content-disposition");
+  if (contentType) res.setHeader("Content-Type", contentType);
+  if (contentLength) res.setHeader("Content-Length", contentLength);
+  if (contentDisposition) res.setHeader("Content-Disposition", contentDisposition);
+  const relayStream = import_stream.Readable.fromWeb(webResponse.body);
+  relayStream.on("error", (error) => {
+    console.error("Notification attachment relay stream failed:", error?.message || error);
+  });
+  return relayStream.pipe(res);
 });
 app.put("/api/mobile/parent/notifications/read-all", requireAuth, requireParentRoleOnly, async (req, res) => {
   const parentId = req.parent.id;
