@@ -635,8 +635,10 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void openFileChooserWithoutCameraOption(ValueCallback<Uri[]> callback, WebChromeClient.FileChooserParams params) {
-        if (filePathCallback != null) {
-            filePathCallback.onReceiveValue(null);
+        if (filePathCallback != null && filePathCallback != callback) {
+            ValueCallback<Uri[]> previousCallback = filePathCallback;
+            filePathCallback = null;
+            previousCallback.onReceiveValue(null);
         }
         filePathCallback = callback;
         pendingFileChooserCallback = callback;
@@ -724,8 +726,10 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void openFileChooserWithCameraOption(ValueCallback<Uri[]> callback, WebChromeClient.FileChooserParams params) {
-        if (filePathCallback != null) {
-            filePathCallback.onReceiveValue(null);
+        if (filePathCallback != null && filePathCallback != callback) {
+            ValueCallback<Uri[]> previousCallback = filePathCallback;
+            filePathCallback = null;
+            previousCallback.onReceiveValue(null);
         }
         filePathCallback = callback;
         pendingFileChooserCallback = callback;
@@ -810,23 +814,25 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void completeFileChooserRequest(Uri[] result) {
-        if (filePathCallback != null) {
-            filePathCallback.onReceiveValue(result);
-            filePathCallback = null;
-        }
+        ValueCallback<Uri[]> callback = filePathCallback;
+        filePathCallback = null;
         pendingFileChooserCallback = null;
         pendingFileChooserParams = null;
         cameraImageUri = null;
+        if (callback != null) {
+            callback.onReceiveValue(result);
+        }
     }
 
     private void resetFileChooserCallback() {
-        if (filePathCallback != null) {
-            filePathCallback.onReceiveValue(null);
-            filePathCallback = null;
-        }
+        ValueCallback<Uri[]> callback = filePathCallback;
+        filePathCallback = null;
         pendingFileChooserCallback = null;
         pendingFileChooserParams = null;
         cameraImageUri = null;
+        if (callback != null) {
+            callback.onReceiveValue(null);
+        }
     }
 
     private String normalizeAttachmentMimeType(String mimeType, String fileName) {
