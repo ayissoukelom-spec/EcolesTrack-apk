@@ -12,6 +12,7 @@ import { promises as fsPromises } from "fs";
 import multer from "multer";
 import { createServer as createViteServer } from "vite";
 import { store } from "./backend/store";
+import { registerChildPhotoRoutes } from "./backend/mobilePhotoRoutes";
 import { AbsenceJustificationAlreadyRejectedError } from "./backend/absenceJustification";
 import { dbQuery, initializeMobileTables } from "./backend/postgres";
 import { getExpectedPeriodTypeForCycle } from "./src/utils/schoolPeriod";
@@ -501,6 +502,8 @@ app.get("/api/mobile/parent/children", requireAuth, requireParentRoleOnly, async
   const children = await store.getChildrenOfParent(parentId);
   return res.json(children);
 });
+
+registerChildPhotoRoutes(app, requireAuth, requireParentRoleOnly, store);
 
 // 4b. POST /api/mobile/parent/children/simulate
 app.post("/api/mobile/parent/children/simulate", requireAuth, requireParentRoleOnly, async (req: AuthenticatedRequest, res) => {
