@@ -668,8 +668,8 @@ export class PostgresStore {
     const userId = Number(parentId);
     if (!Number.isInteger(userId)) return [];
 
-    const { rows } = await dbQuery<{ id: number; title: string; body: string; is_read: boolean; created_at: string }>(`
-      SELECT id, title, body, is_read, created_at
+    const { rows } = await dbQuery<{ id: number; title: string; body: string; type: NonNullable<AppNotification['type']>; is_read: boolean; created_at: string }>(`
+      SELECT id, title, body, type, is_read, created_at
       FROM notifications
       WHERE user_id = $1
       ORDER BY created_at DESC
@@ -699,6 +699,7 @@ export class PostgresStore {
       parentId,
       title: row.title,
       message: row.body,
+      type: row.type,
       read: row.is_read,
       createdAt: row.created_at,
       deepLink: undefined,

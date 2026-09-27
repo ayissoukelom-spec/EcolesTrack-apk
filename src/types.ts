@@ -81,11 +81,14 @@ export interface ChildGradesResponse {
 }
 
 // App Push Notification types
+export type AppNotificationType = 'absence' | 'grade' | 'info' | 'assignment' | 'homework' | 'devoir' | 'general' | 'test';
+
 export interface AppNotification {
   id: string;
   parentId: string;
   title: string;
   message: string;
+  type?: AppNotificationType;
   read: boolean;
   createdAt: string;
   deepLink?: string;

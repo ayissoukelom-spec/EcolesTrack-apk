@@ -28,7 +28,7 @@ var import_path2 = __toESM(require("path"), 1);
 var import_crypto2 = __toESM(require("crypto"), 1);
 var import_stream = require("stream");
 var import_fs2 = require("fs");
-var import_multer = __toESM(require("multer"), 1);
+var import_multer2 = __toESM(require("multer"), 1);
 var import_vite = require("vite");
 
 // backend/store.ts
@@ -1008,6 +1008,88 @@ var PostgresStore = class {
 };
 var store = new PostgresStore();
 
+// backend/mobilePhotoRoutes.ts
+var import_multer = __toESM(require("multer"), 1);
+var allowedPhotoMimeTypes = /* @__PURE__ */ new Set(["image/jpeg", "image/png", "image/webp"]);
+var photoUpload = (0, import_multer.default)({
+  storage: import_multer.default.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+  fileFilter: (_req, file, callback) => {
+    if (!allowedPhotoMimeTypes.has(file.mimetype)) {
+      return callback(new Error("Seules les images JPEG, PNG et WebP sont accept\xE9es."));
+    }
+    callback(null, true);
+  }
+}).single("file");
+function registerChildPhotoRoutes(app2, requireAuth2, requireParentRoleOnly2, store2) {
+  const requireChildOwnership = (req, res, next) => {
+    const parentId = req.parent?.id;
+    if (!parentId) {
+      return res.status(401).json({ error: "Authentification requise.", code: "UNAUTHORIZED" });
+    }
+    void store2.isChildOwnedByParent(req.params.childId, parentId).then((isOwned) => {
+      if (!isOwned) {
+        return res.status(403).json({
+          error: "Acc\xE8s refus\xE9. Cet enfant ne vous est pas rattach\xE9.",
+          code: "CHILD_OWNERSHIP_VIOLATION"
+        });
+      }
+      next();
+    }).catch(next);
+  };
+  const parsePhotoUpload = (req, res, next) => {
+    photoUpload(req, res, (error) => {
+      if (!error) return next();
+      return res.status(400).json({
+        error: error.message || "Fichier photo invalide.",
+        code: "CHILD_PHOTO_UPLOAD_INVALID"
+      });
+    });
+  };
+  app2.post(
+    "/api/mobile/parent/children/:childId/photo",
+    requireAuth2,
+    requireParentRoleOnly2,
+    requireChildOwnership,
+    parsePhotoUpload,
+    (req, res, next) => {
+      const file = req.file;
+      if (!file || file.size === 0) {
+        return res.status(400).json({
+          error: "Veuillez fournir une image non vide.",
+          code: "CHILD_PHOTO_REQUIRED"
+        });
+      }
+      void store2.saveChildPhoto(req.params.childId, file.buffer, file.mimetype).then(() => res.status(200).json({ success: true })).catch(next);
+    }
+  );
+  app2.get(
+    "/api/mobile/parent/children/:childId/photo",
+    requireAuth2,
+    requireParentRoleOnly2,
+    requireChildOwnership,
+    (req, res, next) => {
+      void store2.getChildPhoto(req.params.childId).then((photo) => {
+        if (!photo) {
+          return res.status(404).json({
+            error: "Photo de l\u2019enfant introuvable.",
+            code: "CHILD_PHOTO_NOT_FOUND"
+          });
+        }
+        if (!allowedPhotoMimeTypes.has(photo.mimeType)) {
+          return res.status(500).json({
+            error: "Le type de la photo enregistr\xE9e est invalide.",
+            code: "CHILD_PHOTO_INVALID_MIME_TYPE"
+          });
+        }
+        res.setHeader("Content-Type", photo.mimeType);
+        res.setHeader("Cache-Control", "private, no-store");
+        return res.status(200).send(photo.photoData);
+      }).catch(next);
+    }
+  );
+}
+
 // src/utils/schoolPeriod.ts
 function getExpectedPeriodTypeForCycle(cycleCode) {
   if (cycleCode === "college") return "trimester";
@@ -1832,8 +1914,8 @@ var uploadStorageDir = import_path2.default.join(process.cwd(), "uploads", "abse
 var webBackendUrl = () => (process.env.WEB_BACKEND_URL || "").trim().replace(/\/+$/, "");
 var MAX_ABSENCE_ATTACHMENT_COUNT = 5;
 var allowedJustificationMimeTypes = ["application/pdf", "image/png", "image/jpeg"];
-var upload = (0, import_multer.default)({
-  storage: import_multer.default.diskStorage({
+var upload = (0, import_multer2.default)({
+  storage: import_multer2.default.diskStorage({
     destination: uploadStorageDir,
     filename: (_req, file, cb) => {
       const randomSuffix = import_crypto2.default.randomBytes(16).toString("hex");
@@ -2195,6 +2277,7 @@ app.get("/api/mobile/parent/children", requireAuth, requireParentRoleOnly, async
   const children = await store.getChildrenOfParent(parentId);
   return res.json(children);
 });
+registerChildPhotoRoutes(app, requireAuth, requireParentRoleOnly, store);
 app.post("/api/mobile/parent/children/simulate", requireAuth, requireParentRoleOnly, async (req, res) => {
   const parentId = req.parent.id;
   const child = await store.createSimulatedChildForParent(parentId);

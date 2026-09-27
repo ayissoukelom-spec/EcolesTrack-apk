@@ -13,6 +13,7 @@ import logoImage from "../assets/logo.png";
 import ThemeToggle from "./ThemeToggle";
 import { Parent, Child, Absence, Grade, AppNotification, ChildGradesResponse } from "../types";
 import { getApiErrorMessage, parseJsonSafe, withApiBase } from "../utils/http";
+import { classifyParentNotification } from "../utils/notificationCategory";
 import { getSchoolPeriodLabel, isGradeInSchoolPeriod, SCHOOL_PERIOD_FALLBACK_LABEL } from "../utils/schoolPeriod";
 
 interface ParentPortalProps {
@@ -1147,41 +1148,6 @@ export default function ParentPortal({
     } finally {
       setDownloadingAttachmentKey(null);
     }
-  };
-
-  const normalizeNotificationText = (text?: string) =>
-    (text || "")
-      .toLowerCase()
-      .normalize("NFD")
-      .replace(/[-\u0300-\u036f]/g, "")
-      .replace(/[^a-z0-9\s]/g, " ")
-      .trim();
-
-  const classifyParentNotification = (notif: AppNotification) => {
-    const normalizedTitle = normalizeNotificationText(notif.title);
-    const payload = normalizeNotificationText(`${notif.title} ${notif.message}`);
-
-    if (/^(nouvelle note pour|note modifiee pour|nouvelle note disponible)\b/.test(normalizedTitle)) {
-      return "notes";
-    }
-
-    if (/\b(devoir|homework|assignment|exercice|travail)\b/.test(payload)) {
-      return "homework";
-    }
-
-    if (/\b(note|notes|moyenne|evaluation|évaluation|éval|bulletin)\b/.test(payload)) {
-      return "notes";
-    }
-
-    if (/\b(absence|absences|retard|retards)\b/.test(payload)) {
-      return "absences";
-    }
-
-    if (/\b(info|information|informations|annonce|message|communique|communiqué|actualité)\b/.test(payload)) {
-      return "info";
-    }
-
-    return "info";
   };
 
   const notesNotifications = localNotifications.filter((notif) => classifyParentNotification(notif) === "notes");
