@@ -609,7 +609,7 @@ var PostgresStore = class {
     const userId = Number(parentId);
     if (!Number.isInteger(userId)) return [];
     const { rows } = await dbQuery(`
-      SELECT id, title, body, is_read, created_at
+      SELECT id, title, body, type, is_read, created_at
       FROM notifications
       WHERE user_id = $1
       ORDER BY created_at DESC
@@ -636,6 +636,7 @@ var PostgresStore = class {
       parentId,
       title: row.title,
       message: row.body,
+      type: row.type,
       read: row.is_read,
       createdAt: row.created_at,
       deepLink: void 0,

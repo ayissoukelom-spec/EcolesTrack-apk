@@ -155,8 +155,14 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private String readIndexHtmlFromAssets() throws java.io.IOException {
-        try (java.io.InputStream inputStream = getAssets().open("index.html")) {
-            return new String(inputStream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        try (java.io.InputStream inputStream = getAssets().open("index.html");
+             java.io.ByteArrayOutputStream outputStream = new java.io.ByteArrayOutputStream()) {
+            byte[] buffer = new byte[4096];
+            int length;
+            while ((length = inputStream.read(buffer)) != -1) {
+                outputStream.write(buffer, 0, length);
+            }
+            return new String(outputStream.toByteArray(), java.nio.charset.StandardCharsets.UTF_8);
         }
     }
 
