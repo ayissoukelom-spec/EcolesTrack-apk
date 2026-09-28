@@ -1532,6 +1532,9 @@ export default function ParentPortal({
                           <p className="text-xl font-black text-indigo-900 dark:text-indigo-100 mt-1">
                             {currentPeriodAverage ? `${currentPeriodAverage} / 20` : "-- / 20"}
                           </p>
+                          <p className="mt-0.5 break-words text-[10px] leading-tight font-medium text-indigo-700/80 dark:text-indigo-300/80">
+                            Moyenne provisoire
+                          </p>
                           <p className="text-[10px] text-indigo-700/80 dark:text-indigo-300/80 font-medium mt-0.5">
                             {hasConfiguredSchoolPeriod ? `${termEvaluationCount} évaluation(s)` : "Aucune période active disponible"}
                           </p>
