@@ -52,6 +52,7 @@ import java.util.Locale;
 import java.util.Set;
 
 import com.google.firebase.messaging.FirebaseMessaging;
+import androidx.activity.OnBackPressedCallback;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -87,6 +88,7 @@ public class MainActivity extends AppCompatActivity {
             "h1{font-size:18px;margin:0 0 8px;}p{font-size:14px;margin:0 0 8px;color:#cbd5e1;}code{font-size:12px;color:#93c5fd;word-break:break-all;}</style></head><body>" +
             "<div class='card'><h1>ÉcoleTrack</h1><p>Le chargement a échoué.</p><p><code>{DETAIL}</code></p></div></body></html>";
     private WebView webView;
+    private boolean initialAppPageLoaded;
     private String pendingFcmToken;
     private String pendingTarget;
     private String pendingNotificationId;
@@ -274,6 +276,28 @@ public class MainActivity extends AppCompatActivity {
         setContentView(rootLayout);
         Log.d(TAG, "[MainActivity] onCreate ts=" + System.currentTimeMillis() + " url=" + (webView != null ? webView.getUrl() : "null"));
 
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override
+            public void handleOnBackPressed() {
+                String currentUrl = webView != null ? webView.getUrl() : null;
+                boolean canGoBack = webView != null && webView.canGoBack();
+                boolean useWebViewHistory = BackNavigationPolicy.shouldNavigateWebViewBack(initialAppPageLoaded, canGoBack);
+                Log.i(TAG, "[BACK] received initialAppPageLoaded=" + initialAppPageLoaded
+                        + " canGoBack=" + canGoBack + " currentUrl=" + currentUrl);
+
+                if (useWebViewHistory) {
+                    Log.i(TAG, "[BACK] navigating WebView history from url=" + currentUrl);
+                    webView.goBack();
+                    return;
+                }
+
+                Log.i(TAG, "[BACK] delegating to Android; no useful WebView history");
+                setEnabled(false);
+                getOnBackPressedDispatcher().onBackPressed();
+                setEnabled(true);
+            }
+        });
+
         ViewCompat.setOnApplyWindowInsetsListener(rootLayout, (view, insets) -> {
             Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
             view.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom);
@@ -361,6 +385,13 @@ public class MainActivity extends AppCompatActivity {
 
                 if (url == null || (!url.startsWith("file:///android_asset/") && !url.contains("appassets.androidplatform.net"))) {
                     return;
+                }
+
+                if (!initialAppPageLoaded) {
+                    initialAppPageLoaded = true;
+                    view.clearHistory();
+                    Log.i(TAG, "[BACK] initial app page loaded; cleared bootstrap history url=" + url
+                            + " canGoBack=" + view.canGoBack());
                 }
 
                 String safeApiUrl = apiServerUrl == null ? "" : apiServerUrl.replace("\\", "\\\\").replace("'", "\\'");
@@ -1110,12 +1141,4 @@ public class MainActivity extends AppCompatActivity {
         Log.d(TAG, "[MainActivity] onRestart ts=" + System.currentTimeMillis() + " url=" + (webView != null ? webView.getUrl() : "null"));
     }
 
-    @Override
-    public void onBackPressed() {
-        if (webView != null && webView.canGoBack()) {
-            webView.goBack();
-        } else {
-            super.onBackPressed();
-        }
-    }
 }
