@@ -45,6 +45,23 @@ export const DevAddAbsenceSchema = z.object({
   justificationText: z.string().optional()
 });
 
+export const ParentAbsenceDeclarationSchema = z.object({
+  childId: z.string().regex(/^\d+$/, { message: "Identifiant d’enfant invalide." }),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, { message: "Format de date invalide (AAAA-MM-JJ)." }),
+  startTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, { message: "Format d’heure invalide (HH:MM)." }),
+  endTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, { message: "Format d’heure invalide (HH:MM)." }),
+  reason: z.string().max(1000).optional(),
+}).refine((value) => {
+  const parsed = new Date(`${value.date}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value.date;
+}, {
+  message: "Date invalide.",
+  path: ['date'],
+}).refine((value) => value.startTime < value.endTime, {
+  message: "L’heure de fin doit être postérieure à l’heure de début.",
+  path: ['endTime'],
+});
+
 // 6. Simulation Add Grade schema
 export const DevAddGradeSchema = z.object({
   childId: z.string().min(1),

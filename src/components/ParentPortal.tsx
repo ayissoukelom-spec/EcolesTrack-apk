@@ -11,7 +11,7 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import logoImage from "../assets/logo.png";
 import ThemeToggle from "./ThemeToggle";
-import { Parent, Child, Absence, Grade, AppNotification, ChildGradesResponse } from "../types";
+import { Parent, Child, Absence, AbsenceDeclaration, Grade, AppNotification, ChildGradesResponse } from "../types";
 import { getApiErrorMessage, parseJsonSafe, withApiBase } from "../utils/http";
 import { classifyParentNotification } from "../utils/notificationCategory";
 import { getSchoolPeriodLabel, isGradeInSchoolPeriod, SCHOOL_PERIOD_FALLBACK_LABEL } from "../utils/schoolPeriod";
@@ -73,6 +73,14 @@ export default function ParentPortal({
   // Parent app active state loaded from endpoints
   const [children, setChildren] = useState<Child[]>([]);
   const [absences, setAbsences] = useState<Absence[]>([]);
+  const [absenceDeclarations, setAbsenceDeclarations] = useState<AbsenceDeclaration[]>([]);
+  const [showAbsenceDeclarationForm, setShowAbsenceDeclarationForm] = useState(false);
+  const [editingAbsenceDeclarationId, setEditingAbsenceDeclarationId] = useState<string | null>(null);
+  const [absenceDeclarationDate, setAbsenceDeclarationDate] = useState(new Date().toISOString().slice(0, 10));
+  const [absenceDeclarationStartTime, setAbsenceDeclarationStartTime] = useState("08:00");
+  const [absenceDeclarationEndTime, setAbsenceDeclarationEndTime] = useState("09:30");
+  const [absenceDeclarationReason, setAbsenceDeclarationReason] = useState("");
+  const [absenceDeclarationError, setAbsenceDeclarationError] = useState<string | null>(null);
   const [grades, setGrades] = useState<Grade[]>([]);
   const [termAverageApi, setTermAverageApi] = useState<number | null>(null);
   const [termPeriod, setTermPeriod] = useState<ChildGradesResponse["period"]>(null);
@@ -215,6 +223,10 @@ export default function ParentPortal({
   }, []);
 
   const currentChild = selectedChild || children[0] || null;
+  const childAbsenceDeclarations = currentChild
+    ? absenceDeclarations.filter((declaration: AbsenceDeclaration) => declaration.childId === currentChild.id)
+    : [];
+  const declarationToday = new Date().toISOString().slice(0, 10);
   const activeSchoolPeriod = !currentChild?.cycleCode || currentChild.cycleCode === termCycleCode ? termPeriod : null;
   const schoolPeriodLabel = getSchoolPeriodLabel(termCycleCode, activeSchoolPeriod?.periodType);
   const hasConfiguredSchoolPeriod = schoolPeriodLabel !== SCHOOL_PERIOD_FALLBACK_LABEL;
@@ -226,6 +238,7 @@ export default function ParentPortal({
 
     setChildren([]);
     setAbsences([]);
+    setAbsenceDeclarations([]);
     setGrades([]);
     setTermAverageApi(null);
     setChildrenLoadError(null);
@@ -397,6 +410,7 @@ export default function ParentPortal({
   useEffect(() => {
     if (token && selectedChildId) {
       fetchChildAbsences(selectedChildId);
+      fetchAbsenceDeclarations();
       fetchChildGrades(selectedChildId);
       setTermAverageApi(null);
       setTermCycleCode(null);
@@ -732,6 +746,70 @@ export default function ParentPortal({
       }
     } catch (e) {
       console.error("Failed to fetch absences", e);
+    }
+  };
+
+  const fetchAbsenceDeclarations = async () => {
+    try {
+      const response = await performProtectedRequest((authToken) => fetch(withApiBase("/api/mobile/parent/absence-declarations"), {
+        headers: { "Authorization": `Bearer ${authToken}` }
+      }));
+      if (response?.ok) {
+        const data = await parseJsonSafe<AbsenceDeclaration[]>(response);
+        setAbsenceDeclarations(Array.isArray(data) ? data : []);
+      }
+    } catch (error) {
+      console.error("Failed to fetch absence declarations", error);
+    }
+  };
+
+  const submitAbsenceDeclaration = async () => {
+    if (!currentChild || !token) return;
+    setAbsenceDeclarationError(null);
+    try {
+      const isEditing = editingAbsenceDeclarationId != null;
+      const endpoint = isEditing
+        ? `/api/mobile/parent/absence-declarations/${editingAbsenceDeclarationId}`
+        : "/api/mobile/parent/absence-declarations";
+      const response = await performProtectedRequest((authToken) => fetch(withApiBase(endpoint), {
+        method: isEditing ? "PUT" : "POST",
+        headers: {
+          "Authorization": `Bearer ${authToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          childId: currentChild.id,
+          date: absenceDeclarationDate,
+          startTime: absenceDeclarationStartTime,
+          endTime: absenceDeclarationEndTime,
+          reason: absenceDeclarationReason.trim() || undefined,
+        }),
+      }));
+      if (!response) throw new Error("Session invalide. Veuillez vous reconnecter.");
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(getApiErrorMessage(data, "Impossible d’enregistrer la déclaration."));
+      setShowAbsenceDeclarationForm(false);
+      setEditingAbsenceDeclarationId(null);
+      setAbsenceDeclarationReason("");
+      await fetchAbsenceDeclarations();
+    } catch (error: any) {
+      setAbsenceDeclarationError(error?.message || "Impossible d’enregistrer la déclaration.");
+    }
+  };
+
+  const cancelAbsenceDeclaration = async (declarationId: string) => {
+    setAbsenceDeclarationError(null);
+    try {
+      const response = await performProtectedRequest((authToken) => fetch(withApiBase(`/api/mobile/parent/absence-declarations/${declarationId}/cancel`), {
+        method: "PUT",
+        headers: { "Authorization": `Bearer ${authToken}` },
+      }));
+      if (!response) throw new Error("Session invalide. Veuillez vous reconnecter.");
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(getApiErrorMessage(data, "Impossible d’annuler la déclaration."));
+      await fetchAbsenceDeclarations();
+    } catch (error: any) {
+      setAbsenceDeclarationError(error?.message || "Impossible d’annuler la déclaration.");
     }
   };
 
@@ -1805,7 +1883,108 @@ export default function ParentPortal({
                     </motion.div>
                   )}
                 </AnimatePresence>
-                                <div className="flex items-center justify-between">
+                <section className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-3 space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <h3 className="text-xs font-bold text-slate-800 dark:text-slate-100">Déclarations préalables</h3>
+                      <p className="mt-0.5 text-[10px] text-slate-500 dark:text-slate-400">Distinctes des absences constatées.</p>
+                    </div>
+                    {currentChild && !showAbsenceDeclarationForm && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingAbsenceDeclarationId(null);
+                          setAbsenceDeclarationDate(declarationToday);
+                          setAbsenceDeclarationStartTime("08:00");
+                          setAbsenceDeclarationEndTime("09:30");
+                          setAbsenceDeclarationReason("");
+                          setAbsenceDeclarationError(null);
+                          setShowAbsenceDeclarationForm(true);
+                        }}
+                        className="rounded-lg bg-indigo-600 px-3 py-2 text-[10px] font-bold text-white hover:bg-indigo-700"
+                      >
+                        Déclarer une absence
+                      </button>
+                    )}
+                  </div>
+
+                  {showAbsenceDeclarationForm && currentChild && (
+                    <form
+                      onSubmit={(event) => { event.preventDefault(); void submitAbsenceDeclaration(); }}
+                      className="grid grid-cols-2 gap-2 border-y border-slate-200 py-3 dark:border-slate-700"
+                    >
+                      <label className="text-[10px] font-semibold text-slate-600 dark:text-slate-300">
+                        Date
+                        <input required type="date" min={declarationToday} value={absenceDeclarationDate} onChange={(event) => setAbsenceDeclarationDate(event.target.value)} className="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white" />
+                      </label>
+                      <label className="text-[10px] font-semibold text-slate-600 dark:text-slate-300">
+                        De
+                        <input required type="time" value={absenceDeclarationStartTime} onChange={(event) => setAbsenceDeclarationStartTime(event.target.value)} className="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white" />
+                      </label>
+                      <label className="text-[10px] font-semibold text-slate-600 dark:text-slate-300">
+                        À
+                        <input required type="time" value={absenceDeclarationEndTime} onChange={(event) => setAbsenceDeclarationEndTime(event.target.value)} className="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white" />
+                      </label>
+                      <label className="text-[10px] font-semibold text-slate-600 dark:text-slate-300">
+                        Motif (facultatif)
+                        <input value={absenceDeclarationReason} onChange={(event) => setAbsenceDeclarationReason(event.target.value)} className="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white" />
+                      </label>
+                      {absenceDeclarationError && <p role="alert" className="col-span-2 text-[10px] font-semibold text-rose-700 dark:text-rose-300">{absenceDeclarationError}</p>}
+                      <div className="col-span-2 flex justify-end gap-2">
+                        <button type="button" onClick={() => { setShowAbsenceDeclarationForm(false); setEditingAbsenceDeclarationId(null); setAbsenceDeclarationError(null); }} className="rounded-lg border border-slate-300 px-3 py-2 text-[10px] font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200">Fermer</button>
+                        <button type="submit" className="rounded-lg bg-indigo-600 px-3 py-2 text-[10px] font-bold text-white hover:bg-indigo-700">{editingAbsenceDeclarationId ? "Enregistrer" : "Envoyer"}</button>
+                      </div>
+                    </form>
+                  )}
+
+                  {absenceDeclarationError && !showAbsenceDeclarationForm && (
+                    <p role="alert" className="text-[10px] font-semibold text-rose-700 dark:text-rose-300">{absenceDeclarationError}</p>
+                  )}
+
+                  {childAbsenceDeclarations.length === 0 ? (
+                    <p className="py-2 text-center text-[10px] text-slate-500 dark:text-slate-400">Aucune déclaration pour cet enfant.</p>
+                  ) : (
+                    <div className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {childAbsenceDeclarations.map((declaration: AbsenceDeclaration) => {
+                        const canChange = ["RECEIVED", "ACCEPTED"].includes(declaration.status) && declaration.date >= declarationToday;
+                        const declarationStatusLabel = {
+                          RECEIVED: "Reçue",
+                          ACCEPTED: "Acceptée",
+                          REFUSED: "Refusée",
+                          CANCELLED: "Annulée",
+                          NOT_REALIZED: "Non réalisée",
+                        }[declaration.status] || declaration.status;
+                        return (
+                          <div key={declaration.id} className="flex items-start justify-between gap-2 py-2.5">
+                            <div className="min-w-0">
+                              <p className="text-[10px] font-bold text-slate-800 dark:text-slate-100">
+                                {new Date(`${declaration.date}T12:00:00`).toLocaleDateString("fr-FR")} · {declaration.startTime}–{declaration.endTime}
+                              </p>
+                              <p className="mt-0.5 text-[10px] font-semibold text-slate-600 dark:text-slate-300">{declarationStatusLabel}</p>
+                              {declaration.reason && <p className="mt-0.5 text-[10px] text-slate-500 dark:text-slate-400">{declaration.reason}</p>}
+                              {declaration.rejectionReason && <p className="mt-0.5 text-[10px] text-rose-700 dark:text-rose-300">Motif du refus : {declaration.rejectionReason}</p>}
+                            </div>
+                            {canChange && (
+                              <div className="flex shrink-0 gap-1.5">
+                                <button type="button" onClick={() => {
+                                  setEditingAbsenceDeclarationId(declaration.id);
+                                  setAbsenceDeclarationDate(declaration.date);
+                                  setAbsenceDeclarationStartTime(declaration.startTime);
+                                  setAbsenceDeclarationEndTime(declaration.endTime);
+                                  setAbsenceDeclarationReason(declaration.reason || "");
+                                  setAbsenceDeclarationError(null);
+                                  setShowAbsenceDeclarationForm(true);
+                                }} className="rounded-md border border-slate-300 px-2 py-1 text-[9px] font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200">Modifier</button>
+                                <button type="button" onClick={() => void cancelAbsenceDeclaration(declaration.id)} className="rounded-md border border-slate-300 px-2 py-1 text-[9px] font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200">Annuler</button>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </section>
+                <div className="flex items-center justify-between">
                   <h3 className="text-[10px] font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider">Absences de l&apos;élève</h3>
                   {currentChild && (
                     <span className="text-[10px] text-indigo-700 dark:text-indigo-400 font-bold">
@@ -1826,6 +2005,7 @@ export default function ParentPortal({
                       const isApproved = justificationStatus === "APPROVED";
                       const isPending = justificationStatus === "PENDING";
                       const isRejected = justificationStatus === "REJECTED";
+                      const isParentDeclared = Boolean(abs.declarationId) && !justificationStatus && !abs.justified;
                       return (
                       <div key={abs.id} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl p-3 shadow-sm">
                         <div className="flex items-start justify-between gap-2">
@@ -1855,6 +2035,10 @@ export default function ParentPortal({
                             <span className="shrink-0 text-[10px] font-bold text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900 px-2 py-0.5 rounded-full">
                               Justification refusée
                             </span>
+                          ) : isParentDeclared ? (
+                            <span className="shrink-0 text-[10px] font-bold text-sky-700 dark:text-sky-300 bg-sky-50 dark:bg-sky-950/50 border border-sky-200 dark:border-sky-900 px-2 py-0.5 rounded-full">
+                              Déclaration parentale associée
+                            </span>
                           ) : isApproved ? (
                             <span className="shrink-0 text-[10px] font-bold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-900 px-2 py-0.5 rounded-full flex items-center gap-1">
                               <CheckCircle2 className="h-3 w-3" />
@@ -1880,6 +2064,11 @@ export default function ParentPortal({
                         {isPending && (
                           <p className="text-[11px] text-amber-700 dark:text-amber-300 mt-2 leading-normal font-medium">
                             Justification en attente de traitement.
+                          </p>
+                        )}
+                        {isParentDeclared && (
+                          <p className="text-[11px] text-sky-700 dark:text-sky-300 mt-2 leading-normal font-medium">
+                            Cette absence réelle est rattachée à une déclaration parentale.
                           </p>
                         )}
                         {isApproved && (

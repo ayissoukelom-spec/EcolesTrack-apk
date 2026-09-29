@@ -34,6 +34,7 @@ export interface Child {
 export interface Absence {
   id: string;
   childId: string;
+  declarationId?: string;
   date: string;
   reason: string;
   justified: boolean;
@@ -45,6 +46,17 @@ export interface Absence {
   subjectName?: string;
   startTime?: string;
   endTime?: string;
+}
+
+export interface AbsenceDeclaration {
+  id: string;
+  childId: string;
+  date: string;
+  startTime: string;
+  endTime: string;
+  reason?: string;
+  status: 'RECEIVED' | 'ACCEPTED' | 'REFUSED' | 'CANCELLED' | 'NOT_REALIZED';
+  rejectionReason?: string;
 }
 
 export interface Grade {

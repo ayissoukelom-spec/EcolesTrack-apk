@@ -267,8 +267,9 @@ var mapParentAbsenceRow = (row, childId) => ({
   id: String(row.id),
   childId: String(row.student_id ?? childId),
   date: row.date,
-  reason: row.is_justified ? "Absence justifi\xE9e" : "Absence non justifi\xE9e",
+  reason: row.declaration_id ? "Absence avec d\xE9claration parentale" : row.is_justified ? "Absence justifi\xE9e" : "Absence non justifi\xE9e",
   justified: row.is_justified,
+  declarationId: row.declaration_id == null ? void 0 : String(row.declaration_id),
   justificationText: row.justification_reason ?? void 0,
   justificationStatus: row.justification_status ?? null,
   rejectionReason: row.rejection_reason ?? void 0,
@@ -501,6 +502,7 @@ var PostgresStore = class {
     const { rows } = await dbQuery(`
     SELECT 
       a.id,
+      a.declaration_id,
       a.date,
       a.period,
       a.is_justified,
@@ -1089,6 +1091,46 @@ function registerChildPhotoRoutes(app2, requireAuth2, requireParentRoleOnly2, st
       }).catch(next);
     }
   );
+}
+
+// backend/absenceDeclarations.ts
+var import_node_crypto = __toESM(require("node:crypto"), 1);
+var AbsenceDeclarationRelayError = class extends Error {
+  constructor(message, status) {
+    super(message);
+    this.name = "AbsenceDeclarationRelayError";
+    this.status = status;
+  }
+};
+async function relayAbsenceDeclaration(webBackendUrl2, internalSecret, parentUserId, action, input = {}, fetcher = fetch) {
+  const baseUrl = webBackendUrl2.trim().replace(/\/+$/, "");
+  if (!baseUrl || !internalSecret.trim()) {
+    throw new AbsenceDeclarationRelayError("Le serveur Web des d\xE9clarations est indisponible.", 502);
+  }
+  const payload = { parentUserId, action, input };
+  const timestamp = Date.now().toString();
+  const hmac = import_node_crypto.default.createHmac("sha256", internalSecret);
+  hmac.update(`${JSON.stringify(payload)}${timestamp}`);
+  const signature = hmac.digest("hex");
+  let response;
+  try {
+    response = await fetcher(`${baseUrl}/api/internal/absence-declarations`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Internal-Timestamp": timestamp,
+        "X-Internal-Signature": signature
+      },
+      body: JSON.stringify(payload)
+    });
+  } catch {
+    throw new AbsenceDeclarationRelayError("Le serveur Web des d\xE9clarations est indisponible.", 502);
+  }
+  const body = await response.json().catch(() => ({ error: "R\xE9ponse invalide du serveur Web." }));
+  if (!response.ok) {
+    throw new AbsenceDeclarationRelayError(body?.error || "La d\xE9claration n\u2019a pas pu \xEAtre transmise.", response.status);
+  }
+  return { status: response.status, body };
 }
 
 // src/utils/schoolPeriod.ts
@@ -1898,6 +1940,22 @@ var DevAddAbsenceSchema = import_zod.z.object({
   justified: import_zod.z.boolean().optional(),
   justificationText: import_zod.z.string().optional()
 });
+var ParentAbsenceDeclarationSchema = import_zod.z.object({
+  childId: import_zod.z.string().regex(/^\d+$/, { message: "Identifiant d\u2019enfant invalide." }),
+  date: import_zod.z.string().regex(/^\d{4}-\d{2}-\d{2}$/, { message: "Format de date invalide (AAAA-MM-JJ)." }),
+  startTime: import_zod.z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, { message: "Format d\u2019heure invalide (HH:MM)." }),
+  endTime: import_zod.z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, { message: "Format d\u2019heure invalide (HH:MM)." }),
+  reason: import_zod.z.string().max(1e3).optional()
+}).refine((value) => {
+  const parsed = /* @__PURE__ */ new Date(`${value.date}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value.date;
+}, {
+  message: "Date invalide.",
+  path: ["date"]
+}).refine((value) => value.startTime < value.endTime, {
+  message: "L\u2019heure de fin doit \xEAtre post\xE9rieure \xE0 l\u2019heure de d\xE9but.",
+  path: ["endTime"]
+});
 var DevAddGradeSchema = import_zod.z.object({
   childId: import_zod.z.string().min(1),
   subject: import_zod.z.string().min(1),
@@ -2301,6 +2359,81 @@ app.get("/api/mobile/parent/children/:childId/absences", requireAuth, requirePar
   }
   const absences = await store.getAbsencesOfChild(childId);
   return res.json(absences);
+});
+var toMobileAbsenceDeclaration = (row) => row && {
+  id: String(row.id),
+  childId: String(row.studentId),
+  date: row.date,
+  startTime: row.startTime,
+  endTime: row.endTime,
+  reason: row.reason ?? void 0,
+  status: row.status,
+  rejectionReason: row.rejectionReason ?? void 0
+};
+app.get("/api/mobile/parent/absence-declarations", requireAuth, requireParentRoleOnly, async (req, res) => {
+  try {
+    const result = await relayAbsenceDeclaration(
+      webBackendUrl(),
+      process.env.INTERNAL_SECRET || "",
+      req.parent.id,
+      "list"
+    );
+    return res.json(Array.isArray(result.body) ? result.body.map(toMobileAbsenceDeclaration) : []);
+  } catch (error) {
+    const status = error instanceof AbsenceDeclarationRelayError ? error.status : 502;
+    return res.status(status).json({ error: error?.message || "Impossible de charger les d\xE9clarations." });
+  }
+});
+app.post("/api/mobile/parent/absence-declarations", requireAuth, requireParentRoleOnly, async (req, res) => {
+  const validation = ParentAbsenceDeclarationSchema.safeParse(req.body);
+  if (!validation.success) return res.status(400).json({ error: "Donn\xE9es de d\xE9claration invalides.", details: validation.error.issues });
+  try {
+    const input = validation.data;
+    const result = await relayAbsenceDeclaration(
+      webBackendUrl(),
+      process.env.INTERNAL_SECRET || "",
+      req.parent.id,
+      "create",
+      { studentId: Number(input.childId), date: input.date, startTime: input.startTime, endTime: input.endTime, reason: input.reason }
+    );
+    return res.status(result.status).json(toMobileAbsenceDeclaration(result.body));
+  } catch (error) {
+    const status = error instanceof AbsenceDeclarationRelayError ? error.status : 502;
+    return res.status(status).json({ error: error?.message || "Impossible de transmettre la d\xE9claration." });
+  }
+});
+app.put("/api/mobile/parent/absence-declarations/:id", requireAuth, requireParentRoleOnly, async (req, res) => {
+  const validation = ParentAbsenceDeclarationSchema.safeParse(req.body);
+  if (!validation.success) return res.status(400).json({ error: "Donn\xE9es de d\xE9claration invalides.", details: validation.error.issues });
+  try {
+    const input = validation.data;
+    const result = await relayAbsenceDeclaration(
+      webBackendUrl(),
+      process.env.INTERNAL_SECRET || "",
+      req.parent.id,
+      "update",
+      { id: req.params.id, studentId: Number(input.childId), date: input.date, startTime: input.startTime, endTime: input.endTime, reason: input.reason }
+    );
+    return res.json(toMobileAbsenceDeclaration(result.body));
+  } catch (error) {
+    const status = error instanceof AbsenceDeclarationRelayError ? error.status : 502;
+    return res.status(status).json({ error: error?.message || "Impossible de modifier la d\xE9claration." });
+  }
+});
+app.put("/api/mobile/parent/absence-declarations/:id/cancel", requireAuth, requireParentRoleOnly, async (req, res) => {
+  try {
+    const result = await relayAbsenceDeclaration(
+      webBackendUrl(),
+      process.env.INTERNAL_SECRET || "",
+      req.parent.id,
+      "cancel",
+      { id: req.params.id }
+    );
+    return res.json(toMobileAbsenceDeclaration(result.body));
+  } catch (error) {
+    const status = error instanceof AbsenceDeclarationRelayError ? error.status : 502;
+    return res.status(status).json({ error: error?.message || "Impossible d\u2019annuler la d\xE9claration." });
+  }
 });
 app.put("/api/absences/:absenceId/justify", requireAuth, requireParentRoleOnly, async (req, res) => {
   const { absenceId } = req.params;

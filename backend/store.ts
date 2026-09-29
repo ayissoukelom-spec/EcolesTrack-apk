@@ -522,6 +522,7 @@ export class PostgresStore {
 
   const { rows } = await dbQuery<{
     id: number;
+    declaration_id: number | null;
     date: string;
     period: string | null;
     is_justified: boolean;
@@ -534,6 +535,7 @@ export class PostgresStore {
   }>(`
     SELECT 
       a.id,
+      a.declaration_id,
       a.date,
       a.period,
       a.is_justified,

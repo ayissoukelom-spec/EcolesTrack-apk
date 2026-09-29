@@ -37,6 +37,24 @@ test('text-only parent justification is stored pending and is not auto-approved'
   assert.equal(absence?.justificationText, 'Maladie');
 });
 
+test('parent absence response exposes a separate parental declaration link', () => {
+  const absence = mapParentAbsenceRow({
+    id: 46,
+    student_id: 12,
+    declaration_id: 9,
+    date: '2026-09-26',
+    is_justified: false,
+    justification_reason: null,
+    justification_status: null,
+    rejection_reason: null,
+  }, '12');
+
+  assert.equal(absence.declarationId, '9');
+  assert.equal(absence.justified, false);
+  assert.equal(absence.justificationStatus, null);
+  assert.equal(absence.reason, 'Absence avec déclaration parentale');
+});
+
 test('parent text justification returns null when the absence is not owned by that parent', async () => {
   const absence = await submitAbsenceJustificationForReview(async () => ({ rows: [] }), '45', '99', 'Maladie');
 

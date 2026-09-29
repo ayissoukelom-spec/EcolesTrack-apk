@@ -3,6 +3,7 @@ import type { Absence } from '../src/types.js';
 interface AbsenceRow {
   id: number | string;
   student_id?: number | string;
+  declaration_id?: number | string | null;
   date: string;
   period?: string | null;
   is_justified: boolean;
@@ -32,8 +33,9 @@ export const mapParentAbsenceRow = (row: AbsenceRow, childId: string): Absence =
   id: String(row.id),
   childId: String(row.student_id ?? childId),
   date: row.date,
-  reason: row.is_justified ? 'Absence justifiée' : 'Absence non justifiée',
+  reason: row.declaration_id ? 'Absence avec déclaration parentale' : row.is_justified ? 'Absence justifiée' : 'Absence non justifiée',
   justified: row.is_justified,
+  declarationId: row.declaration_id == null ? undefined : String(row.declaration_id),
   justificationText: row.justification_reason ?? undefined,
   justificationStatus: row.justification_status ?? null,
   rejectionReason: row.rejection_reason ?? undefined,

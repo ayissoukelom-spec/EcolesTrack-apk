@@ -14,6 +14,7 @@ import { createServer as createViteServer } from "vite";
 import { store } from "./backend/store";
 import { registerChildPhotoRoutes } from "./backend/mobilePhotoRoutes";
 import { AbsenceJustificationAlreadyRejectedError } from "./backend/absenceJustification";
+import { AbsenceDeclarationRelayError, relayAbsenceDeclaration } from "./backend/absenceDeclarations";
 import { dbQuery, initializeMobileTables } from "./backend/postgres";
 import { getExpectedPeriodTypeForCycle } from "./src/utils/schoolPeriod";
 import { calculateCurrentTermAverage } from "./src/utils/termAverage";
@@ -22,7 +23,7 @@ import { Logger } from "./backend/utils/logger";
 import { AuthService } from "./backend/services/auth";
 import { NotificationService } from "./backend/services/notification";
 import { QueueManager } from "./backend/jobs/queue";
-import { LoginSchema, RegisterPushTokenSchema, NotificationPreferencesSchema, TestNotificationSchema } from "./backend/validators/schemas";
+import { LoginSchema, RegisterPushTokenSchema, NotificationPreferencesSchema, TestNotificationSchema, ParentAbsenceDeclarationSchema } from "./backend/validators/schemas";
 
 const logger = new Logger("ExpressServer");
 
@@ -534,6 +535,86 @@ app.get("/api/mobile/parent/children/:childId/absences", requireAuth, requirePar
 
   const absences = await store.getAbsencesOfChild(childId);
   return res.json(absences);
+});
+
+const toMobileAbsenceDeclaration = (row: any) => row && ({
+  id: String(row.id),
+  childId: String(row.studentId),
+  date: row.date,
+  startTime: row.startTime,
+  endTime: row.endTime,
+  reason: row.reason ?? undefined,
+  status: row.status,
+  rejectionReason: row.rejectionReason ?? undefined,
+});
+
+app.get("/api/mobile/parent/absence-declarations", requireAuth, requireParentRoleOnly, async (req: AuthenticatedRequest, res) => {
+  try {
+    const result = await relayAbsenceDeclaration(
+      webBackendUrl(),
+      process.env.INTERNAL_SECRET || "",
+      req.parent!.id,
+      "list",
+    );
+    return res.json(Array.isArray(result.body) ? result.body.map(toMobileAbsenceDeclaration) : []);
+  } catch (error: any) {
+    const status = error instanceof AbsenceDeclarationRelayError ? error.status : 502;
+    return res.status(status).json({ error: error?.message || "Impossible de charger les déclarations." });
+  }
+});
+
+app.post("/api/mobile/parent/absence-declarations", requireAuth, requireParentRoleOnly, async (req: AuthenticatedRequest, res) => {
+  const validation = ParentAbsenceDeclarationSchema.safeParse(req.body);
+  if (!validation.success) return res.status(400).json({ error: "Données de déclaration invalides.", details: validation.error.issues });
+  try {
+    const input = validation.data;
+    const result = await relayAbsenceDeclaration(
+      webBackendUrl(),
+      process.env.INTERNAL_SECRET || "",
+      req.parent!.id,
+      "create",
+      { studentId: Number(input.childId), date: input.date, startTime: input.startTime, endTime: input.endTime, reason: input.reason },
+    );
+    return res.status(result.status).json(toMobileAbsenceDeclaration(result.body));
+  } catch (error: any) {
+    const status = error instanceof AbsenceDeclarationRelayError ? error.status : 502;
+    return res.status(status).json({ error: error?.message || "Impossible de transmettre la déclaration." });
+  }
+});
+
+app.put("/api/mobile/parent/absence-declarations/:id", requireAuth, requireParentRoleOnly, async (req: AuthenticatedRequest, res) => {
+  const validation = ParentAbsenceDeclarationSchema.safeParse(req.body);
+  if (!validation.success) return res.status(400).json({ error: "Données de déclaration invalides.", details: validation.error.issues });
+  try {
+    const input = validation.data;
+    const result = await relayAbsenceDeclaration(
+      webBackendUrl(),
+      process.env.INTERNAL_SECRET || "",
+      req.parent!.id,
+      "update",
+      { id: req.params.id, studentId: Number(input.childId), date: input.date, startTime: input.startTime, endTime: input.endTime, reason: input.reason },
+    );
+    return res.json(toMobileAbsenceDeclaration(result.body));
+  } catch (error: any) {
+    const status = error instanceof AbsenceDeclarationRelayError ? error.status : 502;
+    return res.status(status).json({ error: error?.message || "Impossible de modifier la déclaration." });
+  }
+});
+
+app.put("/api/mobile/parent/absence-declarations/:id/cancel", requireAuth, requireParentRoleOnly, async (req: AuthenticatedRequest, res) => {
+  try {
+    const result = await relayAbsenceDeclaration(
+      webBackendUrl(),
+      process.env.INTERNAL_SECRET || "",
+      req.parent!.id,
+      "cancel",
+      { id: req.params.id },
+    );
+    return res.json(toMobileAbsenceDeclaration(result.body));
+  } catch (error: any) {
+    const status = error instanceof AbsenceDeclarationRelayError ? error.status : 502;
+    return res.status(status).json({ error: error?.message || "Impossible d’annuler la déclaration." });
+  }
 });
 
 // 5b. PUT /api/absences/:absenceId/justify
