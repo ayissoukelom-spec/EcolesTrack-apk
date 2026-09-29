@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { AbsenceDeclarationRelayError, relayAbsenceDeclaration } from './absenceDeclarations.js';
 import { ParentAbsenceDeclarationSchema } from './validators/schemas.js';
@@ -10,6 +11,7 @@ test('validates calendar dates without JavaScript date normalization', () => {
     date,
     startTime: '08:00',
     endTime: '10:00',
+    reason: 'Maladie',
   }).success;
 
   assert.equal(parse('2026-02-31'), false);
@@ -17,6 +19,57 @@ test('validates calendar dates without JavaScript date normalization', () => {
   assert.equal(parse('2026-04-31'), false);
   assert.equal(parse('2026-02-28'), true);
   assert.equal(parse('2024-02-29'), true);
+});
+
+test('requires a trimmed nonblank mobile declaration reason and retains its length limit', () => {
+  const base = {
+    childId: '1',
+    date: '2026-09-30',
+    startTime: '08:00',
+    endTime: '10:00',
+  };
+  const invalidPayloads = [
+    base,
+    { ...base, reason: undefined },
+    { ...base, reason: null },
+    { ...base, reason: '' },
+    { ...base, reason: '   ' },
+  ];
+
+  for (const payload of invalidPayloads) {
+    assert.equal(ParentAbsenceDeclarationSchema.safeParse(payload).success, false);
+  }
+
+  const valid = ParentAbsenceDeclarationSchema.safeParse({ ...base, reason: '  Maladie  ' });
+  assert.equal(valid.success, true);
+  if (valid.success) assert.equal(valid.data.reason, 'Maladie');
+  assert.equal(ParentAbsenceDeclarationSchema.safeParse({ ...base, reason: 'x'.repeat(1001) }).success, false);
+});
+
+test('mobile parent declaration UI requires and blocks a blank reason', () => {
+  const parentPortal = readFileSync(new URL('../src/components/ParentPortal.tsx', import.meta.url), 'utf8');
+  assert.match(parentPortal, /Motif\s*<input required value=\{absenceDeclarationReason\}/);
+  assert.match(parentPortal, /if \(!reason\)/);
+  assert.match(parentPortal, /Veuillez saisir un motif de déclaration\./);
+  assert.doesNotMatch(parentPortal, /Motif \(facultatif\)/);
+});
+
+test('mobile create and update routes validate the payload before relaying it', () => {
+  const mobileServer = readFileSync(new URL('../server.ts', import.meta.url), 'utf8');
+  const routeDeclarations = [
+    'app.post("/api/mobile/parent/absence-declarations"',
+    'app.put("/api/mobile/parent/absence-declarations/:id"',
+  ];
+
+  for (const routeDeclaration of routeDeclarations) {
+    const routeStart = mobileServer.indexOf(routeDeclaration);
+    assert.notEqual(routeStart, -1, `missing route: ${routeDeclaration}`);
+    const routeEnd = mobileServer.indexOf('\n});', routeStart);
+    const routeBody = mobileServer.slice(routeStart, routeEnd);
+    const validationIndex = routeBody.indexOf('ParentAbsenceDeclarationSchema.safeParse(req.body)');
+    const relayIndex = routeBody.indexOf('relayAbsenceDeclaration(');
+    assert.ok(validationIndex >= 0 && relayIndex > validationIndex, `${routeDeclaration} must validate before relay`);
+  }
 });
 
 test('relays parent declaration operations to the Web API with a signed payload', async () => {

@@ -1945,7 +1945,7 @@ var ParentAbsenceDeclarationSchema = import_zod.z.object({
   date: import_zod.z.string().regex(/^\d{4}-\d{2}-\d{2}$/, { message: "Format de date invalide (AAAA-MM-JJ)." }),
   startTime: import_zod.z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, { message: "Format d\u2019heure invalide (HH:MM)." }),
   endTime: import_zod.z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, { message: "Format d\u2019heure invalide (HH:MM)." }),
-  reason: import_zod.z.string().max(1e3).optional()
+  reason: import_zod.z.string({ error: "Le motif de d\xE9claration est obligatoire." }).max(1e3, { message: "Le motif ne peut pas d\xE9passer 1000 caract\xE8res." }).trim().min(1, { message: "Le motif de d\xE9claration est obligatoire." })
 }).refine((value) => {
   const parsed = /* @__PURE__ */ new Date(`${value.date}T00:00:00.000Z`);
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value.date;

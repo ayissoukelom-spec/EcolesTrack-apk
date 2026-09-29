@@ -50,7 +50,10 @@ export const ParentAbsenceDeclarationSchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, { message: "Format de date invalide (AAAA-MM-JJ)." }),
   startTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, { message: "Format d’heure invalide (HH:MM)." }),
   endTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, { message: "Format d’heure invalide (HH:MM)." }),
-  reason: z.string().max(1000).optional(),
+  reason: z.string({ error: "Le motif de déclaration est obligatoire." })
+    .max(1000, { message: "Le motif ne peut pas dépasser 1000 caractères." })
+    .trim()
+    .min(1, { message: "Le motif de déclaration est obligatoire." }),
 }).refine((value) => {
   const parsed = new Date(`${value.date}T00:00:00.000Z`);
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value.date;

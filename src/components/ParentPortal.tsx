@@ -766,6 +766,11 @@ export default function ParentPortal({
   const submitAbsenceDeclaration = async () => {
     if (!currentChild || !token) return;
     setAbsenceDeclarationError(null);
+    const reason = absenceDeclarationReason.trim();
+    if (!reason) {
+      setAbsenceDeclarationError("Veuillez saisir un motif de déclaration.");
+      return;
+    }
     try {
       const isEditing = editingAbsenceDeclarationId != null;
       const endpoint = isEditing
@@ -782,7 +787,7 @@ export default function ParentPortal({
           date: absenceDeclarationDate,
           startTime: absenceDeclarationStartTime,
           endTime: absenceDeclarationEndTime,
-          reason: absenceDeclarationReason.trim() || undefined,
+          reason,
         }),
       }));
       if (!response) throw new Error("Session invalide. Veuillez vous reconnecter.");
@@ -1926,8 +1931,8 @@ export default function ParentPortal({
                         <input required type="time" value={absenceDeclarationEndTime} onChange={(event) => setAbsenceDeclarationEndTime(event.target.value)} className="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white" />
                       </label>
                       <label className="text-[10px] font-semibold text-slate-600 dark:text-slate-300">
-                        Motif (facultatif)
-                        <input value={absenceDeclarationReason} onChange={(event) => setAbsenceDeclarationReason(event.target.value)} className="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white" />
+                        Motif
+                        <input required value={absenceDeclarationReason} onChange={(event) => setAbsenceDeclarationReason(event.target.value)} className="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white" />
                       </label>
                       {absenceDeclarationError && <p role="alert" className="col-span-2 text-[10px] font-semibold text-rose-700 dark:text-rose-300">{absenceDeclarationError}</p>}
                       <div className="col-span-2 flex justify-end gap-2">
