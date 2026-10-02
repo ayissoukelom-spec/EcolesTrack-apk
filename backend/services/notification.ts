@@ -17,7 +17,7 @@ export class NotificationService {
     metadata: any = {},
     dedupeKey?: string
   ) {
-    logger.info("[NOTIF_TRACE] dispatchNotification start", { parentId, category, title, dedupeKey, metadata });
+    logger.info("[NOTIF_TRACE] dispatchNotification start", { parentId, category, title, hasDedupeKey: Boolean(dedupeKey), metadata });
     const effectiveParentIds = await this.resolveParentIds(parentId, metadata);
     logger.info(`Orchestrating notification for Parent IDs: ${effectiveParentIds.join(", ") || "<none>"}`, { category, dedupeKey });
     logger.info("[NOTIF_TRACE] parentIds résolus", { effectiveParentIds });
@@ -47,7 +47,6 @@ export class NotificationService {
         id: device.id,
         platform: device.platform,
         tokenPresent: Boolean(device.pushToken),
-        tokenPreview: device.pushToken ? `${device.pushToken.slice(0, 10)}...` : undefined,
         appVersion: device.appVersion,
       }));
       logger.info("[NOTIF_TRACE] Notification devices loaded", { parentId: effectiveParentId, deviceCount: devices.length, devices: deviceSummaries });
@@ -69,8 +68,8 @@ export class NotificationService {
           .filter((token): token is string => Boolean(token))
       ));
 
-      logger.info("Devices found", { parentId: effectiveParentId, devices });
-      logger.info("[TRACE] Push tokens resolved", { parentId: effectiveParentId, pushTokens });
+      logger.info("Devices found", { parentId: effectiveParentId, deviceCount: devices.length });
+      logger.info("[TRACE] Push tokens resolved", { parentId: effectiveParentId, pushTokenCount: pushTokens.length });
       if (pushTokens.length === 0 && isPushAuthorized) {
         logger.warn(`No devices registered for parent: ${effectiveParentId}. Push skipped.`);
       }
@@ -106,8 +105,7 @@ export class NotificationService {
         if (channel === "push") {
           for (const token of pushTokens) {
             const jobDedupeKey = dedupeKey ? `${dedupeKey}-${channel}-${token}` : undefined;
-            const tokenPreview = token ? `${token.slice(0, 10)}...` : undefined;
-            logger.info("[NOTIF_TRACE] QueueManager.addJob preparing", { channel, tokenPresent: Boolean(token), token: tokenPreview, jobName, dedupeKey: jobDedupeKey });
+            logger.info("[NOTIF_TRACE] QueueManager.addJob preparing", { channel, tokenPresent: Boolean(token), jobName, hasDedupeKey: Boolean(jobDedupeKey) });
             const jobId = QueueManager.addJob(jobName, {
               parentId: effectiveParentId,
               channel,
@@ -122,13 +120,13 @@ export class NotificationService {
               dedupeKey: jobDedupeKey,
               maxAttempts: 3
             });
-            logger.info("[NOTIF_TRACE] QueueManager.addJob queued", { jobName, jobId, parentId: effectiveParentId, channel, dedupeKey: jobDedupeKey, tokenPresent: Boolean(token), token: tokenPreview });
+            logger.info("[NOTIF_TRACE] QueueManager.addJob queued", { jobName, jobId, parentId: effectiveParentId, channel, hasDedupeKey: Boolean(jobDedupeKey), tokenPresent: Boolean(token) });
 
             jobsTriggered.push(jobId);
           }
         } else {
           const jobDedupeKey = dedupeKey ? `${dedupeKey}-${channel}` : undefined;
-          logger.info("[NOTIF_TRACE] QueueManager.addJob preparing", { channel, tokenPresent: false, jobName, dedupeKey: jobDedupeKey });
+          logger.info("[NOTIF_TRACE] QueueManager.addJob preparing", { channel, tokenPresent: false, jobName, hasDedupeKey: Boolean(jobDedupeKey) });
           const jobId = QueueManager.addJob(jobName, {
             parentId: effectiveParentId,
             channel,
@@ -142,7 +140,7 @@ export class NotificationService {
             dedupeKey: jobDedupeKey,
             maxAttempts: 3
           });
-          logger.info("[NOTIF_TRACE] QueueManager.addJob queued", { jobName, jobId, parentId: effectiveParentId, channel, dedupeKey: jobDedupeKey, tokenPresent: false });
+          logger.info("[NOTIF_TRACE] QueueManager.addJob queued", { jobName, jobId, parentId: effectiveParentId, channel, hasDedupeKey: Boolean(jobDedupeKey), tokenPresent: false });
 
           jobsTriggered.push(jobId);
         }

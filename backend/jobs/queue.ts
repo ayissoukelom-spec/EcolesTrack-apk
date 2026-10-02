@@ -36,16 +36,14 @@ export class QueueManager {
     const jobData = data as any;
     const parentId = jobData?.parentId;
     const token = jobData?.token;
-    const maskedToken = token ? `${String(token).slice(0, 10)}...` : undefined;
     logger.info("[NOTIF_TRACE] addJob", {
       jobName: name,
       parentId,
       tokenPresent: Boolean(token),
-      token: maskedToken,
       title: jobData?.title,
       message: jobData?.message,
       priority,
-      dedupeKey
+      hasDedupeKey: Boolean(dedupeKey)
     });
 
     // Idempotency check using dedupeKey
@@ -76,7 +74,7 @@ export class QueueManager {
     // Sort active queue by priority (descending) and then creation time (ascending)
     activeQueue.sort((a, b) => b.priority - a.priority || a.createdAt - b.createdAt);
 
-    logger.info(`Job added to queue: ${name} [ID: ${job.id}]`, { jobId: job.id, priority, dedupeKey });
+    logger.info(`Job added to queue: ${name} [ID: ${job.id}]`, { jobId: job.id, priority, hasDedupeKey: Boolean(dedupeKey) });
     
     // Automatically trigger processing in the background
     this.processNextJob();
@@ -95,13 +93,11 @@ export class QueueManager {
 
     const job = activeQueue.shift()!;
     const jobData = job.data as any;
-    const maskedToken = jobData?.token ? `${String(jobData.token).slice(0, 10)}...` : undefined;
     logger.info("[NOTIF_TRACE] processNextJob start", {
       jobId: job.id,
       jobName: job.name,
       parentId: jobData?.parentId,
       tokenPresent: Boolean(jobData?.token),
-      token: maskedToken,
       title: jobData?.title,
       message: jobData?.message,
       attempt: job.attempts + 1,
@@ -122,7 +118,7 @@ export class QueueManager {
       logger.info(`Job completed successfully: ${job.name} [ID: ${job.id}]`);
 
     } catch (err: any) {
-      const errorMessage = err?.message || String(err);
+      const errorMessage = err?.name || "Unknown error";
       job.errorHistory.push({
         timestamp: new Date().toISOString(),
         message: errorMessage
@@ -134,17 +130,19 @@ export class QueueManager {
 
         logger.warn(`Invalid FCM token detected, removing it and not retrying job: ${job.name} [ID: ${job.id}]`, {
           jobId: job.id,
-          token: invalidToken,
           parentId,
-          error: err.originalError,
+          errorCode: err.originalError instanceof Error ? err.originalError.name : "FCM_ERROR",
         });
 
         if (parentId) {
           try {
             await store.deletePushToken(parentId, invalidToken);
-            logger.info(`Invalid FCM token removed from database`, { parentId, token: invalidToken });
+            logger.info(`Invalid FCM token removed from database`, { parentId });
           } catch (deleteError) {
-            logger.error(`Failed to delete invalid FCM token from database`, deleteError, { parentId, token: invalidToken });
+            logger.error(`Failed to delete invalid FCM token from database`, undefined, {
+              parentId,
+              errorName: deleteError instanceof Error ? deleteError.name : "Unknown error",
+            });
           }
         }
 
@@ -156,12 +154,11 @@ export class QueueManager {
       }
 
       const jobData = job.data as any;
-      const maskedToken = jobData?.token ? `${String(jobData.token).slice(0, 10)}...` : undefined;
-      logger.error(`Job execution failed: ${job.name} [ID: ${job.id}]`, err, {
+      logger.error(`Job execution failed: ${job.name} [ID: ${job.id}]`, undefined, {
+        errorName: err?.name || "Unknown error",
         jobId: job.id,
         jobName: job.name,
         parentId: jobData?.parentId,
-        token: maskedToken,
         title: jobData?.title,
         message: jobData?.message,
         attempts: job.attempts,
@@ -200,13 +197,11 @@ export class QueueManager {
    */
   private static async executeJobLogic(job: QueueJob): Promise<void> {
     const jobData = job.data as any;
-    const maskedToken = jobData?.token ? `${String(jobData.token).slice(0, 10)}...` : undefined;
     logger.info("[NOTIF_TRACE] executeJobLogic started", {
       jobName: job.name,
       jobId: job.id,
       parentId: jobData?.parentId,
       tokenPresent: Boolean(jobData?.token),
-      token: maskedToken,
       title: jobData?.title,
       message: jobData?.message,
       target: jobData?.target
@@ -228,8 +223,7 @@ export class QueueManager {
           throw new Error("FCM token missing");
         }
 
-        const tokenPreview = token ? `${String(token).slice(0, 10)}...` : undefined;
-        logger.info("[NOTIF_TRACE] About to call sendPushNotification", { parentId: jobData?.parentId, jobId: job.id, token: tokenPreview, title, message, target });
+        logger.info("[NOTIF_TRACE] About to call sendPushNotification", { parentId: jobData?.parentId, jobId: job.id, title, message, target });
         await sendPushNotification(
           token,
           title,
@@ -237,7 +231,7 @@ export class QueueManager {
           target,
           metadata
         );
-        logger.info("[NOTIF_TRACE] FCM envoyé avec succès", { token: tokenPreview, title, target });
+        logger.info("[NOTIF_TRACE] FCM envoyé avec succès", { title, target });
 
         logger.info("Push notification sent successfully", {
           title
@@ -262,11 +256,11 @@ export class QueueManager {
         );
       }
     } catch (err: any) {
-      logger.error("[NOTIF_TRACE] executeJobLogic error", err, {
+      logger.error("[NOTIF_TRACE] executeJobLogic error", undefined, {
+        errorName: err?.name || "Unknown error",
         jobId: job.id,
         jobName: job.name,
         parentId: jobData?.parentId,
-        token: maskedToken,
         title: jobData?.title,
         message: jobData?.message,
       });

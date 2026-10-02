@@ -14,6 +14,7 @@ import { createServer as createViteServer } from "vite";
 import { store } from "./backend/store";
 import { registerChildPhotoRoutes } from "./backend/mobilePhotoRoutes";
 import { AbsenceJustificationAlreadyRejectedError } from "./backend/absenceJustification";
+import { withTemporaryUploadCleanup } from "./backend/temporaryUploadCleanup";
 import { AbsenceDeclarationRelayError, relayAbsenceDeclaration } from "./backend/absenceDeclarations";
 import { dbQuery, initializeMobileTables } from "./backend/postgres";
 import { getExpectedPeriodTypeForCycle } from "./src/utils/schoolPeriod";
@@ -66,47 +67,34 @@ const upload = multer({
   }
 });
 
-const handleSingleFileUpload = (req: Request, res: Response, next: NextFunction) => {
-  upload.single("file")(req, res, (err: any) => {
-    if (err) {
-      return res.status(400).json({ error: err.message || "Invalid file upload", code: "UPLOAD_INVALID" });
-    }
-    return next();
-  });
-};
-
 const handleAbsenceJustificationUpload = (req: Request, res: Response, next: NextFunction) => {
   upload.fields([
     { name: "files", maxCount: MAX_ABSENCE_ATTACHMENT_COUNT },
     { name: "file", maxCount: 1 }
-  ])(req, res, (err: any) => {
+  ])(req, res, async (err: any) => {
     if (err) {
+      const partialFiles = collectAbsenceJustificationFiles(req);
+      await withTemporaryUploadCleanup(partialFiles, uploadStorageDir, async () => undefined);
       return res.status(400).json({ error: err.message || "Invalid file upload", code: "UPLOAD_INVALID" });
     }
 
-    const uploadedFiles = [] as Express.Multer.File[];
-    if (Array.isArray((req as any).files)) {
-      uploadedFiles.push(...(req as any).files);
-    } else if ((req as any).files && typeof (req as any).files === "object") {
-      for (const fieldFiles of Object.values((req as any).files as Record<string, Express.Multer.File[]>)) {
-        uploadedFiles.push(...fieldFiles);
-      }
-    }
-    if ((req as any).file) {
-      uploadedFiles.push((req as any).file);
-    }
-
-    (req as any).uploadedFiles = uploadedFiles;
+    (req as any).uploadedFiles = collectAbsenceJustificationFiles(req);
     return next();
   });
 };
 
-async function removeTemporaryAbsenceJustificationFiles(files: Express.Multer.File[]) {
-  await Promise.all(files.map((file) => fsPromises.unlink(file.path).catch((error: any) => {
-    if (error?.code !== "ENOENT") {
-      console.error("Failed to remove temporary absence justification file:", error?.message || error);
+function collectAbsenceJustificationFiles(req: Request): Express.Multer.File[] {
+  const files: Express.Multer.File[] = [];
+  const requestFiles = (req as any).files;
+  if (Array.isArray(requestFiles)) {
+    files.push(...requestFiles);
+  } else if (requestFiles && typeof requestFiles === "object") {
+    for (const fieldFiles of Object.values(requestFiles as Record<string, Express.Multer.File[]>)) {
+      files.push(...fieldFiles);
     }
-  })));
+  }
+  if ((req as any).file) files.push((req as any).file);
+  return Array.from(new Map(files.filter((file) => file?.path).map((file) => [file.path, file])).values());
 }
 
 async function forwardAbsenceJustificationToWeb(absenceId: string, parentId: string, justificationReason: string, uploadedFile: Express.Multer.File) {
@@ -163,7 +151,7 @@ async function forwardAbsenceJustificationToWeb(absenceId: string, parentId: str
     } catch (error) {
       if (error instanceof AbsenceJustificationAlreadyRejectedError) throw error;
     }
-    throw new Error(`Web justification upload failed with status ${response.status}: ${responseBody.slice(0, 300)}`);
+    throw new Error(`Web justification upload failed with status ${response.status}`);
   }
 }
 
@@ -692,110 +680,42 @@ app.post("/api/absences/:id/justifications", requireAuth, requireParentRoleOnly,
   const justificationReason = typeof req.body?.justificationReason === "string" ? req.body.justificationReason.trim() : "";
   const uploadedFiles = ((req as any).uploadedFiles ?? []) as Express.Multer.File[];
 
-  if (!justificationReason) {
-    return res.status(400).json({
-      error: "Veuillez fournir un motif de justification.",
-      code: "JUSTIFICATION_REQUIRED"
-    });
-  }
-
-  if (!uploadedFiles.length) {
-    return res.status(400).json({
-      error: "Veuillez joindre un document justificatif valide.",
-      code: "JUSTIFICATION_FILE_REQUIRED"
-    });
-  }
-
-  if (uploadedFiles.length > MAX_ABSENCE_ATTACHMENT_COUNT) {
-    return res.status(400).json({
-      error: `Vous pouvez joindre jusqu'à ${MAX_ABSENCE_ATTACHMENT_COUNT} fichiers maximum.`,
-      code: "JUSTIFICATION_FILE_LIMIT_EXCEEDED"
-    });
-  }
-
   try {
-    for (const uploadedFile of uploadedFiles) {
-      await forwardAbsenceJustificationToWeb(id, parentId, justificationReason, uploadedFile);
-    }
+    return await withTemporaryUploadCleanup(uploadedFiles, uploadStorageDir, async () => {
+      if (!justificationReason) {
+        return res.status(400).json({
+          error: "Veuillez fournir un motif de justification.",
+          code: "JUSTIFICATION_REQUIRED"
+        });
+      }
 
-    return res.status(201).json({ success: true });
+      if (!uploadedFiles.length) {
+        return res.status(400).json({
+          error: "Veuillez joindre un document justificatif valide.",
+          code: "JUSTIFICATION_FILE_REQUIRED"
+        });
+      }
+
+      if (uploadedFiles.length > MAX_ABSENCE_ATTACHMENT_COUNT) {
+        return res.status(400).json({
+          error: `Vous pouvez joindre jusqu'à ${MAX_ABSENCE_ATTACHMENT_COUNT} fichiers maximum.`,
+          code: "JUSTIFICATION_FILE_LIMIT_EXCEEDED"
+        });
+      }
+
+      for (const uploadedFile of uploadedFiles) {
+        await forwardAbsenceJustificationToWeb(id, parentId, justificationReason, uploadedFile);
+      }
+
+      return res.status(201).json({ success: true });
+    });
   } catch (err: any) {
     if (err instanceof AbsenceJustificationAlreadyRejectedError) {
       return res.status(409).json({ error: err.message, code: err.code });
     }
-    console.error("Failed to forward absence justification to Web backend:", err?.message || err);
+    console.error("Failed to forward absence justification to Web backend:", err?.name || "Unknown error");
     return res.status(500).json({
       error: "Le justificatif n'a pas pu être transmis au serveur Web.",
-      code: "INTERNAL_ERROR"
-    });
-  } finally {
-    await removeTemporaryAbsenceJustificationFiles(uploadedFiles);
-  }
-});
-
-app.post("/api/absences/:absenceId/justifications", requireAuth, requireParentRoleOnly, handleAbsenceJustificationUpload, async (req: AuthenticatedRequest, res) => {
-  const { absenceId } = req.params;
-  const parentId = req.parent!.id;
-  const justificationReason = typeof req.body?.justificationReason === "string" ? req.body.justificationReason.trim() : "";
-  const uploadedFiles = ((req as any).uploadedFiles ?? []) as Express.Multer.File[];
-
-  if (!justificationReason) {
-    return res.status(400).json({
-      error: "Veuillez fournir un motif de justification.",
-      code: "JUSTIFICATION_REQUIRED"
-    });
-  }
-
-  if (!uploadedFiles.length) {
-    return res.status(400).json({
-      error: "Veuillez joindre un document justificatif valide.",
-      code: "JUSTIFICATION_FILE_REQUIRED"
-    });
-  }
-
-  if (uploadedFiles.length > MAX_ABSENCE_ATTACHMENT_COUNT) {
-    return res.status(400).json({
-      error: `Vous pouvez joindre jusqu'à ${MAX_ABSENCE_ATTACHMENT_COUNT} fichiers maximum.`,
-      code: "JUSTIFICATION_FILE_LIMIT_EXCEEDED"
-    });
-  }
-
-  try {
-    const updatedAbsence = await store.justifyAbsence(absenceId, parentId, justificationReason);
-    if (!updatedAbsence) {
-      return res.status(404).json({
-        error: "Absence introuvable ou non rattachée à ce parent.",
-        code: "ABSENCE_NOT_FOUND"
-      });
-    }
-
-    const uploadedByValue = Number.isFinite(Number(parentId)) ? Number(parentId) : parentId;
-    const insertedFiles: Array<{ id: number; file_name: string; file_path: string; mime_type: string; file_size: number }> = [];
-
-    for (const uploadedFile of uploadedFiles) {
-      const insertResult = await dbQuery<{ id: number; file_name: string; file_path: string; mime_type: string; file_size: number }>(`
-        INSERT INTO absence_justifications (absence_id, file_name, file_path, mime_type, file_size, uploaded_by)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        RETURNING id, file_name, file_path, mime_type, file_size
-      `, [absenceId, uploadedFile.originalname, uploadedFile.filename, uploadedFile.mimetype, Number(uploadedFile.size), uploadedByValue]);
-      insertedFiles.push(insertResult.rows[0]);
-    }
-
-    const lastInserted = insertedFiles[insertedFiles.length - 1];
-    return res.status(201).json({
-      ...updatedAbsence,
-      justificationFileId: lastInserted?.id,
-      justificationFileName: lastInserted?.file_name ?? uploadedFiles[uploadedFiles.length - 1].originalname,
-      justificationFiles: insertedFiles,
-    });
-  } catch (err: any) {
-    if (err instanceof AbsenceJustificationAlreadyRejectedError) {
-      await removeTemporaryAbsenceJustificationFiles(uploadedFiles);
-      return res.status(409).json({ error: err.message, code: err.code });
-    }
-    console.error("Failed to justify absence with file:", err);
-    return res.status(500).json({
-      error: "Impossible de justifier l'absence pour le moment.",
       code: "INTERNAL_ERROR"
     });
   }
