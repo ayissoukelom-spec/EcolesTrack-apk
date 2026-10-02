@@ -25,6 +25,7 @@ import { AuthService } from "./backend/services/auth";
 import { NotificationService } from "./backend/services/notification";
 import { QueueManager } from "./backend/jobs/queue";
 import { LoginSchema, RegisterPushTokenSchema, NotificationPreferencesSchema, TestNotificationSchema, ParentAbsenceDeclarationSchema } from "./backend/validators/schemas";
+import { getNewPasswordPolicyError } from "./src/utils/passwordPolicy";
 
 const logger = new Logger("ExpressServer");
 
@@ -379,9 +380,10 @@ app.post("/api/mobile/parent/change-password", rateLimit(15, 60000), async (req,
     });
   }
 
-  if (newPassword === "123456") {
+  const passwordPolicyError = getNewPasswordPolicyError(String(newPassword));
+  if (passwordPolicyError) {
     return res.status(400).json({
-      error: "Le nouveau mot de passe ne peut pas être le mot de passe par défaut.",
+      error: passwordPolicyError,
       code: "INVALID_PASSWORD"
     });
   }

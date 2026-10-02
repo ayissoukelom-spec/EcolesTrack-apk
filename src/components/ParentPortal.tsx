@@ -15,6 +15,7 @@ import { Parent, Child, Absence, AbsenceDeclaration, Grade, AppNotification, Chi
 import { getApiErrorMessage, parseJsonSafe, withApiBase } from "../utils/http";
 import { classifyParentNotification } from "../utils/notificationCategory";
 import { getSchoolPeriodLabel, isGradeInSchoolPeriod, SCHOOL_PERIOD_FALLBACK_LABEL } from "../utils/schoolPeriod";
+import { getNewPasswordPolicyError } from "../utils/passwordPolicy";
 
 interface ParentPortalProps {
   token: string | null;
@@ -69,6 +70,9 @@ export default function ParentPortal({
   const [pendingResetConfirmPassword, setPendingResetConfirmPassword] = useState("");
   const [passwordResetError, setPasswordResetError] = useState<string | null>(null);
   const [isResettingPassword, setIsResettingPassword] = useState(false);
+  const pendingResetPasswordPolicyError = pendingResetNewPassword
+    ? getNewPasswordPolicyError(pendingResetNewPassword)
+    : null;
 
   // Parent app active state loaded from endpoints
   const [children, setChildren] = useState<Child[]>([]);
@@ -542,6 +546,11 @@ export default function ParentPortal({
 
     if (!pendingResetNewPassword.trim()) {
       setPasswordResetError("Veuillez saisir un nouveau mot de passe.");
+      return;
+    }
+
+    if (pendingResetPasswordPolicyError) {
+      setPasswordResetError(pendingResetPasswordPolicyError);
       return;
     }
 
@@ -1330,7 +1339,10 @@ export default function ParentPortal({
                     <input
                       type={showNewPassword ? "text" : "password"}
                       value={pendingResetNewPassword}
-                      onChange={(e) => setPendingResetNewPassword(e.target.value)}
+                      onChange={(e) => {
+                        setPendingResetNewPassword(e.target.value);
+                        setPasswordResetError(null);
+                      }}
                       placeholder="••••••••"
                       className="w-full rounded-2xl border theme-border theme-input py-3 pl-11 pr-11 text-sm theme-text-primary shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                       required
@@ -1344,6 +1356,10 @@ export default function ParentPortal({
                       {showNewPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                     </button>
                   </div>
+                  <p className="mt-2 text-xs text-slate-600 dark:text-slate-400">8 caractères minimum, au moins une lettre majuscule et un chiffre.</p>
+                  {pendingResetPasswordPolicyError && (
+                    <p role="alert" className="mt-1 text-sm text-rose-600 dark:text-rose-300">{pendingResetPasswordPolicyError}</p>
+                  )}
                 </div>
 
                 <div>
