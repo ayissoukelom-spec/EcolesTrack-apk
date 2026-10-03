@@ -20,7 +20,8 @@ describe('ParentPortal login identifier field', () => {
     }));
 
     expect(markup).toContain('Email ou numéro de téléphone');
-    expect(markup).toContain('nom@email.com ou 90123456');
+    expect(markup).toContain('Indicatif du pays');
+    expect(markup).toContain('nom@email.com ou 78 23 45 67');
     expect(markup).not.toMatch(/<input[^>]*type="email"/);
   });
 });

@@ -395,7 +395,10 @@ export class PostgresStore {
       JOIN parents p ON p.user_id = u.id
       LEFT JOIN local_auths la ON la.user_id = u.id
       WHERE u.role = 'parent'
-        AND regexp_replace(coalesce(p.phone, ''), '[^0-9]', '', 'g') = ANY($1::text[])
+        AND (
+          regexp_replace(coalesce(p.phone, ''), '[^0-9]', '', 'g') = ANY($1::text[])
+          OR regexp_replace(coalesce(u.phone, ''), '[^0-9]', '', 'g') = ANY($1::text[])
+        )
     `, [phoneCandidates]);
     const match = selectUniqueParentPhoneMatch(rows);
     return match ? this.mapParentCredentialRow(match) : null;

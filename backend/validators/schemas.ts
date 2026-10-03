@@ -8,6 +8,7 @@ import { z } from "zod";
 export const LoginSchema = z.object({
   identifier: z.string().trim().min(1).optional(),
   email: z.string().email({ message: "Format d'email invalide." }).optional(),
+  phoneCountryCode: z.string().trim().optional(),
   password: z.string().min(4, { message: "Le mot de passe doit contenir au moins 4 caractères." })
 }).refine((value) => Boolean(value.identifier || value.email), {
   message: "Un email ou un numéro de téléphone est requis.",

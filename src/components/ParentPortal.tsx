@@ -55,6 +55,7 @@ export default function ParentPortal({
   
   // Login credentials state
   const [identifier, setIdentifier] = useState("");
+  const [phoneCountryCode, setPhoneCountryCode] = useState("+228");
   const [password, setPassword] = useState("");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -65,6 +66,7 @@ export default function ParentPortal({
   const [childrenLoadError, setChildrenLoadError] = useState<string | null>(null);
   const [passwordResetRequired, setPasswordResetRequired] = useState(false);
   const [pendingResetIdentifier, setPendingResetIdentifier] = useState("");
+  const [pendingResetPhoneCountryCode, setPendingResetPhoneCountryCode] = useState("+228");
   const [pendingResetCurrentPassword, setPendingResetCurrentPassword] = useState("");
   const [pendingResetNewPassword, setPendingResetNewPassword] = useState("");
   const [pendingResetConfirmPassword, setPendingResetConfirmPassword] = useState("");
@@ -488,19 +490,24 @@ export default function ParentPortal({
   };
 
   // API Call: Login
-  const handleLogin = async (e?: React.FormEvent, customIdentifier?: string, customPass?: string) => {
+  const handleLogin = async (e?: React.FormEvent, customIdentifier?: string, customPass?: string, customPhoneCountryCode?: string) => {
     if (e) e.preventDefault();
     setErrorMsg(null);
     setIsLoading(true);
 
     const loginIdentifier = customIdentifier || identifier;
     const loginPass = customPass || password;
+    const loginPhoneCountryCode = customPhoneCountryCode || phoneCountryCode;
 
     try {
       const response = await fetch(withApiBase("/api/mobile/parent/login"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ identifier: loginIdentifier, password: loginPass })
+        body: JSON.stringify({
+          identifier: loginIdentifier,
+          password: loginPass,
+          ...(!loginIdentifier.includes("@") ? { phoneCountryCode: loginPhoneCountryCode } : {}),
+        })
       });
 
       const data = await parseJsonSafe<{ token?: string; parent?: Parent; refreshToken?: string; error?: string; mustReset?: boolean; }>(response);
@@ -516,6 +523,7 @@ export default function ParentPortal({
       if (data.mustReset) {
         setPasswordResetRequired(true);
         setPendingResetIdentifier(data.parent.email || loginIdentifier);
+        setPendingResetPhoneCountryCode(loginPhoneCountryCode);
         setPendingResetCurrentPassword("");
         setPendingResetNewPassword("");
         setPendingResetConfirmPassword("");
@@ -566,6 +574,7 @@ export default function ParentPortal({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           identifier: pendingResetIdentifier,
+          ...(!pendingResetIdentifier.includes("@") ? { phoneCountryCode: pendingResetPhoneCountryCode } : {}),
           currentPassword: pendingResetCurrentPassword,
           newPassword: pendingResetNewPassword
         })
@@ -584,7 +593,7 @@ export default function ParentPortal({
       setPendingResetNewPassword("");
       setPendingResetConfirmPassword("");
 
-      await handleLogin(undefined, pendingResetIdentifier, pendingResetNewPassword);
+      await handleLogin(undefined, pendingResetIdentifier, pendingResetNewPassword, pendingResetPhoneCountryCode);
     } catch (err: any) {
       console.error("[PASSWORD RESET ERROR]", err);
       setPasswordResetError(err.message || "Impossible de changer le mot de passe.");
@@ -1299,14 +1308,24 @@ export default function ParentPortal({
               <form onSubmit={handlePasswordReset} className="space-y-4">
                 <div>
                   <label className="block text-xs font-semibold uppercase tracking-[0.15em] text-slate-700 dark:text-slate-300 mb-2">Email ou numéro de téléphone</label>
-                  <input
-                    type="text"
-                    value={pendingResetIdentifier}
-                    onChange={(e) => setPendingResetIdentifier(e.target.value)}
-                    placeholder="nom@email.com ou 90123456"
-                    className="w-full rounded-2xl border theme-border theme-input py-3 px-4 text-sm theme-text-primary shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                    required
-                  />
+                  <div className="flex gap-2">
+                    <input
+                      aria-label="Indicatif du pays"
+                      type="tel"
+                      value={pendingResetPhoneCountryCode}
+                      onChange={(e) => setPendingResetPhoneCountryCode(e.target.value)}
+                      placeholder="+228"
+                      className="w-24 rounded-2xl border theme-border theme-input py-3 px-3 text-sm theme-text-primary shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                    />
+                    <input
+                      type="text"
+                      value={pendingResetIdentifier}
+                      onChange={(e) => setPendingResetIdentifier(e.target.value)}
+                      placeholder="nom@email.com ou 78 23 45 67"
+                      className="min-w-0 flex-1 rounded-2xl border theme-border theme-input py-3 px-4 text-sm theme-text-primary shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                      required
+                    />
+                  </div>
                 </div>
 
                 <div>
@@ -1428,16 +1447,26 @@ export default function ParentPortal({
               <form onSubmit={handleLogin} className="space-y-5">
                 <div>
                   <label className="block text-xs font-semibold uppercase tracking-[0.15em] text-slate-700 dark:text-slate-300 mb-2">Email ou numéro de téléphone</label>
-                  <div className="relative">
-                    <Mail className="absolute left-3 top-3 h-4 w-4 text-slate-500 dark:text-slate-400" />
+                  <div className="flex gap-2">
                     <input
-                      type="text"
-                      value={identifier}
-                      onChange={(e) => setIdentifier(e.target.value)}
-                      placeholder="nom@email.com ou 90123456"
-                      className="w-full rounded-2xl border theme-border theme-input py-3 pl-11 pr-4 text-sm theme-text-primary shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                      required
+                      aria-label="Indicatif du pays"
+                      type="tel"
+                      value={phoneCountryCode}
+                      onChange={(e) => setPhoneCountryCode(e.target.value)}
+                      placeholder="+228"
+                      className="w-24 rounded-2xl border theme-border theme-input py-3 px-3 text-sm theme-text-primary shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                     />
+                    <div className="relative min-w-0 flex-1">
+                      <Mail className="absolute left-3 top-3 h-4 w-4 text-slate-500 dark:text-slate-400" />
+                      <input
+                        type="text"
+                        value={identifier}
+                        onChange={(e) => setIdentifier(e.target.value)}
+                        placeholder="nom@email.com ou 78 23 45 67"
+                        className="w-full rounded-2xl border theme-border theme-input py-3 pl-11 pr-4 text-sm theme-text-primary shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                        required
+                      />
+                    </div>
                   </div>
                 </div>
 

@@ -303,9 +303,9 @@ app.post("/api/mobile/parent/login", rateLimit(15, 60000), async (req, res) => {
     });
   }
 
-  const { email, identifier, password } = validation.data;
+  const { email, identifier, phoneCountryCode, password } = validation.data;
   const loginIdentifier = String(identifier ?? email ?? '').trim();
-  const user = await authenticateMobileParentLogin(loginIdentifier, password, store);
+  const user = await authenticateMobileParentLogin(loginIdentifier, password, phoneCountryCode, store);
   if (!user) {
     logger.warn("Échec de connexion parent: identifiant ou mot de passe invalide.");
     return res.status(401).json({
@@ -364,7 +364,7 @@ app.post("/api/mobile/parent/login", rateLimit(15, 60000), async (req, res) => {
 });
 
 app.post("/api/mobile/parent/change-password", rateLimit(15, 60000), async (req, res) => {
-  const { email, identifier, currentPassword, newPassword } = req.body ?? {};
+  const { email, identifier, phoneCountryCode, currentPassword, newPassword } = req.body ?? {};
   const loginIdentifier = String(identifier ?? email ?? '').trim();
   if (!loginIdentifier || !currentPassword || !newPassword) {
     return res.status(400).json({
@@ -381,7 +381,7 @@ app.post("/api/mobile/parent/change-password", rateLimit(15, 60000), async (req,
     });
   }
 
-  const user = await authenticateMobileParentLogin(loginIdentifier, String(currentPassword), store);
+  const user = await authenticateMobileParentLogin(loginIdentifier, String(currentPassword), phoneCountryCode, store);
   if (!user) {
     return res.status(401).json({
       error: "Identifiants de connexion incorrects.",
