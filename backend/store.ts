@@ -15,6 +15,7 @@ import { initializeMobileTables, dbQuery, pool } from './postgres';
 import { logger } from './utils/logger';
 import { mapWebParentToMobileParent, mapWebStudentToChild } from './mobileAdapter';
 import { mapParentAbsenceRow, submitAbsenceJustificationForReview } from './absenceJustification';
+import { normalizeParentLoginPhone, selectUniqueParentPhoneMatch } from './parentLogin';
 
 export interface MobileNotificationAttachment {
   id: number;
@@ -38,6 +39,18 @@ interface DatabaseSchema {
   parentConsents: ParentConsent[];
   notificationEvents: NotificationEvent[];
   notificationDeliveries: NotificationDelivery[];
+}
+
+interface ParentCredentialRow {
+  user_id: number;
+  email: string;
+  name: string;
+  role: string;
+  phone: string | null;
+  school_id: number | null;
+  password_hash: string | null;
+  salt: string | null;
+  must_reset: boolean | null;
 }
 
 const INITIAL_DATABASE: DatabaseSchema = {
@@ -331,19 +344,7 @@ export class PostgresStore {
     }) as Parent;
   }
 
-  private async getParentByEmail(email: string): Promise<(Parent & { passwordHash: string; role: string; salt?: string; mustReset?: boolean }) | null> {
-    const { rows } = await dbQuery<{ user_id: number; email: string; name: string; role: string; phone: string | null; school_id: number | null; password_hash: string | null; salt: string | null; must_reset: boolean | null }>(`
-      SELECT u.id AS user_id, u.email, u.name, u.role, p.phone, u.school_id, la.password_hash, la.salt, la.must_reset
-      FROM users u
-      LEFT JOIN parents p ON p.user_id = u.id
-      LEFT JOIN local_auths la ON la.user_id = u.id
-      WHERE LOWER(u.email) = LOWER($1)
-      LIMIT 1
-    `, [email]);
-
-    if (rows.length === 0) return null;
-
-    const row = rows[0];
+  private async mapParentCredentialRow(row: ParentCredentialRow): Promise<Parent & { passwordHash: string; role: string; salt?: string; mustReset?: boolean }> {
     const schoolRows = await dbQuery<{ id: number; name: string }>(`
       SELECT s.id, s.name
       FROM user_schools us
@@ -351,7 +352,7 @@ export class PostgresStore {
       WHERE us.user_id = $1 AND us.is_active = true
     `, [row.user_id]);
 
-    const parent: Parent & { passwordHash: string; role: string; salt?: string; mustReset?: boolean } = {
+    return {
       ...(mapWebParentToMobileParent({
         userId: row.user_id,
         userEmail: row.email,
@@ -366,12 +367,38 @@ export class PostgresStore {
       salt: row.salt ?? undefined,
       mustReset: row.must_reset == null ? undefined : Boolean(row.must_reset),
     };
+  }
 
-    return parent;
+  private async getParentByEmail(email: string): Promise<(Parent & { passwordHash: string; role: string; salt?: string; mustReset?: boolean }) | null> {
+    const { rows } = await dbQuery<ParentCredentialRow>(`
+      SELECT u.id AS user_id, u.email, u.name, u.role, p.phone, u.school_id, la.password_hash, la.salt, la.must_reset
+      FROM users u
+      LEFT JOIN parents p ON p.user_id = u.id
+      LEFT JOIN local_auths la ON la.user_id = u.id
+      WHERE LOWER(u.email) = LOWER($1)
+      LIMIT 1
+    `, [email]);
+
+    if (rows.length === 0) return null;
+    return this.mapParentCredentialRow(rows[0]);
   }
 
   public async findParentByEmail(email: string) {
     return this.getParentByEmail(email);
+  }
+
+  public async findParentByPhone(phoneCandidates: string[]) {
+    if (phoneCandidates.length === 0) return null;
+    const { rows } = await dbQuery<ParentCredentialRow>(`
+      SELECT u.id AS user_id, u.email, u.name, u.role, p.phone, u.school_id, la.password_hash, la.salt, la.must_reset
+      FROM users u
+      JOIN parents p ON p.user_id = u.id
+      LEFT JOIN local_auths la ON la.user_id = u.id
+      WHERE u.role = 'parent'
+        AND regexp_replace(coalesce(p.phone, ''), '[^0-9]', '', 'g') = ANY($1::text[])
+    `, [phoneCandidates]);
+    const match = selectUniqueParentPhoneMatch(rows);
+    return match ? this.mapParentCredentialRow(match) : null;
   }
 
   public async verifyParentPassword(email: string, password: string): Promise<boolean> {
@@ -382,6 +409,20 @@ export class PostgresStore {
 
     const verifyHash = crypto.pbkdf2Sync(password, user.salt, 310000, 64, 'sha512').toString('hex');
     return verifyHash === user.passwordHash;
+  }
+
+  public async verifyParentPasswordByUserId(userId: string, password: string): Promise<boolean> {
+    const { rows } = await dbQuery<{ password_hash: string | null; salt: string | null }>(`
+      SELECT la.password_hash, la.salt
+      FROM users u
+      LEFT JOIN local_auths la ON la.user_id = u.id
+      WHERE u.id = $1
+      LIMIT 1
+    `, [Number(userId)]);
+    const auth = rows[0];
+    if (!auth?.password_hash || !auth.salt) return false;
+    const verifyHash = crypto.pbkdf2Sync(password, auth.salt, 310000, 64, 'sha512').toString('hex');
+    return verifyHash === auth.password_hash;
   }
 
   public async getParentById(id: string) {

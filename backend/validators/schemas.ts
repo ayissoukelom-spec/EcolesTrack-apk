@@ -6,8 +6,12 @@ import { z } from "zod";
 
 // 1. Login schema
 export const LoginSchema = z.object({
-  email: z.string().email({ message: "Format d'email invalide." }),
+  identifier: z.string().trim().min(1).optional(),
+  email: z.string().email({ message: "Format d'email invalide." }).optional(),
   password: z.string().min(4, { message: "Le mot de passe doit contenir au moins 4 caractères." })
+}).refine((value) => Boolean(value.identifier || value.email), {
+  message: "Un email ou un numéro de téléphone est requis.",
+  path: ['identifier'],
 });
 
 // 2. Push Token registration schema

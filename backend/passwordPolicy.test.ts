@@ -27,4 +27,6 @@ test("reports the exact missing requirements for invalid new passwords", () => {
 
 test("the existing APK login schema continues to accept the temporary password", () => {
   assert.equal(LoginSchema.safeParse({ email: "parent@example.test", password: "123456" }).success, true);
+  assert.equal(LoginSchema.safeParse({ identifier: "+228 90 12 34 56", password: "123456" }).success, true);
+  assert.equal(LoginSchema.safeParse({ identifier: "parent@example.test", password: "123456" }).success, true);
 });

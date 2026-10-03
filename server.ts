@@ -12,6 +12,7 @@ import { promises as fsPromises } from "fs";
 import multer from "multer";
 import { createServer as createViteServer } from "vite";
 import { store } from "./backend/store";
+import { authenticateMobileParentLogin } from "./backend/parentLogin";
 import { registerChildPhotoRoutes } from "./backend/mobilePhotoRoutes";
 import { AbsenceJustificationAlreadyRejectedError } from "./backend/absenceJustification";
 import { withTemporaryUploadCleanup } from "./backend/temporaryUploadCleanup";
@@ -302,20 +303,11 @@ app.post("/api/mobile/parent/login", rateLimit(15, 60000), async (req, res) => {
     });
   }
 
-  const { email, password } = validation.data;
-
-  const user = await store.findParentByEmail(email);
+  const { email, identifier, password } = validation.data;
+  const loginIdentifier = String(identifier ?? email ?? '').trim();
+  const user = await authenticateMobileParentLogin(loginIdentifier, password, store);
   if (!user) {
-    logger.warn(`Tentative de connexion infructueuse (utilisateur inconnu): ${email}`);
-    return res.status(401).json({
-      error: "Identifiants de connexion incorrects.",
-      code: "BAD_CREDENTIALS"
-    });
-  }
-
-  const isPasswordValid = await store.verifyParentPassword(email, password);
-  if (!isPasswordValid) {
-    logger.warn(`Mot de passe incorrect pour le compte parent: ${email}`);
+    logger.warn("Échec de connexion parent: identifiant ou mot de passe invalide.");
     return res.status(401).json({
       error: "Identifiants de connexion incorrects.",
       code: "BAD_CREDENTIALS"
@@ -362,7 +354,7 @@ app.post("/api/mobile/parent/login", rateLimit(15, 60000), async (req, res) => {
     schools: user.schools
   };
 
-  logger.audit("PARENT_LOGIN_SUCCESS", user.id, { email, mustReset: localMustReset }, "SUCCESS");
+  logger.audit("PARENT_LOGIN_SUCCESS", user.id, { mustReset: localMustReset }, "SUCCESS");
   return res.json({
     parent: parentDetails,
     token: session.accessToken,
@@ -372,10 +364,11 @@ app.post("/api/mobile/parent/login", rateLimit(15, 60000), async (req, res) => {
 });
 
 app.post("/api/mobile/parent/change-password", rateLimit(15, 60000), async (req, res) => {
-  const { email, currentPassword, newPassword } = req.body ?? {};
-  if (!email || !currentPassword || !newPassword) {
+  const { email, identifier, currentPassword, newPassword } = req.body ?? {};
+  const loginIdentifier = String(identifier ?? email ?? '').trim();
+  if (!loginIdentifier || !currentPassword || !newPassword) {
     return res.status(400).json({
-      error: "Email, mot de passe actuel et nouveau mot de passe sont requis.",
+      error: "Identifiant, mot de passe actuel et nouveau mot de passe sont requis.",
       code: "BAD_REQUEST"
     });
   }
@@ -388,18 +381,10 @@ app.post("/api/mobile/parent/change-password", rateLimit(15, 60000), async (req,
     });
   }
 
-  const user = await store.findParentByEmail(email);
+  const user = await authenticateMobileParentLogin(loginIdentifier, String(currentPassword), store);
   if (!user) {
     return res.status(401).json({
       error: "Identifiants de connexion incorrects.",
-      code: "BAD_CREDENTIALS"
-    });
-  }
-
-  const currentPasswordValid = await store.verifyParentPassword(email, currentPassword);
-  if (!currentPasswordValid) {
-    return res.status(401).json({
-      error: "Mot de passe actuel incorrect.",
       code: "BAD_CREDENTIALS"
     });
   }
@@ -415,7 +400,7 @@ app.post("/api/mobile/parent/change-password", rateLimit(15, 60000), async (req,
   const newHash = crypto.pbkdf2Sync(newPassword, newSalt, 310000, 64, "sha512").toString("hex");
   await dbQuery(`UPDATE local_auths SET password_hash = $1, salt = $2, must_reset = false WHERE user_id = $3`, [newHash, newSalt, Number(user.id)]);
 
-  logger.audit("PARENT_CHANGE_PASSWORD", user.id, { email }, "SUCCESS");
+  logger.audit("PARENT_CHANGE_PASSWORD", user.id, {}, "SUCCESS");
   return res.json({ success: true });
 });
 
