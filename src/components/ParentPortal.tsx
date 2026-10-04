@@ -133,10 +133,15 @@ export default function ParentPortal({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const childPhotoInputRef = useRef<HTMLInputElement | null>(null);
-  const childPhotoObjectUrlRef = useRef<string | null>(null);
+  const childPhotoObjectUrlsRef = useRef<Map<string, string>>(new Map());
+  const childPhotoCacheRef = useRef<Map<string, string>>(new Map());
   const [childPhotoUrl, setChildPhotoUrl] = useState<string | null>(null);
   const [childPhotoLoading, setChildPhotoLoading] = useState(false);
+  const [childPhotoImageLoading, setChildPhotoImageLoading] = useState(false);
+  const [childPhotoImageReady, setChildPhotoImageReady] = useState(false);
+  const [showChildPhotoSkeleton, setShowChildPhotoSkeleton] = useState(false);
   const [childPhotoError, setChildPhotoError] = useState<string | null>(null);
+  const childPhotoSkeletonTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const childPhotoCaptureRequestedRef = useRef(false);
 
   const allowedJustificationMimeTypes = new Set(["application/pdf", "image/png", "image/jpeg"]);
@@ -251,11 +256,42 @@ export default function ParentPortal({
     onLogout();
   };
 
+  const finishChildPhotoImageLoading = () => {
+    if (childPhotoSkeletonTimerRef.current) {
+      clearTimeout(childPhotoSkeletonTimerRef.current);
+      childPhotoSkeletonTimerRef.current = null;
+    }
+    setChildPhotoImageLoading(false);
+    setShowChildPhotoSkeleton(false);
+  };
+
   const loadCurrentChildPhoto = async (childId: string) => {
+    if (childPhotoSkeletonTimerRef.current) {
+      clearTimeout(childPhotoSkeletonTimerRef.current);
+      childPhotoSkeletonTimerRef.current = null;
+    }
+    setChildPhotoUrl(null);
+    setChildPhotoImageReady(false);
+    setShowChildPhotoSkeleton(false);
+
     if (!token) {
-      setChildPhotoUrl(null);
+      setChildPhotoImageLoading(false);
       return;
     }
+
+    const cachedPhotoUrl = childPhotoCacheRef.current.get(childId);
+    if (cachedPhotoUrl) {
+      setChildPhotoUrl(cachedPhotoUrl);
+      setChildPhotoImageReady(true);
+      setChildPhotoImageLoading(false);
+      return;
+    }
+
+    setChildPhotoImageLoading(true);
+    childPhotoSkeletonTimerRef.current = setTimeout(() => {
+      setShowChildPhotoSkeleton(true);
+      childPhotoSkeletonTimerRef.current = null;
+    }, 120);
 
     try {
       const response = await performProtectedRequest((authToken) => fetch(withApiBase(`/api/mobile/parent/children/${childId}/photo`), {
@@ -263,30 +299,32 @@ export default function ParentPortal({
       }));
 
       if (!response) {
-        setChildPhotoUrl(null);
+        finishChildPhotoImageLoading();
         return;
       }
 
       if (response.status === 404) {
-        setChildPhotoUrl(null);
+        finishChildPhotoImageLoading();
         return;
       }
 
       if (!response.ok) {
-        setChildPhotoUrl(null);
+        finishChildPhotoImageLoading();
         return;
       }
 
       const blob = await response.blob();
-      if (childPhotoObjectUrlRef.current) {
-        URL.revokeObjectURL(childPhotoObjectUrlRef.current);
+      const existingObjectUrl = childPhotoObjectUrlsRef.current.get(childId);
+      if (existingObjectUrl) {
+        URL.revokeObjectURL(existingObjectUrl);
       }
       const url = URL.createObjectURL(blob);
-      childPhotoObjectUrlRef.current = url;
+      childPhotoObjectUrlsRef.current.set(childId, url);
       setChildPhotoUrl(url);
     } catch (e) {
       console.error("[CHILD_PHOTO] Failed to fetch child photo", e);
       setChildPhotoUrl(null);
+      finishChildPhotoImageLoading();
     }
   };
 
@@ -323,6 +361,12 @@ export default function ParentPortal({
         throw new Error(text || `Photo upload failed: ${response.status}`);
       }
 
+      const cachedObjectUrl = childPhotoObjectUrlsRef.current.get(currentChild.id);
+      if (cachedObjectUrl) {
+        URL.revokeObjectURL(cachedObjectUrl);
+        childPhotoObjectUrlsRef.current.delete(currentChild.id);
+      }
+      childPhotoCacheRef.current.delete(currentChild.id);
       await loadCurrentChildPhoto(currentChild.id);
     } catch (e: any) {
       console.error("[CHILD_PHOTO] Failed to upload child photo", e);
@@ -406,10 +450,27 @@ export default function ParentPortal({
   useEffect(() => {
     if (!currentChild?.id) {
       setChildPhotoUrl(null);
+      setChildPhotoImageReady(false);
+      finishChildPhotoImageLoading();
       return;
     }
     loadCurrentChildPhoto(currentChild.id);
+    return () => {
+      if (childPhotoSkeletonTimerRef.current) {
+        clearTimeout(childPhotoSkeletonTimerRef.current);
+        childPhotoSkeletonTimerRef.current = null;
+      }
+    };
   }, [currentChild?.id, token]);
+
+  useEffect(() => () => {
+    if (childPhotoSkeletonTimerRef.current) {
+      clearTimeout(childPhotoSkeletonTimerRef.current);
+    }
+    childPhotoObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    childPhotoObjectUrlsRef.current.clear();
+    childPhotoCacheRef.current.clear();
+  }, []);
 
   // Load specific child details when selected
   const selectedChildId = selectedChild?.id;
@@ -1605,12 +1666,40 @@ export default function ParentPortal({
                         title="Ajouter ou remplacer la photo"
                         disabled={childPhotoLoading}
                       >
-                        {childPhotoUrl ? (
-                          <img src={childPhotoUrl} alt={currentChild.firstName} className="h-full w-full object-cover" />
-                        ) : (
+                        {!childPhotoImageReady && (
                           <span className="flex h-full w-full items-center justify-center text-slate-500 dark:text-slate-300">
                             <ImageIcon className="h-7 w-7" />
                           </span>
+                        )}
+                        {childPhotoUrl && (
+                          <img
+                            src={childPhotoUrl}
+                            alt={currentChild.firstName}
+                            className={`absolute inset-0 h-full w-full object-cover ${childPhotoImageReady ? "" : "opacity-0"}`}
+                            onLoad={() => {
+                              if (childPhotoObjectUrlsRef.current.get(currentChild.id) === childPhotoUrl) {
+                                childPhotoCacheRef.current.set(currentChild.id, childPhotoUrl);
+                              }
+                              setChildPhotoImageReady(true);
+                              finishChildPhotoImageLoading();
+                            }}
+                            onError={() => {
+                              if (childPhotoObjectUrlsRef.current.get(currentChild.id) === childPhotoUrl) {
+                                URL.revokeObjectURL(childPhotoUrl);
+                                childPhotoObjectUrlsRef.current.delete(currentChild.id);
+                                childPhotoCacheRef.current.delete(currentChild.id);
+                              }
+                              setChildPhotoUrl(null);
+                              setChildPhotoImageReady(false);
+                              finishChildPhotoImageLoading();
+                            }}
+                          />
+                        )}
+                        {childPhotoImageLoading && showChildPhotoSkeleton && (
+                          <span
+                            aria-label="Chargement de la photo"
+                            className="absolute inset-0 rounded-full bg-slate-300/80 animate-pulse dark:bg-slate-600/80"
+                          />
                         )}
                         <span className="absolute -bottom-1 -right-1 rounded-full border border-white bg-indigo-600 text-[9px] font-bold text-white px-1.5 py-0.5 shadow-sm">
                           {childPhotoLoading ? "..." : "+"}
