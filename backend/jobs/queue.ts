@@ -48,13 +48,31 @@ export class QueueManager {
 
     // Idempotency check using dedupeKey
     if (dedupeKey && completedJobIds.has(dedupeKey)) {
-      logger.info(`Idempotency hit! Job with dedupeKey '${dedupeKey}' already processed. Skipping duplicate entry.`);
+      if (jobData?.category === "grade") {
+        logger.info("grade push deduplicated", {
+          gradeId: jobData?.metadata?.gradeId,
+          eventVersion: jobData?.metadata?.eventVersion,
+          parentId,
+          reason: "already-completed",
+        });
+      } else {
+        logger.info("Idempotency hit: completed job skipped", { jobName: name, parentId });
+      }
       return `skipped-${dedupeKey}`;
     }
 
     // Check if the exact dedupeKey is already in the active queue to prevent queuing duplicates
     if (dedupeKey && activeQueue.some(j => j.dedupeKey === dedupeKey)) {
-      logger.info(`Job with dedupeKey '${dedupeKey}' is already active in queue. Ignoring duplicate entry.`);
+      if (jobData?.category === "grade") {
+        logger.info("grade push deduplicated", {
+          gradeId: jobData?.metadata?.gradeId,
+          eventVersion: jobData?.metadata?.eventVersion,
+          parentId,
+          reason: "already-queued",
+        });
+      } else {
+        logger.info("Duplicate active job skipped", { jobName: name, parentId });
+      }
       return `queued-${dedupeKey}`;
     }
 
@@ -115,6 +133,14 @@ export class QueueManager {
       if (job.dedupeKey) {
         completedJobIds.add(job.dedupeKey);
       }
+      if (jobData?.category === "grade" && job.name.startsWith("send-notification-push")) {
+        logger.info("grade push sent", {
+          gradeId: jobData?.metadata?.gradeId,
+          eventVersion: jobData?.metadata?.eventVersion,
+          parentId: jobData?.parentId,
+          jobId: job.id,
+        });
+      }
       logger.info(`Job completed successfully: ${job.name} [ID: ${job.id}]`);
 
     } catch (err: any) {
@@ -133,6 +159,15 @@ export class QueueManager {
           parentId,
           errorCode: err.originalError instanceof Error ? err.originalError.name : "FCM_ERROR",
         });
+        if ((job.data as any)?.category === "grade") {
+          logger.error("grade push failed", undefined, {
+            gradeId: (job.data as any)?.metadata?.gradeId,
+            eventVersion: (job.data as any)?.metadata?.eventVersion,
+            parentId,
+            jobId: job.id,
+            errorName: "InvalidFcmTokenError",
+          });
+        }
 
         if (parentId) {
           try {
@@ -164,6 +199,16 @@ export class QueueManager {
         attempts: job.attempts,
         errorHistory: job.errorHistory
       });
+      if (jobData?.category === "grade" && job.name.startsWith("send-notification-push")) {
+        logger.error("grade push failed", undefined, {
+          gradeId: jobData?.metadata?.gradeId,
+          eventVersion: jobData?.metadata?.eventVersion,
+          parentId: jobData?.parentId,
+          jobId: job.id,
+          errorName: err?.name || "Unknown error",
+          attempt: job.attempts,
+        });
+      }
 
       if (job.attempts < job.maxAttempts) {
         // Calculate exponential backoff delay (e.g., 2^attempts * 100ms)
@@ -231,7 +276,7 @@ export class QueueManager {
           target,
           metadata
         );
-        logger.info("[NOTIF_TRACE] FCM envoyé avec succès", { title, target });
+        logger.info("[NOTIF_TRACE] FCM envoyé avec succès", { title, target, jobId: job.id });
 
         logger.info("Push notification sent successfully", {
           title

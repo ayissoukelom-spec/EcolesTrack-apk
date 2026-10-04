@@ -931,7 +931,12 @@ export class PostgresStore {
       WHERE parent_id = $1
       ORDER BY last_seen_at DESC
     `, [parentId]);
-    console.log("DEVICES FOUND :", rows);
+    console.log("DEVICES FOUND :", rows.map((row) => ({
+      id: row.id,
+      platform: row.platform,
+      tokenPresent: Boolean(row.push_token),
+      appVersion: row.app_version,
+    })));
 
     return rows.map((row) => ({
       id: String(row.id),

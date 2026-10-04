@@ -2,6 +2,7 @@ import { store } from "../store";
 import { QueueManager } from "../jobs/queue";
 import { Logger } from "../utils/logger";
 import { NotificationChannel } from "../../src/types";
+import { createHash } from "node:crypto";
 
 const logger = new Logger("NotificationService");
 
@@ -104,7 +105,8 @@ export class NotificationService {
 
         if (channel === "push") {
           for (const token of pushTokens) {
-            const jobDedupeKey = dedupeKey ? `${dedupeKey}-${channel}-${token}` : undefined;
+            const tokenHash = createHash("sha256").update(token).digest("hex");
+            const jobDedupeKey = dedupeKey ? `${dedupeKey}-${channel}-${tokenHash}` : undefined;
             logger.info("[NOTIF_TRACE] QueueManager.addJob preparing", { channel, tokenPresent: Boolean(token), jobName, hasDedupeKey: Boolean(jobDedupeKey) });
             const jobId = QueueManager.addJob(jobName, {
               parentId: effectiveParentId,
@@ -120,7 +122,18 @@ export class NotificationService {
               dedupeKey: jobDedupeKey,
               maxAttempts: 3
             });
-            logger.info("[NOTIF_TRACE] QueueManager.addJob queued", { jobName, jobId, parentId: effectiveParentId, channel, hasDedupeKey: Boolean(jobDedupeKey), tokenPresent: Boolean(token) });
+            const isGradeNotification = category === "grade";
+            const eventDetails = isGradeNotification
+              ? { gradeId: metadata?.gradeId, eventVersion: metadata?.eventVersion }
+              : {};
+            if (jobId.startsWith("skipped-") || jobId.startsWith("queued-")) {
+              if (isGradeNotification) {
+                logger.info("grade push deduplicated", { ...eventDetails, parentId: effectiveParentId, jobName });
+              }
+            } else if (isGradeNotification) {
+              logger.info("grade push queued", { ...eventDetails, parentId: effectiveParentId, jobId });
+            }
+            logger.info("[NOTIF_TRACE] QueueManager.addJob completed", { jobName, jobId, parentId: effectiveParentId, channel, hasDedupeKey: Boolean(jobDedupeKey), tokenPresent: Boolean(token) });
 
             jobsTriggered.push(jobId);
           }
