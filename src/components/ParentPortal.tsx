@@ -6,7 +6,7 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { 
   Lock, Mail, LogOut, User, Award, Calendar, Bell, Shield, 
-  CheckCircle2, XCircle, ChevronRight, School, Eye, EyeOff, AlertTriangle, Paperclip, FileText, Image as ImageIcon
+  CheckCircle2, XCircle, ChevronRight, School, Eye, EyeOff, AlertTriangle, Paperclip, FileText, Image as ImageIcon, RefreshCw
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import logoImage from "../assets/logo.png";
@@ -139,9 +139,7 @@ export default function ParentPortal({
   const [childPhotoLoading, setChildPhotoLoading] = useState(false);
   const [childPhotoImageLoading, setChildPhotoImageLoading] = useState(false);
   const [childPhotoImageReady, setChildPhotoImageReady] = useState(false);
-  const [showChildPhotoSkeleton, setShowChildPhotoSkeleton] = useState(false);
   const [childPhotoError, setChildPhotoError] = useState<string | null>(null);
-  const childPhotoSkeletonTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const childPhotoCaptureRequestedRef = useRef(false);
 
   const allowedJustificationMimeTypes = new Set(["application/pdf", "image/png", "image/jpeg"]);
@@ -257,22 +255,12 @@ export default function ParentPortal({
   };
 
   const finishChildPhotoImageLoading = () => {
-    if (childPhotoSkeletonTimerRef.current) {
-      clearTimeout(childPhotoSkeletonTimerRef.current);
-      childPhotoSkeletonTimerRef.current = null;
-    }
     setChildPhotoImageLoading(false);
-    setShowChildPhotoSkeleton(false);
   };
 
   const loadCurrentChildPhoto = async (childId: string) => {
-    if (childPhotoSkeletonTimerRef.current) {
-      clearTimeout(childPhotoSkeletonTimerRef.current);
-      childPhotoSkeletonTimerRef.current = null;
-    }
     setChildPhotoUrl(null);
     setChildPhotoImageReady(false);
-    setShowChildPhotoSkeleton(false);
 
     if (!token) {
       setChildPhotoImageLoading(false);
@@ -288,10 +276,6 @@ export default function ParentPortal({
     }
 
     setChildPhotoImageLoading(true);
-    childPhotoSkeletonTimerRef.current = setTimeout(() => {
-      setShowChildPhotoSkeleton(true);
-      childPhotoSkeletonTimerRef.current = null;
-    }, 120);
 
     try {
       const response = await performProtectedRequest((authToken) => fetch(withApiBase(`/api/mobile/parent/children/${childId}/photo`), {
@@ -455,18 +439,9 @@ export default function ParentPortal({
       return;
     }
     loadCurrentChildPhoto(currentChild.id);
-    return () => {
-      if (childPhotoSkeletonTimerRef.current) {
-        clearTimeout(childPhotoSkeletonTimerRef.current);
-        childPhotoSkeletonTimerRef.current = null;
-      }
-    };
   }, [currentChild?.id, token]);
 
   useEffect(() => () => {
-    if (childPhotoSkeletonTimerRef.current) {
-      clearTimeout(childPhotoSkeletonTimerRef.current);
-    }
     childPhotoObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
     childPhotoObjectUrlsRef.current.clear();
     childPhotoCacheRef.current.clear();
@@ -1695,11 +1670,13 @@ export default function ParentPortal({
                             }}
                           />
                         )}
-                        {childPhotoImageLoading && showChildPhotoSkeleton && (
+                        {childPhotoImageLoading && (
                           <span
-                            aria-label="Chargement de la photo"
-                            className="absolute inset-0 rounded-full bg-slate-300/80 animate-pulse dark:bg-slate-600/80"
-                          />
+                            aria-label="Synchronisation de la photo"
+                            className="absolute inset-0 flex items-center justify-center rounded-full bg-slate-900/35"
+                          >
+                            <RefreshCw className="h-5 w-5 animate-spin text-white drop-shadow" />
+                          </span>
                         )}
                         <span className="absolute -bottom-1 -right-1 rounded-full border border-white bg-indigo-600 text-[9px] font-bold text-white px-1.5 py-0.5 shadow-sm">
                           {childPhotoLoading ? "..." : "+"}
