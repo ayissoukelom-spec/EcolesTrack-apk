@@ -1670,7 +1670,7 @@ export default function ParentPortal({
                             }}
                           />
                         )}
-                        {childPhotoImageLoading && (
+                        {(childPhotoImageLoading || childPhotoLoading) && (
                           <span
                             aria-label="Synchronisation de la photo"
                             className="absolute inset-0 flex items-center justify-center rounded-full bg-slate-900/35"
