@@ -2,6 +2,12 @@ import type { AppNotification, AppNotificationType } from "../types";
 
 export type ParentNotificationCategory = "notes" | "homework" | "absences" | "info";
 
+type ParentNotificationClassificationInput = Pick<AppNotification, "type" | "title" | "message"> & {
+  category?: string;
+  target?: string;
+  metadata?: { target?: string | null } | null;
+};
+
 const normalizeNotificationText = (text?: string) =>
   (text || "")
     .toLowerCase()
@@ -21,13 +27,24 @@ const explicitTypeCategories: Record<AppNotificationType, ParentNotificationCate
   test: "info",
 };
 
-export function classifyParentNotification(notif: Pick<AppNotification, "type" | "title" | "message">): ParentNotificationCategory {
-  if (notif.type) {
-    return explicitTypeCategories[notif.type] ?? "info";
+export function classifyParentNotification(notif: ParentNotificationClassificationInput): ParentNotificationCategory {
+  const target = normalizeNotificationText(notif.target ?? notif.metadata?.target);
+  const category = normalizeNotificationText(notif.category);
+  if (["homework", "assignment", "devoir"].includes(target)
+    || ["evaluation", "evaluation created", "homework", "assignment", "devoir"].includes(category)) {
+    return "homework";
   }
 
   const normalizedTitle = normalizeNotificationText(notif.title);
-  const payload = `${normalizeNotificationText(notif.title)} ${normalizeNotificationText(notif.message)}`;
+  const payload = `${normalizedTitle} ${normalizeNotificationText(notif.message)}`;
+  const isPublishedHomework =
+    /^(nouveau devoir publie|nouveau devoir a venir)\b/.test(normalizedTitle)
+    || /\bun nouveau devoir\b.*\b(a ete programme|programme|publie)\b/.test(payload);
+  if (isPublishedHomework) return "homework";
+
+  if (notif.type) {
+    return explicitTypeCategories[notif.type] ?? "info";
+  }
 
   if (/^(nouvelle note pour|note modifiee pour|nouvelle note disponible)\b/.test(normalizedTitle)) {
     return "notes";
