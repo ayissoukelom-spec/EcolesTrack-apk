@@ -16,6 +16,7 @@ import { getApiErrorMessage, parseJsonSafe, withApiBase } from "../utils/http";
 import { classifyParentNotification } from "../utils/notificationCategory";
 import { getSchoolPeriodLabel, isGradeInSchoolPeriod, SCHOOL_PERIOD_FALLBACK_LABEL } from "../utils/schoolPeriod";
 import { getNewPasswordPolicyError } from "../utils/passwordPolicy";
+import ParentWhatsAppContactButton, { isValidWhatsAppUrl } from "./ParentWhatsAppContactButton";
 
 interface ParentPortalProps {
   token: string | null;
@@ -78,6 +79,8 @@ export default function ParentPortal({
 
   // Parent app active state loaded from endpoints
   const [children, setChildren] = useState<Child[]>([]);
+  const [whatsappUrl, setWhatsappUrl] = useState<string | null>(null);
+  const [isLoadingWhatsAppContact, setIsLoadingWhatsAppContact] = useState(false);
   const [absences, setAbsences] = useState<Absence[]>([]);
   const [absenceDeclarations, setAbsenceDeclarations] = useState<AbsenceDeclaration[]>([]);
   const [showAbsenceDeclarationForm, setShowAbsenceDeclarationForm] = useState(false);
@@ -232,6 +235,7 @@ export default function ParentPortal({
   }, []);
 
   const currentChild = selectedChild || children[0] || null;
+  const currentChildId = currentChild?.id;
   const childAbsenceDeclarations = currentChild
     ? absenceDeclarations.filter((declaration: AbsenceDeclaration) => declaration.childId === currentChild.id)
     : [];
@@ -409,6 +413,47 @@ export default function ParentPortal({
       return null;
     }
   };
+
+  useEffect(() => {
+    let cancelled = false;
+    setWhatsappUrl(null);
+
+    if (!token || !currentChildId) {
+      setIsLoadingWhatsAppContact(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setIsLoadingWhatsAppContact(true);
+    void performProtectedRequest((authToken) => fetch(withApiBase(
+      `/api/mobile/parent/whatsapp-contact?studentId=${encodeURIComponent(currentChildId)}`,
+    ), {
+      headers: { Authorization: `Bearer ${authToken}` },
+    })).then(async (response) => {
+      if (cancelled) return;
+      if (!response?.ok) {
+        setWhatsappUrl(null);
+        if (response) console.warn("Unable to load parent WhatsApp contact:", response.status);
+        return;
+      }
+      const data = await parseJsonSafe<{ whatsappUrl?: unknown }>(response);
+      if (!cancelled) {
+        setWhatsappUrl(isValidWhatsAppUrl(data?.whatsappUrl) ? data.whatsappUrl : null);
+      }
+    }).catch((error: unknown) => {
+      if (!cancelled) {
+        console.warn("Unable to load parent WhatsApp contact:", error);
+        setWhatsappUrl(null);
+      }
+    }).finally(() => {
+      if (!cancelled) setIsLoadingWhatsAppContact(false);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [token, currentChildId]);
 
   // Load children list when authenticated
   const parentId = parent?.id;
@@ -1608,6 +1653,16 @@ export default function ParentPortal({
             <LogOut className="h-3.5 w-3.5" />
           </button>
         </div>
+      </div>
+
+      <div className="flex min-h-12 shrink-0 items-center justify-center border-b theme-border bg-white/70 px-3 py-2 dark:bg-slate-950/60">
+        {isLoadingWhatsAppContact ? (
+          <p className="text-xs font-medium text-slate-600 dark:text-slate-300" role="status">
+            Chargement du contact WhatsApp…
+          </p>
+        ) : (
+          <ParentWhatsAppContactButton whatsappUrl={whatsappUrl} />
+        )}
       </div>
 
       {/* Main Body - View Switcher */}

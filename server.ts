@@ -14,6 +14,7 @@ import { createServer as createViteServer } from "vite";
 import { store } from "./backend/store";
 import { authenticateMobileParentLogin } from "./backend/parentLogin";
 import { registerChildPhotoRoutes } from "./backend/mobilePhotoRoutes";
+import { registerParentWhatsAppRoute } from "./backend/parentWhatsAppRoute";
 import { AbsenceJustificationAlreadyRejectedError } from "./backend/absenceJustification";
 import { withTemporaryUploadCleanup } from "./backend/temporaryUploadCleanup";
 import { AbsenceDeclarationRelayError, relayAbsenceDeclaration } from "./backend/absenceDeclarations";
@@ -480,6 +481,7 @@ app.get("/api/mobile/parent/children", requireAuth, requireParentRoleOnly, async
 });
 
 registerChildPhotoRoutes(app, requireAuth, requireParentRoleOnly, store);
+registerParentWhatsAppRoute(app, requireAuth, requireParentRoleOnly, store, { dbQuery });
 
 // 4b. POST /api/mobile/parent/children/simulate
 app.post("/api/mobile/parent/children/simulate", requireAuth, requireParentRoleOnly, async (req: AuthenticatedRequest, res) => {

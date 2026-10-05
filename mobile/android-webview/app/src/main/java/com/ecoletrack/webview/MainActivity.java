@@ -343,6 +343,14 @@ public class MainActivity extends AppCompatActivity {
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 String requestedUrl = request != null && request.getUrl() != null ? request.getUrl().toString() : "null";
                 Log.d(TAG, "[WebViewClient] shouldOverrideUrlLoading ts=" + System.currentTimeMillis() + " requestedUrl=" + requestedUrl + " currentUrl=" + view.getUrl());
+                if (WhatsAppUrlPolicy.shouldOpenExternally(requestedUrl)) {
+                    try {
+                        startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(requestedUrl)));
+                    } catch (ActivityNotFoundException exception) {
+                        Toast.makeText(MainActivity.this, "Aucune application ne peut ouvrir WhatsApp sur cet appareil.", Toast.LENGTH_LONG).show();
+                    }
+                    return true;
+                }
                 return false;
             }
 
