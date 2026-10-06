@@ -389,6 +389,13 @@ public class MainActivity extends AppCompatActivity {
                 String requestedUrl = request != null && request.getUrl() != null ? request.getUrl().toString() : null;
                 Log.d(TAG, "[WebViewClient] shouldOverrideUrlLoading ts=" + System.currentTimeMillis() + " requestedUrl=" + requestedUrl + " currentUrl=" + view.getUrl());
                 boolean isMainFrame = request != null && request.isForMainFrame();
+                Log.d(TAG, "[WEBVIEW_TRACE] shouldOverrideUrlLoading url=" + requestedUrl
+                        + " mainFrame=" + isMainFrame);
+                if (isMainFrame && APP_ASSET_BASE_URL.equals(requestedUrl)) {
+                    Log.d(TAG, "[WEBVIEW_TRACE] APP_ASSET_BASE_URL intercepted url=" + requestedUrl);
+                    view.post(MainActivity.this::loadPreparedIndexHtml);
+                    return true;
+                }
                 WebViewNavigationPolicy.Decision decision =
                         WebViewNavigationPolicy.decide(requestedUrl, isMainFrame);
                 if (decision == WebViewNavigationPolicy.Decision.OPEN_WHATSAPP_EXTERNALLY) {
@@ -405,11 +412,23 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                 if (request == null || request.getUrl() == null) {
+                    Log.d(TAG, "[WEBVIEW_TRACE] shouldInterceptRequest request/url is null");
                     return super.shouldInterceptRequest(view, request);
                 }
 
-                if (request.isForMainFrame()
-                        && !WebViewNavigationPolicy.isTrustedAppUrl(request.getUrl().toString())) {
+                String requestUrl = request.getUrl().toString();
+                boolean isMainFrame = request.isForMainFrame();
+                boolean isTrusted = WebViewNavigationPolicy.isTrustedAppUrl(requestUrl);
+                boolean isLocalHtmlDataDocument =
+                        requestUrl.startsWith("data:text/html;charset=utf-8;base64,");
+                Log.d(TAG, "[WEBVIEW_TRACE] shouldInterceptRequest url=" + requestUrl
+                        + " mainFrame=" + isMainFrame
+                        + " method=" + request.getMethod()
+                        + " trusted=" + isTrusted
+                        + " localHtmlData=" + isLocalHtmlDataDocument);
+
+                if (isMainFrame && !isTrusted && !isLocalHtmlDataDocument) {
+                    Log.e(TAG, "[WEBVIEW_TRACE] BLOCKED_403 url=" + requestUrl);
                     return new WebResourceResponse(
                             "text/plain",
                             "UTF-8",
@@ -420,8 +439,11 @@ public class MainActivity extends AppCompatActivity {
                     );
                 }
 
+                Log.d(TAG, "[WEBVIEW_TRACE] ASSET_LOADER url=" + requestUrl);
                 WebResourceResponse assetResponse =
                         webViewAssetLoader.shouldInterceptRequest(request.getUrl());
+                Log.d(TAG, "[WEBVIEW_TRACE] ASSET_LOADER url=" + requestUrl
+                        + " result=" + (assetResponse == null ? "NULL" : "NON_NULL"));
                 return assetResponse != null ? assetResponse : super.shouldInterceptRequest(view, request);
             }
 
@@ -476,6 +498,15 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onReceivedError(WebView view, WebResourceRequest request, android.webkit.WebResourceError error) {
+                String requestUrl = request != null && request.getUrl() != null
+                        ? request.getUrl().toString() : "null";
+                boolean isMainFrame = request != null && request.isForMainFrame();
+                String errorCode = error != null ? String.valueOf(error.getErrorCode()) : "null";
+                String errorDescription = error != null ? String.valueOf(error.getDescription()) : "null";
+                Log.e(TAG, "[WEBVIEW_TRACE] LOAD_ERROR url=" + requestUrl
+                        + " mainFrame=" + isMainFrame
+                        + " errorCode=" + errorCode
+                        + " description=" + errorDescription);
                 if (request != null && request.isForMainFrame()) {
                     String message = error != null ? String.valueOf(error.getDescription()) : "Unknown error";
                     Log.e(TAG, "WebView main frame error: " + message);
@@ -492,6 +523,17 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse errorResponse) {
+                String requestUrl = request != null && request.getUrl() != null
+                        ? request.getUrl().toString() : "null";
+                boolean isMainFrame = request != null && request.isForMainFrame();
+                String statusCode = errorResponse != null
+                        ? String.valueOf(errorResponse.getStatusCode()) : "null";
+                String reasonPhrase = errorResponse != null
+                        ? String.valueOf(errorResponse.getReasonPhrase()) : "null";
+                Log.e(TAG, "[WEBVIEW_TRACE] HTTP_ERROR url=" + requestUrl
+                        + " mainFrame=" + isMainFrame
+                        + " status=" + statusCode
+                        + " reason=" + reasonPhrase);
                 if (request != null && request.isForMainFrame()) {
                     String message = errorResponse != null ? String.valueOf(errorResponse.getStatusCode()) : "unknown";
                     Log.e(TAG, "WebView HTTP error: " + message);
