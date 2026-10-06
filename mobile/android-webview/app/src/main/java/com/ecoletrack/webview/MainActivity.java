@@ -62,6 +62,11 @@ public class MainActivity extends AppCompatActivity {
     private String apiServerUrl;
     private static final String APP_ASSET_BASE_URL = "https://appassets.androidplatform.net/";
     private static final String APP_INDEX_URL = APP_ASSET_BASE_URL + "index.html";
+    private static final String STATE_WEBVIEW = "webview_state";
+    private static final String STATE_WEBVIEW_URL = "webview_url";
+    private static final String STATE_PENDING_TARGET = "pending_target";
+    private static final String STATE_PENDING_NOTIFICATION_ID = "pending_notification_id";
+    private static final String STATE_PENDING_ATTACHMENT_COUNT = "pending_attachment_count";
     private static final String CONTENT_SECURITY_POLICY =
             "<meta http-equiv=\"Content-Security-Policy\" content=\"frame-src 'self'; child-src 'self'; object-src 'none'; base-uri 'self'\">";
     private final WebViewAssetLoader webViewAssetLoader = new WebViewAssetLoader.Builder()
@@ -94,6 +99,7 @@ public class MainActivity extends AppCompatActivity {
             "<div class='card'><h1>ÉcoleTrack</h1><p>Le chargement a échoué.</p><p><code>{DETAIL}</code></p></div></body></html>";
     private WebView webView;
     private boolean initialAppPageLoaded;
+    private boolean fcmTokenReceiverRegistered;
     private String pendingFcmToken;
     private String pendingTarget;
     private String pendingNotificationId;
@@ -101,6 +107,7 @@ public class MainActivity extends AppCompatActivity {
     private static final String EXTRA_TARGET = "target";
     private static final String EXTRA_NOTIFICATION_ID = "notificationId";
     private static final String EXTRA_ATTACHMENT_COUNT = "attachmentCount";
+    private final Runnable initialPageLoadRunnable = this::loadPreparedIndexHtml;
 
     private final BroadcastReceiver fcmTokenReceiver = new BroadcastReceiver() {
         @Override
@@ -278,7 +285,13 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        handleIncomingIntent(getIntent());
+        if (savedInstanceState != null) {
+            pendingTarget = savedInstanceState.getString(STATE_PENDING_TARGET);
+            pendingNotificationId = savedInstanceState.getString(STATE_PENDING_NOTIFICATION_ID);
+            pendingAttachmentCount = savedInstanceState.getString(STATE_PENDING_ATTACHMENT_COUNT);
+        } else {
+            handleIncomingIntent(getIntent());
+        }
 
         WindowCompat.setDecorFitsSystemWindows(getWindow(), true);
 
@@ -341,7 +354,6 @@ public class MainActivity extends AppCompatActivity {
                 : WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         webSettings.setCacheMode(WebSettings.LOAD_NO_CACHE);
         webView.clearCache(true);
-        webView.clearHistory();
         webView.clearMatches();
 
         webView.addJavascriptInterface(new Object() {
@@ -356,6 +368,7 @@ public class MainActivity extends AppCompatActivity {
         ensureNotificationPermission();
         createNotificationChannel();
         registerReceiver(fcmTokenReceiver, new IntentFilter(FcmTokenHelper.ACTION_FCM_TOKEN_UPDATED), Context.RECEIVER_NOT_EXPORTED);
+        fcmTokenReceiverRegistered = true;
         String savedFcmToken = FcmTokenHelper.getSavedToken(this);
         if (savedFcmToken != null && !savedFcmToken.isEmpty()) {
             Log.i(TAG, "[FCM] Recovered saved registration token");
@@ -491,7 +504,7 @@ public class MainActivity extends AppCompatActivity {
         webView.setWebChromeClient(new EcoleTrackWebChromeClient());
 
         FirebaseMessaging.getInstance().getToken()
-            .addOnCompleteListener(task -> {
+            .addOnCompleteListener(this, task -> {
                 if (!task.isSuccessful()) {
                     Log.w(TAG, "Impossible de récupérer le token Firebase", task.getException());
                     return;
@@ -504,14 +517,67 @@ public class MainActivity extends AppCompatActivity {
             });
 
         webView.setBackgroundColor(Color.parseColor("#0f172a"));
-        webView.loadDataWithBaseURL(
-                APP_ASSET_BASE_URL,
-                LOADING_HTML,
-                "text/html",
-                "UTF-8",
-                APP_ASSET_BASE_URL + "loading.html"
-        );
-        webView.post(this::loadPreparedIndexHtml);
+        boolean restoredWebView = restoreWebViewState(savedInstanceState);
+        if (!restoredWebView) {
+            webView.clearHistory();
+            webView.loadDataWithBaseURL(
+                    APP_ASSET_BASE_URL,
+                    LOADING_HTML,
+                    "text/html",
+                    "UTF-8",
+                    APP_ASSET_BASE_URL + "loading.html"
+            );
+            webView.post(initialPageLoadRunnable);
+        }
+    }
+
+    private boolean restoreWebViewState(Bundle savedInstanceState) {
+        if (savedInstanceState == null) {
+            return false;
+        }
+
+        String savedUrl = savedInstanceState.getString(STATE_WEBVIEW_URL);
+        Bundle webViewState = savedInstanceState.getBundle(STATE_WEBVIEW);
+        if (!WebViewStatePolicy.canRestore(savedUrl) || webViewState == null) {
+            return false;
+        }
+
+        try {
+            android.webkit.WebBackForwardList restoredHistory = webView.restoreState(webViewState);
+            if (restoredHistory == null
+                    || restoredHistory.getCurrentItem() == null
+                    || !WebViewStatePolicy.canRestore(
+                            savedUrl,
+                            restoredHistory.getCurrentItem().getUrl()
+                    )) {
+                webView.clearHistory();
+                return false;
+            }
+
+            initialAppPageLoaded = true;
+            Log.i(TAG, "[WEBVIEW] Restored trusted page state");
+            return true;
+        } catch (RuntimeException exception) {
+            Log.w(TAG, "[WEBVIEW] Saved state could not be restored; loading the app afresh", exception);
+            webView.clearHistory();
+            return false;
+        }
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        if (webView != null && WebViewStatePolicy.canRestore(webView.getUrl())) {
+            Bundle webViewState = new Bundle();
+            android.webkit.WebBackForwardList savedHistory = webView.saveState(webViewState);
+            if (savedHistory != null) {
+                outState.putBundle(STATE_WEBVIEW, webViewState);
+                outState.putString(STATE_WEBVIEW_URL, webView.getUrl());
+            }
+        }
+        outState.putString(STATE_PENDING_TARGET, pendingTarget);
+        outState.putString(STATE_PENDING_NOTIFICATION_ID, pendingNotificationId);
+        outState.putString(STATE_PENDING_ATTACHMENT_COUNT, pendingAttachmentCount);
+        super.onSaveInstanceState(outState);
     }
 
     private void ensureNotificationPermission() {
@@ -1165,11 +1231,17 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        if (webView != null) {
+            webView.onResume();
+        }
         Log.d(TAG, "[MainActivity] onResume ts=" + System.currentTimeMillis() + " url=" + (webView != null ? webView.getUrl() : "null"));
     }
 
     @Override
     protected void onPause() {
+        if (webView != null) {
+            webView.onPause();
+        }
         super.onPause();
         Log.d(TAG, "[MainActivity] onPause ts=" + System.currentTimeMillis() + " url=" + (webView != null ? webView.getUrl() : "null"));
     }
@@ -1182,12 +1254,28 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        if (fcmTokenReceiverRegistered) {
+            unregisterReceiver(fcmTokenReceiver);
+            fcmTokenReceiverRegistered = false;
+        }
+        if (webView != null) {
+            webView.removeCallbacks(initialPageLoadRunnable);
+            resetFileChooserCallback();
+            webView.stopLoading();
+            webView.removeAllViews();
+            ViewGroup parent = (ViewGroup) webView.getParent();
+            if (parent != null) {
+                parent.removeView(webView);
+            }
+            webView.destroy();
+            webView = null;
+        } else {
+            resetFileChooserCallback();
+        }
         super.onDestroy();
-        unregisterReceiver(fcmTokenReceiver);
-        resetFileChooserCallback();
         cameraPermissionRequested = false;
         cameraCapturePending = false;
-        Log.d(TAG, "[MainActivity] onDestroy ts=" + System.currentTimeMillis() + " url=" + (webView != null ? webView.getUrl() : "null"));
+        Log.d(TAG, "[MainActivity] onDestroy ts=" + System.currentTimeMillis());
     }
 
     @Override
