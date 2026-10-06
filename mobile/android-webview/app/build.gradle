@@ -1,6 +1,38 @@
+import java.util.Properties
+
 plugins {
     id 'com.android.application'
     id 'com.google.gms.google-services'
+}
+
+def releaseSigningPropertiesFile = rootProject.file('keystore.properties')
+def releaseSigningProperties = new Properties()
+if (releaseSigningPropertiesFile.isFile()) {
+    releaseSigningPropertiesFile.withInputStream { stream ->
+        releaseSigningProperties.load(stream)
+    }
+}
+
+gradle.taskGraph.whenReady { taskGraph ->
+    def releaseTasksRequested = taskGraph.allTasks.any { task ->
+        task.name.toLowerCase(Locale.ROOT).contains('release')
+    }
+    if (releaseTasksRequested) {
+        def requiredProperties = ['storeFile', 'storePassword', 'keyAlias', 'keyPassword']
+        def missingProperties = requiredProperties.findAll {
+            !releaseSigningProperties.getProperty(it)
+        }
+        if (!missingProperties.isEmpty()) {
+            throw new GradleException(
+                "Release signing requires ${missingProperties.join(', ')} in ${releaseSigningPropertiesFile}."
+            )
+        }
+
+        def releaseKeystore = file(releaseSigningProperties.getProperty('storeFile'))
+        if (!releaseKeystore.isFile()) {
+            throw new GradleException("Release keystore does not exist: ${releaseKeystore}.")
+        }
+    }
 }
 
 configurations.all {
@@ -28,11 +60,11 @@ android {
             keyPassword 'android'
         }
         release {
-    storeFile file('release.keystore')
-    storePassword 'KpK@@##@@##228'
-    keyAlias 'ecoletrack'
-    keyPassword 'KpK@@##@@##228'
-}
+            storeFile file(releaseSigningProperties.getProperty('storeFile', 'release.keystore'))
+            storePassword releaseSigningProperties.getProperty('storePassword', '')
+            keyAlias releaseSigningProperties.getProperty('keyAlias', '')
+            keyPassword releaseSigningProperties.getProperty('keyPassword', '')
+        }
     }
 
     buildTypes {

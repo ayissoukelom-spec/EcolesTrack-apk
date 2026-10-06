@@ -1,0 +1,3 @@
+# Local Android signing credentials and release keystore
+/keystore.properties
+/app/release.keystore
