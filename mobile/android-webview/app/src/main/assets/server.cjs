@@ -312,6 +312,30 @@ var submitAbsenceJustificationForReview = async (query, absenceId, parentId, jus
   return mapParentAbsenceRow(rows[0], rows[0].student_id == null ? "" : String(rows[0].student_id));
 };
 
+// backend/parentLogin.ts
+var normalizeParentLoginPhone = (value, phoneCountryCode) => {
+  const digits = value.replace(/\D/g, "");
+  if (!digits) return [];
+  const trimmedValue = value.trim();
+  if (trimmedValue.startsWith("+")) return [digits];
+  if (trimmedValue.startsWith("00")) return [digits.slice(2)];
+  const countryCodeDigits = String(phoneCountryCode ?? "").replace(/\D/g, "");
+  if (!countryCodeDigits) return [];
+  return [`${countryCodeDigits}${digits}`];
+};
+var selectUniqueParentPhoneMatch = (rows) => {
+  const uniqueRows = new Map(rows.map((row) => [String(row.user_id), row]));
+  return uniqueRows.size === 1 ? uniqueRows.values().next().value ?? null : null;
+};
+var authenticateMobileParentLogin = async (identifier, password, phoneCountryCode, store2) => {
+  const normalizedIdentifier = identifier.trim();
+  if (!normalizedIdentifier) return null;
+  const isEmail = normalizedIdentifier.includes("@");
+  const user = isEmail ? await store2.findParentByEmail(normalizedIdentifier.toLowerCase()) : await store2.findParentByPhone(normalizeParentLoginPhone(normalizedIdentifier, phoneCountryCode));
+  if (!user || !isEmail && user.role !== "parent") return null;
+  return await store2.verifyParentPasswordByUserId(user.id, password) ? user : null;
+};
+
 // backend/store.ts
 var PostgresStore = class {
   constructor() {
@@ -342,24 +366,14 @@ var PostgresStore = class {
       role: row.role
     });
   }
-  async getParentByEmail(email) {
-    const { rows } = await dbQuery(`
-      SELECT u.id AS user_id, u.email, u.name, u.role, p.phone, u.school_id, la.password_hash, la.salt, la.must_reset
-      FROM users u
-      LEFT JOIN parents p ON p.user_id = u.id
-      LEFT JOIN local_auths la ON la.user_id = u.id
-      WHERE LOWER(u.email) = LOWER($1)
-      LIMIT 1
-    `, [email]);
-    if (rows.length === 0) return null;
-    const row = rows[0];
+  async mapParentCredentialRow(row) {
     const schoolRows = await dbQuery(`
       SELECT s.id, s.name
       FROM user_schools us
       JOIN schools s ON s.id = us.school_id
       WHERE us.user_id = $1 AND us.is_active = true
     `, [row.user_id]);
-    const parent = {
+    return {
       ...mapWebParentToMobileParent({
         userId: row.user_id,
         userEmail: row.email,
@@ -374,10 +388,37 @@ var PostgresStore = class {
       salt: row.salt ?? void 0,
       mustReset: row.must_reset == null ? void 0 : Boolean(row.must_reset)
     };
-    return parent;
+  }
+  async getParentByEmail(email) {
+    const { rows } = await dbQuery(`
+      SELECT u.id AS user_id, u.email, u.name, u.role, p.phone, u.school_id, la.password_hash, la.salt, la.must_reset
+      FROM users u
+      LEFT JOIN parents p ON p.user_id = u.id
+      LEFT JOIN local_auths la ON la.user_id = u.id
+      WHERE LOWER(u.email) = LOWER($1)
+      LIMIT 1
+    `, [email]);
+    if (rows.length === 0) return null;
+    return this.mapParentCredentialRow(rows[0]);
   }
   async findParentByEmail(email) {
     return this.getParentByEmail(email);
+  }
+  async findParentByPhone(phoneCandidates) {
+    if (phoneCandidates.length === 0) return null;
+    const { rows } = await dbQuery(`
+      SELECT u.id AS user_id, u.email, u.name, u.role, p.phone, u.school_id, la.password_hash, la.salt, la.must_reset
+      FROM users u
+      JOIN parents p ON p.user_id = u.id
+      LEFT JOIN local_auths la ON la.user_id = u.id
+      WHERE u.role = 'parent'
+        AND (
+          regexp_replace(coalesce(p.phone, ''), '[^0-9]', '', 'g') = ANY($1::text[])
+          OR regexp_replace(coalesce(u.phone, ''), '[^0-9]', '', 'g') = ANY($1::text[])
+        )
+    `, [phoneCandidates]);
+    const match = selectUniqueParentPhoneMatch(rows);
+    return match ? this.mapParentCredentialRow(match) : null;
   }
   async verifyParentPassword(email, password) {
     const user = await this.getParentByEmail(email);
@@ -386,6 +427,19 @@ var PostgresStore = class {
     }
     const verifyHash = crypto.pbkdf2Sync(password, user.salt, 31e4, 64, "sha512").toString("hex");
     return verifyHash === user.passwordHash;
+  }
+  async verifyParentPasswordByUserId(userId, password) {
+    const { rows } = await dbQuery(`
+      SELECT la.password_hash, la.salt
+      FROM users u
+      LEFT JOIN local_auths la ON la.user_id = u.id
+      WHERE u.id = $1
+      LIMIT 1
+    `, [Number(userId)]);
+    const auth = rows[0];
+    if (!auth?.password_hash || !auth.salt) return false;
+    const verifyHash = crypto.pbkdf2Sync(password, auth.salt, 31e4, 64, "sha512").toString("hex");
+    return verifyHash === auth.password_hash;
   }
   async getParentById(id) {
     return this.ensureParentRecord(id);
@@ -798,7 +852,12 @@ var PostgresStore = class {
       WHERE parent_id = $1
       ORDER BY last_seen_at DESC
     `, [parentId]);
-    console.log("DEVICES FOUND :", rows);
+    console.log("DEVICES FOUND :", rows.map((row) => ({
+      id: row.id,
+      platform: row.platform,
+      tokenPresent: Boolean(row.push_token),
+      appVersion: row.app_version
+    })));
     return rows.map((row) => ({
       id: String(row.id),
       parentId,
@@ -1091,6 +1150,93 @@ function registerChildPhotoRoutes(app2, requireAuth2, requireParentRoleOnly2, st
       }).catch(next);
     }
   );
+}
+
+// backend/parentWhatsAppRoute.ts
+var parseStudentId = (value) => {
+  if (typeof value !== "string" || !/^[1-9]\d*$/.test(value)) return null;
+  const studentId = Number(value);
+  return Number.isSafeInteger(studentId) ? studentId : null;
+};
+var normalizeWhatsAppNumber = (value) => {
+  if (typeof value !== "string") return null;
+  const trimmedValue = value.trim();
+  if (!/^(?:\+|00)?[\d\s()./-]+$/.test(trimmedValue)) return null;
+  const number = normalizeParentLoginPhone(trimmedValue)[0];
+  return number && /^[1-9]\d{1,14}$/.test(number) ? number : null;
+};
+function registerParentWhatsAppRoute(app2, requireAuth2, requireParentRoleOnly2, store2, database) {
+  app2.get(
+    "/api/mobile/parent/whatsapp-contact",
+    requireAuth2,
+    requireParentRoleOnly2,
+    async (req, res) => {
+      const parentId = req.parent?.id;
+      const studentId = parseStudentId(req.query.studentId);
+      if (!parentId) {
+        return res.status(401).json({ error: "Authentification requise.", code: "UNAUTHORIZED" });
+      }
+      if (studentId === null) {
+        return res.status(400).json({ error: "Identifiant d\u2019enfant invalide.", code: "INVALID_STUDENT_ID" });
+      }
+      try {
+        if (!await store2.isChildOwnedByParent(String(studentId), parentId)) {
+          return res.status(404).json({ error: "Enfant introuvable.", code: "CHILD_NOT_FOUND" });
+        }
+        const studentResult = await database.dbQuery(
+          "SELECT school_id FROM students WHERE id = $1 LIMIT 1",
+          [studentId]
+        );
+        const schoolId = studentResult.rows[0]?.school_id;
+        if (schoolId == null) {
+          return res.json({ whatsappUrl: null });
+        }
+        const administrators = await database.dbQuery(
+          `SELECT phone
+           FROM users
+           WHERE role = 'school_admin'
+             AND school_id = $1
+             AND phone IS NOT NULL
+           ORDER BY id ASC`,
+          [schoolId]
+        );
+        for (const administrator of administrators.rows) {
+          const number = normalizeWhatsAppNumber(administrator.phone);
+          if (number) {
+            const message = encodeURIComponent("Bonjour, je souhaite contacter l\u2019administration de l\u2019\xE9cole.");
+            return res.json({ whatsappUrl: `https://wa.me/${number}?text=${message}` });
+          }
+        }
+        return res.json({ whatsappUrl: null });
+      } catch (error) {
+        console.error("Failed to resolve mobile parent WhatsApp contact:", error);
+        return res.status(500).json({ error: "Impossible de r\xE9cup\xE9rer le contact WhatsApp." });
+      }
+    }
+  );
+}
+
+// backend/temporaryUploadCleanup.ts
+var import_node_fs = require("node:fs");
+var import_node_path = __toESM(require("node:path"), 1);
+async function withTemporaryUploadCleanup(files, uploadDirectory, operation) {
+  try {
+    return await operation();
+  } finally {
+    const root = import_node_path.default.resolve(uploadDirectory);
+    await Promise.all(files.map(async (file) => {
+      if (!file?.path) return;
+      const filePath = import_node_path.default.resolve(file.path);
+      if (import_node_path.default.dirname(filePath) !== root) return;
+      try {
+        await import_node_fs.promises.unlink(filePath);
+      } catch (error) {
+        if (error?.code !== "ENOENT") {
+          console.error("Failed to remove a temporary absence justification file:", error?.code || "UNKNOWN");
+        }
+      }
+    }));
+  }
 }
 
 // backend/absenceDeclarations.ts
@@ -1413,11 +1559,11 @@ var AuthService = class {
 var import_app = require("firebase-admin/app");
 var import_messaging = require("firebase-admin/messaging");
 var fs = __toESM(require("fs"), 1);
-var path2 = __toESM(require("path"), 1);
+var path3 = __toESM(require("path"), 1);
 var logger4 = new Logger("FCMService");
 var serviceAccount = process.env.FCM_SERVICE_ACCOUNT_JSON ? JSON.parse(process.env.FCM_SERVICE_ACCOUNT_JSON) : JSON.parse(
   fs.readFileSync(
-    path2.join(process.cwd(), "config", "firebase-service-account.json"),
+    path3.join(process.cwd(), "config", "firebase-service-account.json"),
     "utf8"
   )
 );
@@ -1544,23 +1690,39 @@ var QueueManager = class {
     const jobData = data;
     const parentId = jobData?.parentId;
     const token = jobData?.token;
-    const maskedToken = token ? `${String(token).slice(0, 10)}...` : void 0;
     logger5.info("[NOTIF_TRACE] addJob", {
       jobName: name,
       parentId,
       tokenPresent: Boolean(token),
-      token: maskedToken,
       title: jobData?.title,
       message: jobData?.message,
       priority,
-      dedupeKey
+      hasDedupeKey: Boolean(dedupeKey)
     });
     if (dedupeKey && completedJobIds.has(dedupeKey)) {
-      logger5.info(`Idempotency hit! Job with dedupeKey '${dedupeKey}' already processed. Skipping duplicate entry.`);
+      if (jobData?.category === "grade") {
+        logger5.info("grade push deduplicated", {
+          gradeId: jobData?.metadata?.gradeId,
+          eventVersion: jobData?.metadata?.eventVersion,
+          parentId,
+          reason: "already-completed"
+        });
+      } else {
+        logger5.info("Idempotency hit: completed job skipped", { jobName: name, parentId });
+      }
       return `skipped-${dedupeKey}`;
     }
     if (dedupeKey && activeQueue.some((j) => j.dedupeKey === dedupeKey)) {
-      logger5.info(`Job with dedupeKey '${dedupeKey}' is already active in queue. Ignoring duplicate entry.`);
+      if (jobData?.category === "grade") {
+        logger5.info("grade push deduplicated", {
+          gradeId: jobData?.metadata?.gradeId,
+          eventVersion: jobData?.metadata?.eventVersion,
+          parentId,
+          reason: "already-queued"
+        });
+      } else {
+        logger5.info("Duplicate active job skipped", { jobName: name, parentId });
+      }
       return `queued-${dedupeKey}`;
     }
     const job = {
@@ -1576,7 +1738,7 @@ var QueueManager = class {
     };
     activeQueue.push(job);
     activeQueue.sort((a, b) => b.priority - a.priority || a.createdAt - b.createdAt);
-    logger5.info(`Job added to queue: ${name} [ID: ${job.id}]`, { jobId: job.id, priority, dedupeKey });
+    logger5.info(`Job added to queue: ${name} [ID: ${job.id}]`, { jobId: job.id, priority, hasDedupeKey: Boolean(dedupeKey) });
     this.processNextJob();
     return job.id;
   }
@@ -1591,13 +1753,11 @@ var QueueManager = class {
     this.isProcessing = true;
     const job = activeQueue.shift();
     const jobData = job.data;
-    const maskedToken = jobData?.token ? `${String(jobData.token).slice(0, 10)}...` : void 0;
     logger5.info("[NOTIF_TRACE] processNextJob start", {
       jobId: job.id,
       jobName: job.name,
       parentId: jobData?.parentId,
       tokenPresent: Boolean(jobData?.token),
-      token: maskedToken,
       title: jobData?.title,
       message: jobData?.message,
       attempt: job.attempts + 1,
@@ -1610,9 +1770,17 @@ var QueueManager = class {
       if (job.dedupeKey) {
         completedJobIds.add(job.dedupeKey);
       }
+      if (jobData?.category === "grade" && job.name.startsWith("send-notification-push")) {
+        logger5.info("grade push sent", {
+          gradeId: jobData?.metadata?.gradeId,
+          eventVersion: jobData?.metadata?.eventVersion,
+          parentId: jobData?.parentId,
+          jobId: job.id
+        });
+      }
       logger5.info(`Job completed successfully: ${job.name} [ID: ${job.id}]`);
     } catch (err) {
-      const errorMessage = err?.message || String(err);
+      const errorMessage = err?.name || "Unknown error";
       job.errorHistory.push({
         timestamp: (/* @__PURE__ */ new Date()).toISOString(),
         message: errorMessage
@@ -1622,16 +1790,27 @@ var QueueManager = class {
         const parentId = job.data?.parentId;
         logger5.warn(`Invalid FCM token detected, removing it and not retrying job: ${job.name} [ID: ${job.id}]`, {
           jobId: job.id,
-          token: invalidToken,
           parentId,
-          error: err.originalError
+          errorCode: err.originalError instanceof Error ? err.originalError.name : "FCM_ERROR"
         });
+        if (job.data?.category === "grade") {
+          logger5.error("grade push failed", void 0, {
+            gradeId: job.data?.metadata?.gradeId,
+            eventVersion: job.data?.metadata?.eventVersion,
+            parentId,
+            jobId: job.id,
+            errorName: "InvalidFcmTokenError"
+          });
+        }
         if (parentId) {
           try {
             await store.deletePushToken(parentId, invalidToken);
-            logger5.info(`Invalid FCM token removed from database`, { parentId, token: invalidToken });
+            logger5.info(`Invalid FCM token removed from database`, { parentId });
           } catch (deleteError) {
-            logger5.error(`Failed to delete invalid FCM token from database`, deleteError, { parentId, token: invalidToken });
+            logger5.error(`Failed to delete invalid FCM token from database`, void 0, {
+              parentId,
+              errorName: deleteError instanceof Error ? deleteError.name : "Unknown error"
+            });
           }
         }
         if (job.dedupeKey) {
@@ -1640,17 +1819,26 @@ var QueueManager = class {
         return;
       }
       const jobData2 = job.data;
-      const maskedToken2 = jobData2?.token ? `${String(jobData2.token).slice(0, 10)}...` : void 0;
-      logger5.error(`Job execution failed: ${job.name} [ID: ${job.id}]`, err, {
+      logger5.error(`Job execution failed: ${job.name} [ID: ${job.id}]`, void 0, {
+        errorName: err?.name || "Unknown error",
         jobId: job.id,
         jobName: job.name,
         parentId: jobData2?.parentId,
-        token: maskedToken2,
         title: jobData2?.title,
         message: jobData2?.message,
         attempts: job.attempts,
         errorHistory: job.errorHistory
       });
+      if (jobData2?.category === "grade" && job.name.startsWith("send-notification-push")) {
+        logger5.error("grade push failed", void 0, {
+          gradeId: jobData2?.metadata?.gradeId,
+          eventVersion: jobData2?.metadata?.eventVersion,
+          parentId: jobData2?.parentId,
+          jobId: job.id,
+          errorName: err?.name || "Unknown error",
+          attempt: job.attempts
+        });
+      }
       if (job.attempts < job.maxAttempts) {
         const delay = Math.pow(2, job.attempts) * 100;
         logger5.warn(`Scheduling retry for job: ${job.id} in ${delay}ms...`);
@@ -1674,13 +1862,11 @@ var QueueManager = class {
    */
   static async executeJobLogic(job) {
     const jobData = job.data;
-    const maskedToken = jobData?.token ? `${String(jobData.token).slice(0, 10)}...` : void 0;
     logger5.info("[NOTIF_TRACE] executeJobLogic started", {
       jobName: job.name,
       jobId: job.id,
       parentId: jobData?.parentId,
       tokenPresent: Boolean(jobData?.token),
-      token: maskedToken,
       title: jobData?.title,
       message: jobData?.message,
       target: jobData?.target
@@ -1698,8 +1884,7 @@ var QueueManager = class {
         if (!token) {
           throw new Error("FCM token missing");
         }
-        const tokenPreview = token ? `${String(token).slice(0, 10)}...` : void 0;
-        logger5.info("[NOTIF_TRACE] About to call sendPushNotification", { parentId: jobData?.parentId, jobId: job.id, token: tokenPreview, title, message, target });
+        logger5.info("[NOTIF_TRACE] About to call sendPushNotification", { parentId: jobData?.parentId, jobId: job.id, title, message, target });
         await sendPushNotification(
           token,
           title,
@@ -1707,7 +1892,7 @@ var QueueManager = class {
           target,
           metadata
         );
-        logger5.info("[NOTIF_TRACE] FCM envoy\xE9 avec succ\xE8s", { token: tokenPreview, title, target });
+        logger5.info("[NOTIF_TRACE] FCM envoy\xE9 avec succ\xE8s", { title, target, jobId: job.id });
         logger5.info("Push notification sent successfully", {
           title
         });
@@ -1727,11 +1912,11 @@ var QueueManager = class {
         );
       }
     } catch (err) {
-      logger5.error("[NOTIF_TRACE] executeJobLogic error", err, {
+      logger5.error("[NOTIF_TRACE] executeJobLogic error", void 0, {
+        errorName: err?.name || "Unknown error",
         jobId: job.id,
         jobName: job.name,
         parentId: jobData?.parentId,
-        token: maskedToken,
         title: jobData?.title,
         message: jobData?.message
       });
@@ -1747,13 +1932,14 @@ var QueueManager = class {
 };
 
 // backend/services/notification.ts
+var import_node_crypto2 = require("node:crypto");
 var logger6 = new Logger("NotificationService");
 var NotificationService = class {
   /**
    * Orchestrates multi-channel delivery based on parent consents and quiet hours
    */
   static async dispatchNotification(parentId, title, message, category, metadata = {}, dedupeKey) {
-    logger6.info("[NOTIF_TRACE] dispatchNotification start", { parentId, category, title, dedupeKey, metadata });
+    logger6.info("[NOTIF_TRACE] dispatchNotification start", { parentId, category, title, hasDedupeKey: Boolean(dedupeKey), metadata });
     const effectiveParentIds = await this.resolveParentIds(parentId, metadata);
     logger6.info(`Orchestrating notification for Parent IDs: ${effectiveParentIds.join(", ") || "<none>"}`, { category, dedupeKey });
     logger6.info("[NOTIF_TRACE] parentIds r\xE9solus", { effectiveParentIds });
@@ -1778,7 +1964,6 @@ var NotificationService = class {
         id: device.id,
         platform: device.platform,
         tokenPresent: Boolean(device.pushToken),
-        tokenPreview: device.pushToken ? `${device.pushToken.slice(0, 10)}...` : void 0,
         appVersion: device.appVersion
       }));
       logger6.info("[NOTIF_TRACE] Notification devices loaded", { parentId: effectiveParentId, deviceCount: devices.length, devices: deviceSummaries });
@@ -1792,8 +1977,8 @@ var NotificationService = class {
       const pushTokens = Array.from(new Set(
         devices.map((device) => device.pushToken).filter((token) => Boolean(token))
       ));
-      logger6.info("Devices found", { parentId: effectiveParentId, devices });
-      logger6.info("[TRACE] Push tokens resolved", { parentId: effectiveParentId, pushTokens });
+      logger6.info("Devices found", { parentId: effectiveParentId, deviceCount: devices.length });
+      logger6.info("[TRACE] Push tokens resolved", { parentId: effectiveParentId, pushTokenCount: pushTokens.length });
       if (pushTokens.length === 0 && isPushAuthorized) {
         logger6.warn(`No devices registered for parent: ${effectiveParentId}. Push skipped.`);
       }
@@ -1818,9 +2003,9 @@ var NotificationService = class {
         const jobName = `send-notification-${channel}`;
         if (channel === "push") {
           for (const token of pushTokens) {
-            const jobDedupeKey = dedupeKey ? `${dedupeKey}-${channel}-${token}` : void 0;
-            const tokenPreview = token ? `${token.slice(0, 10)}...` : void 0;
-            logger6.info("[NOTIF_TRACE] QueueManager.addJob preparing", { channel, tokenPresent: Boolean(token), token: tokenPreview, jobName, dedupeKey: jobDedupeKey });
+            const tokenHash = (0, import_node_crypto2.createHash)("sha256").update(token).digest("hex");
+            const jobDedupeKey = dedupeKey ? `${dedupeKey}-${channel}-${tokenHash}` : void 0;
+            logger6.info("[NOTIF_TRACE] QueueManager.addJob preparing", { channel, tokenPresent: Boolean(token), jobName, hasDedupeKey: Boolean(jobDedupeKey) });
             const jobId = QueueManager.addJob(jobName, {
               parentId: effectiveParentId,
               channel,
@@ -1835,12 +2020,21 @@ var NotificationService = class {
               dedupeKey: jobDedupeKey,
               maxAttempts: 3
             });
-            logger6.info("[NOTIF_TRACE] QueueManager.addJob queued", { jobName, jobId, parentId: effectiveParentId, channel, dedupeKey: jobDedupeKey, tokenPresent: Boolean(token), token: tokenPreview });
+            const isGradeNotification = category === "grade";
+            const eventDetails = isGradeNotification ? { gradeId: metadata?.gradeId, eventVersion: metadata?.eventVersion } : {};
+            if (jobId.startsWith("skipped-") || jobId.startsWith("queued-")) {
+              if (isGradeNotification) {
+                logger6.info("grade push deduplicated", { ...eventDetails, parentId: effectiveParentId, jobName });
+              }
+            } else if (isGradeNotification) {
+              logger6.info("grade push queued", { ...eventDetails, parentId: effectiveParentId, jobId });
+            }
+            logger6.info("[NOTIF_TRACE] QueueManager.addJob completed", { jobName, jobId, parentId: effectiveParentId, channel, hasDedupeKey: Boolean(jobDedupeKey), tokenPresent: Boolean(token) });
             jobsTriggered.push(jobId);
           }
         } else {
           const jobDedupeKey = dedupeKey ? `${dedupeKey}-${channel}` : void 0;
-          logger6.info("[NOTIF_TRACE] QueueManager.addJob preparing", { channel, tokenPresent: false, jobName, dedupeKey: jobDedupeKey });
+          logger6.info("[NOTIF_TRACE] QueueManager.addJob preparing", { channel, tokenPresent: false, jobName, hasDedupeKey: Boolean(jobDedupeKey) });
           const jobId = QueueManager.addJob(jobName, {
             parentId: effectiveParentId,
             channel,
@@ -1854,7 +2048,7 @@ var NotificationService = class {
             dedupeKey: jobDedupeKey,
             maxAttempts: 3
           });
-          logger6.info("[NOTIF_TRACE] QueueManager.addJob queued", { jobName, jobId, parentId: effectiveParentId, channel, dedupeKey: jobDedupeKey, tokenPresent: false });
+          logger6.info("[NOTIF_TRACE] QueueManager.addJob queued", { jobName, jobId, parentId: effectiveParentId, channel, hasDedupeKey: Boolean(jobDedupeKey), tokenPresent: false });
           jobsTriggered.push(jobId);
         }
       }
@@ -1910,8 +2104,13 @@ var NotificationService = class {
 // backend/validators/schemas.ts
 var import_zod = require("zod");
 var LoginSchema = import_zod.z.object({
-  email: import_zod.z.string().email({ message: "Format d'email invalide." }),
+  identifier: import_zod.z.string().trim().min(1).optional(),
+  email: import_zod.z.string().email({ message: "Format d'email invalide." }).optional(),
+  phoneCountryCode: import_zod.z.string().trim().optional(),
   password: import_zod.z.string().min(4, { message: "Le mot de passe doit contenir au moins 4 caract\xE8res." })
+}).refine((value) => Boolean(value.identifier || value.email), {
+  message: "Un email ou un num\xE9ro de t\xE9l\xE9phone est requis.",
+  path: ["identifier"]
 });
 var RegisterPushTokenSchema = import_zod.z.object({
   pushToken: import_zod.z.string().min(10, { message: "Le token push est trop court." }),
@@ -1965,6 +2164,21 @@ var DevAddGradeSchema = import_zod.z.object({
   date: import_zod.z.string().optional()
 });
 
+// src/utils/passwordPolicy.ts
+var TEMPORARY_PASSWORD = "123456";
+function getNewPasswordPolicyError(password) {
+  if (password === TEMPORARY_PASSWORD) {
+    return "Le nouveau mot de passe ne peut pas \xEAtre le mot de passe temporaire.";
+  }
+  const missingRules = [];
+  if ([...password].length < 8) missingRules.push("au moins 8 caract\xE8res");
+  if (!/[A-Z]/.test(password)) missingRules.push("au moins une lettre majuscule");
+  if (!/[0-9]/.test(password)) missingRules.push("au moins un chiffre");
+  if (missingRules.length === 0) return null;
+  const requirements = missingRules.length === 1 ? missingRules[0] : `${missingRules.slice(0, -1).join(", ")} et ${missingRules[missingRules.length - 1]}`;
+  return `Le nouveau mot de passe doit contenir ${requirements}.`;
+}
+
 // server.ts
 var logger7 = new Logger("ExpressServer");
 var app = (0, import_express.default)();
@@ -1997,31 +2211,28 @@ var handleAbsenceJustificationUpload = (req, res, next) => {
   upload.fields([
     { name: "files", maxCount: MAX_ABSENCE_ATTACHMENT_COUNT },
     { name: "file", maxCount: 1 }
-  ])(req, res, (err) => {
+  ])(req, res, async (err) => {
     if (err) {
+      const partialFiles = collectAbsenceJustificationFiles(req);
+      await withTemporaryUploadCleanup(partialFiles, uploadStorageDir, async () => void 0);
       return res.status(400).json({ error: err.message || "Invalid file upload", code: "UPLOAD_INVALID" });
     }
-    const uploadedFiles = [];
-    if (Array.isArray(req.files)) {
-      uploadedFiles.push(...req.files);
-    } else if (req.files && typeof req.files === "object") {
-      for (const fieldFiles of Object.values(req.files)) {
-        uploadedFiles.push(...fieldFiles);
-      }
-    }
-    if (req.file) {
-      uploadedFiles.push(req.file);
-    }
-    req.uploadedFiles = uploadedFiles;
+    req.uploadedFiles = collectAbsenceJustificationFiles(req);
     return next();
   });
 };
-async function removeTemporaryAbsenceJustificationFiles(files) {
-  await Promise.all(files.map((file) => import_fs2.promises.unlink(file.path).catch((error) => {
-    if (error?.code !== "ENOENT") {
-      console.error("Failed to remove temporary absence justification file:", error?.message || error);
+function collectAbsenceJustificationFiles(req) {
+  const files = [];
+  const requestFiles = req.files;
+  if (Array.isArray(requestFiles)) {
+    files.push(...requestFiles);
+  } else if (requestFiles && typeof requestFiles === "object") {
+    for (const fieldFiles of Object.values(requestFiles)) {
+      files.push(...fieldFiles);
     }
-  })));
+  }
+  if (req.file) files.push(req.file);
+  return Array.from(new Map(files.filter((file) => file?.path).map((file) => [file.path, file])).values());
 }
 async function forwardAbsenceJustificationToWeb(absenceId, parentId, justificationReason, uploadedFile) {
   const targetBaseUrl = webBackendUrl();
@@ -2074,7 +2285,7 @@ async function forwardAbsenceJustificationToWeb(absenceId, parentId, justificati
     } catch (error) {
       if (error instanceof AbsenceJustificationAlreadyRejectedError) throw error;
     }
-    throw new Error(`Web justification upload failed with status ${response.status}: ${responseBody.slice(0, 300)}`);
+    throw new Error(`Web justification upload failed with status ${response.status}`);
   }
 }
 app.use(import_express.default.json());
@@ -2177,18 +2388,11 @@ app.post("/api/mobile/parent/login", rateLimit(15, 6e4), async (req, res) => {
       details: validation.error.format()
     });
   }
-  const { email, password } = validation.data;
-  const user = await store.findParentByEmail(email);
+  const { email, identifier, phoneCountryCode, password } = validation.data;
+  const loginIdentifier = String(identifier ?? email ?? "").trim();
+  const user = await authenticateMobileParentLogin(loginIdentifier, password, phoneCountryCode, store);
   if (!user) {
-    logger7.warn(`Tentative de connexion infructueuse (utilisateur inconnu): ${email}`);
-    return res.status(401).json({
-      error: "Identifiants de connexion incorrects.",
-      code: "BAD_CREDENTIALS"
-    });
-  }
-  const isPasswordValid = await store.verifyParentPassword(email, password);
-  if (!isPasswordValid) {
-    logger7.warn(`Mot de passe incorrect pour le compte parent: ${email}`);
+    logger7.warn("\xC9chec de connexion parent: identifiant ou mot de passe invalide.");
     return res.status(401).json({
       error: "Identifiants de connexion incorrects.",
       code: "BAD_CREDENTIALS"
@@ -2229,7 +2433,7 @@ app.post("/api/mobile/parent/login", rateLimit(15, 6e4), async (req, res) => {
     activeSchoolId: user.activeSchoolId,
     schools: user.schools
   };
-  logger7.audit("PARENT_LOGIN_SUCCESS", user.id, { email, mustReset: localMustReset }, "SUCCESS");
+  logger7.audit("PARENT_LOGIN_SUCCESS", user.id, { mustReset: localMustReset }, "SUCCESS");
   return res.json({
     parent: parentDetails,
     token: session.accessToken,
@@ -2238,30 +2442,25 @@ app.post("/api/mobile/parent/login", rateLimit(15, 6e4), async (req, res) => {
   });
 });
 app.post("/api/mobile/parent/change-password", rateLimit(15, 6e4), async (req, res) => {
-  const { email, currentPassword, newPassword } = req.body ?? {};
-  if (!email || !currentPassword || !newPassword) {
+  const { email, identifier, phoneCountryCode, currentPassword, newPassword } = req.body ?? {};
+  const loginIdentifier = String(identifier ?? email ?? "").trim();
+  if (!loginIdentifier || !currentPassword || !newPassword) {
     return res.status(400).json({
-      error: "Email, mot de passe actuel et nouveau mot de passe sont requis.",
+      error: "Identifiant, mot de passe actuel et nouveau mot de passe sont requis.",
       code: "BAD_REQUEST"
     });
   }
-  if (newPassword === "123456") {
+  const passwordPolicyError = getNewPasswordPolicyError(String(newPassword));
+  if (passwordPolicyError) {
     return res.status(400).json({
-      error: "Le nouveau mot de passe ne peut pas \xEAtre le mot de passe par d\xE9faut.",
+      error: passwordPolicyError,
       code: "INVALID_PASSWORD"
     });
   }
-  const user = await store.findParentByEmail(email);
+  const user = await authenticateMobileParentLogin(loginIdentifier, String(currentPassword), phoneCountryCode, store);
   if (!user) {
     return res.status(401).json({
       error: "Identifiants de connexion incorrects.",
-      code: "BAD_CREDENTIALS"
-    });
-  }
-  const currentPasswordValid = await store.verifyParentPassword(email, currentPassword);
-  if (!currentPasswordValid) {
-    return res.status(401).json({
-      error: "Mot de passe actuel incorrect.",
       code: "BAD_CREDENTIALS"
     });
   }
@@ -2274,7 +2473,7 @@ app.post("/api/mobile/parent/change-password", rateLimit(15, 6e4), async (req, r
   const newSalt = import_crypto2.default.randomBytes(16).toString("hex");
   const newHash = import_crypto2.default.pbkdf2Sync(newPassword, newSalt, 31e4, 64, "sha512").toString("hex");
   await dbQuery(`UPDATE local_auths SET password_hash = $1, salt = $2, must_reset = false WHERE user_id = $3`, [newHash, newSalt, Number(user.id)]);
-  logger7.audit("PARENT_CHANGE_PASSWORD", user.id, { email }, "SUCCESS");
+  logger7.audit("PARENT_CHANGE_PASSWORD", user.id, {}, "SUCCESS");
   return res.json({ success: true });
 });
 app.post("/api/mobile/parent/refresh-token", rateLimit(15, 6e4), async (req, res) => {
@@ -2337,6 +2536,7 @@ app.get("/api/mobile/parent/children", requireAuth, requireParentRoleOnly, async
   return res.json(children);
 });
 registerChildPhotoRoutes(app, requireAuth, requireParentRoleOnly, store);
+registerParentWhatsAppRoute(app, requireAuth, requireParentRoleOnly, store, { dbQuery });
 app.post("/api/mobile/parent/children/simulate", requireAuth, requireParentRoleOnly, async (req, res) => {
   const parentId = req.parent.id;
   const child = await store.createSimulatedChildForParent(parentId);
@@ -2500,98 +2700,38 @@ app.post("/api/absences/:id/justifications", requireAuth, requireParentRoleOnly,
   const parentId = req.parent.id;
   const justificationReason = typeof req.body?.justificationReason === "string" ? req.body.justificationReason.trim() : "";
   const uploadedFiles = req.uploadedFiles ?? [];
-  if (!justificationReason) {
-    return res.status(400).json({
-      error: "Veuillez fournir un motif de justification.",
-      code: "JUSTIFICATION_REQUIRED"
-    });
-  }
-  if (!uploadedFiles.length) {
-    return res.status(400).json({
-      error: "Veuillez joindre un document justificatif valide.",
-      code: "JUSTIFICATION_FILE_REQUIRED"
-    });
-  }
-  if (uploadedFiles.length > MAX_ABSENCE_ATTACHMENT_COUNT) {
-    return res.status(400).json({
-      error: `Vous pouvez joindre jusqu'\xE0 ${MAX_ABSENCE_ATTACHMENT_COUNT} fichiers maximum.`,
-      code: "JUSTIFICATION_FILE_LIMIT_EXCEEDED"
-    });
-  }
   try {
-    for (const uploadedFile of uploadedFiles) {
-      await forwardAbsenceJustificationToWeb(id, parentId, justificationReason, uploadedFile);
-    }
-    return res.status(201).json({ success: true });
+    return await withTemporaryUploadCleanup(uploadedFiles, uploadStorageDir, async () => {
+      if (!justificationReason) {
+        return res.status(400).json({
+          error: "Veuillez fournir un motif de justification.",
+          code: "JUSTIFICATION_REQUIRED"
+        });
+      }
+      if (!uploadedFiles.length) {
+        return res.status(400).json({
+          error: "Veuillez joindre un document justificatif valide.",
+          code: "JUSTIFICATION_FILE_REQUIRED"
+        });
+      }
+      if (uploadedFiles.length > MAX_ABSENCE_ATTACHMENT_COUNT) {
+        return res.status(400).json({
+          error: `Vous pouvez joindre jusqu'\xE0 ${MAX_ABSENCE_ATTACHMENT_COUNT} fichiers maximum.`,
+          code: "JUSTIFICATION_FILE_LIMIT_EXCEEDED"
+        });
+      }
+      for (const uploadedFile of uploadedFiles) {
+        await forwardAbsenceJustificationToWeb(id, parentId, justificationReason, uploadedFile);
+      }
+      return res.status(201).json({ success: true });
+    });
   } catch (err) {
     if (err instanceof AbsenceJustificationAlreadyRejectedError) {
       return res.status(409).json({ error: err.message, code: err.code });
     }
-    console.error("Failed to forward absence justification to Web backend:", err?.message || err);
+    console.error("Failed to forward absence justification to Web backend:", err?.name || "Unknown error");
     return res.status(500).json({
       error: "Le justificatif n'a pas pu \xEAtre transmis au serveur Web.",
-      code: "INTERNAL_ERROR"
-    });
-  } finally {
-    await removeTemporaryAbsenceJustificationFiles(uploadedFiles);
-  }
-});
-app.post("/api/absences/:absenceId/justifications", requireAuth, requireParentRoleOnly, handleAbsenceJustificationUpload, async (req, res) => {
-  const { absenceId } = req.params;
-  const parentId = req.parent.id;
-  const justificationReason = typeof req.body?.justificationReason === "string" ? req.body.justificationReason.trim() : "";
-  const uploadedFiles = req.uploadedFiles ?? [];
-  if (!justificationReason) {
-    return res.status(400).json({
-      error: "Veuillez fournir un motif de justification.",
-      code: "JUSTIFICATION_REQUIRED"
-    });
-  }
-  if (!uploadedFiles.length) {
-    return res.status(400).json({
-      error: "Veuillez joindre un document justificatif valide.",
-      code: "JUSTIFICATION_FILE_REQUIRED"
-    });
-  }
-  if (uploadedFiles.length > MAX_ABSENCE_ATTACHMENT_COUNT) {
-    return res.status(400).json({
-      error: `Vous pouvez joindre jusqu'\xE0 ${MAX_ABSENCE_ATTACHMENT_COUNT} fichiers maximum.`,
-      code: "JUSTIFICATION_FILE_LIMIT_EXCEEDED"
-    });
-  }
-  try {
-    const updatedAbsence = await store.justifyAbsence(absenceId, parentId, justificationReason);
-    if (!updatedAbsence) {
-      return res.status(404).json({
-        error: "Absence introuvable ou non rattach\xE9e \xE0 ce parent.",
-        code: "ABSENCE_NOT_FOUND"
-      });
-    }
-    const uploadedByValue = Number.isFinite(Number(parentId)) ? Number(parentId) : parentId;
-    const insertedFiles = [];
-    for (const uploadedFile of uploadedFiles) {
-      const insertResult = await dbQuery(`
-        INSERT INTO absence_justifications (absence_id, file_name, file_path, mime_type, file_size, uploaded_by)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        RETURNING id, file_name, file_path, mime_type, file_size
-      `, [absenceId, uploadedFile.originalname, uploadedFile.filename, uploadedFile.mimetype, Number(uploadedFile.size), uploadedByValue]);
-      insertedFiles.push(insertResult.rows[0]);
-    }
-    const lastInserted = insertedFiles[insertedFiles.length - 1];
-    return res.status(201).json({
-      ...updatedAbsence,
-      justificationFileId: lastInserted?.id,
-      justificationFileName: lastInserted?.file_name ?? uploadedFiles[uploadedFiles.length - 1].originalname,
-      justificationFiles: insertedFiles
-    });
-  } catch (err) {
-    if (err instanceof AbsenceJustificationAlreadyRejectedError) {
-      await removeTemporaryAbsenceJustificationFiles(uploadedFiles);
-      return res.status(409).json({ error: err.message, code: err.code });
-    }
-    console.error("Failed to justify absence with file:", err);
-    return res.status(500).json({
-      error: "Impossible de justifier l'absence pour le moment.",
       code: "INTERNAL_ERROR"
     });
   }
