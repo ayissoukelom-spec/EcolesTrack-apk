@@ -112,7 +112,7 @@ public class MainActivity extends AppCompatActivity {
             if (token == null || token.isEmpty()) {
                 return;
             }
-            Log.i(TAG, "[FCM_DEBUG] Broadcast received token: " + token);
+            Log.i(TAG, "[FCM] Registration token update received");
             pendingFcmToken = token;
             dispatchFcmTokenToWebView(token);
         }
@@ -121,11 +121,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
-        Log.d(TAG, "[MainActivity] onNewIntent ts=" + System.currentTimeMillis() + " intent=" + intent);
-        if (intent != null) {
-            Log.d(TAG, "[MainActivity] onNewIntent targetExtra=" + intent.getStringExtra(EXTRA_TARGET));
-            Log.d(TAG, "[MainActivity] onNewIntent notificationIdExtra=" + intent.getStringExtra(EXTRA_NOTIFICATION_ID));
-        }
+        Log.d(TAG, "[MainActivity] onNewIntent ts=" + System.currentTimeMillis());
         setIntent(intent);
         handleIncomingIntent(intent);
     }
@@ -139,8 +135,9 @@ public class MainActivity extends AppCompatActivity {
         String target = intent.getStringExtra(EXTRA_TARGET);
         String notificationId = intent.getStringExtra(EXTRA_NOTIFICATION_ID);
         String attachmentCount = intent.getStringExtra(EXTRA_ATTACHMENT_COUNT);
-        Log.d(TAG, "[MainActivity] handleIncomingIntent targetExtra=" + target);
-        Log.d(TAG, "[MainActivity] handleIncomingIntent notificationIdExtra=" + notificationId + " attachmentCountExtra=" + attachmentCount);
+        Log.d(TAG, "[MainActivity] handleIncomingIntent hasTarget=" + (target != null)
+                + " hasNotificationId=" + (notificationId != null)
+                + " hasAttachmentCount=" + (attachmentCount != null));
         if (notificationId != null && !notificationId.trim().isEmpty()) {
             pendingNotificationId = notificationId;
         }
@@ -149,7 +146,7 @@ public class MainActivity extends AppCompatActivity {
         }
         if (target != null && !target.trim().isEmpty()) {
             pendingTarget = target;
-            Log.i(TAG, "[MainActivity] received target extra from intent: " + target);
+            Log.i(TAG, "[MainActivity] Received notification navigation context");
             if (webView != null) {
                 dispatchNotificationContextToWebView(target, pendingNotificationId, pendingAttachmentCount);
                 pendingTarget = null;
@@ -248,7 +245,7 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        Log.i(TAG, "[FCM_DEBUG] dispatchFcmTokenToWebView called with token: " + token);
+        Log.i(TAG, "[FCM] Dispatching registration token to WebView");
         FcmTokenHelper.dispatchTokenToWebView(webView, token);
     }
 
@@ -262,19 +259,18 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        String escapedTarget = target.replace("\\", "\\\\").replace("'", "\\'");
-        String escapedNotificationId = notificationId == null ? "" : notificationId.replace("\\", "\\\\").replace("'", "\\'");
-        String escapedAttachmentCount = attachmentCount == null ? "" : attachmentCount.replace("\\", "\\\\").replace("'", "\\'");
-        String js = "window.__pendingNotificationContext = { notificationId: '" + escapedNotificationId + "', attachmentCount: '" + escapedAttachmentCount + "' }; " +
+        String escapedTarget = JavaScriptStringEscaper.quote(target);
+        String escapedNotificationId = JavaScriptStringEscaper.quote(notificationId == null ? "" : notificationId);
+        String escapedAttachmentCount = JavaScriptStringEscaper.quote(attachmentCount == null ? "" : attachmentCount);
+        String js = "window.__pendingNotificationContext = { notificationId: " + escapedNotificationId + ", attachmentCount: " + escapedAttachmentCount + " }; " +
                     "if (window.setNotificationTarget) { " +
-                    "window.setNotificationTarget('" + escapedTarget + "'); " +
+                    "window.setNotificationTarget(" + escapedTarget + "); " +
                     "console.log('[NOTIFICATION_DEBUG] window.setNotificationTarget exists'); " +
                     "} else { " +
-                    "window.__pendingNotificationTarget = '" + escapedTarget + "'; " +
+                    "window.__pendingNotificationTarget = " + escapedTarget + "; " +
                     "console.log('[NOTIFICATION_DEBUG] window.setNotificationTarget missing, storing pending target'); " +
                     "}";
-        Log.d(TAG, "[MainActivity] dispatchTargetToWebView target=" + target);
-        Log.d(TAG, "[MainActivity] dispatchTargetToWebView js=" + js);
+        Log.d(TAG, "[MainActivity] Dispatching notification navigation context to WebView");
         webView.evaluateJavascript(js, null);
     }
 
@@ -362,10 +358,10 @@ public class MainActivity extends AppCompatActivity {
         registerReceiver(fcmTokenReceiver, new IntentFilter(FcmTokenHelper.ACTION_FCM_TOKEN_UPDATED), Context.RECEIVER_NOT_EXPORTED);
         String savedFcmToken = FcmTokenHelper.getSavedToken(this);
         if (savedFcmToken != null && !savedFcmToken.isEmpty()) {
-            Log.i(TAG, "[FCM_DEBUG] Recovered saved FCM token from SharedPreferences: " + savedFcmToken);
+            Log.i(TAG, "[FCM] Recovered saved registration token");
             pendingFcmToken = savedFcmToken;
         } else {
-            Log.i(TAG, "[FCM_DEBUG] No saved FCM token found in SharedPreferences");
+            Log.i(TAG, "[FCM] No saved registration token found");
         }
 
         webView.setWebViewClient(new WebViewClient() {
@@ -502,7 +498,7 @@ public class MainActivity extends AppCompatActivity {
                 }
 
                 String token = task.getResult();
-                Log.i(TAG, "[FCM_DEBUG] Firebase token fetched: " + token);
+                Log.i(TAG, "[FCM] Firebase registration token fetched");
                 FcmTokenHelper.savePendingToken(MainActivity.this, token);
                 dispatchFcmTokenToWebView(token);
             });

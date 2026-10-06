@@ -26,19 +26,11 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
     @Override
     public void onMessageReceived(RemoteMessage remoteMessage) {
         Log.d(TAG, "[FCM_DEBUG] onMessageReceived() called");
-        Log.d(TAG, "[FCM_DEBUG] from=" + remoteMessage.getFrom());
-        Log.d(TAG, "[FCM_DEBUG] messageId=" + remoteMessage.getMessageId());
-        Log.d(TAG, "[FCM_DEBUG] data=" + remoteMessage.getData());
-
         String notificationTitle = null;
         String notificationBody = null;
         if (remoteMessage.getNotification() != null) {
             notificationTitle = remoteMessage.getNotification().getTitle();
             notificationBody = remoteMessage.getNotification().getBody();
-            Log.d(TAG, "[FCM_DEBUG] notificationTitle=" + notificationTitle);
-            Log.d(TAG, "[FCM_DEBUG] notificationBody=" + notificationBody);
-        } else {
-            Log.d(TAG, "[FCM_DEBUG] notification=none");
         }
 
         String title = "EcoleTrack";
@@ -55,7 +47,6 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
         }
 
         if (remoteMessage.getData() != null && !remoteMessage.getData().isEmpty()) {
-            Log.d(TAG, "[FCM_DEBUG] data map contents=" + remoteMessage.getData());
             if (remoteMessage.getData().containsKey("title")) {
                 title = remoteMessage.getData().get("title");
             }
@@ -67,7 +58,6 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
             }
             if (remoteMessage.getData().containsKey("target")) {
                 target = remoteMessage.getData().get("target");
-                Log.d(TAG, "[FCM_DEBUG] received target from payload: " + target);
             }
             if (remoteMessage.getData().containsKey("notificationId")) {
                 notificationId = remoteMessage.getData().get("notificationId");
@@ -77,7 +67,7 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
             }
         }
 
-        Log.i(TAG, "final notification title=" + title + " body=" + message + " target=" + target + " notificationId=" + notificationId + " attachmentCount=" + attachmentCount);
+        Log.i(TAG, "FCM message received; notification content omitted from logs");
         showNotification(title, message, target, notificationId, attachmentCount);
     }
 
@@ -96,7 +86,6 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
         Intent intent = new Intent(this, MainActivity.class);
         if (target != null && !target.trim().isEmpty()) {
             intent.putExtra("target", target);
-            Log.d(TAG, "[FCM_DEBUG] attaching target to notification intent: " + target);
         }
         if (notificationId != null && !notificationId.trim().isEmpty()) {
             intent.putExtra("notificationId", notificationId);
@@ -122,13 +111,19 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
                         .setContentText(message)
                         .setStyle(new NotificationCompat.BigTextStyle().bigText(message))
                         .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-                        .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                        .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+                        .setPublicVersion(new NotificationCompat.Builder(this, CHANNEL_ID)
+                                .setSmallIcon(com.ecoletrack.webview.R.drawable.ic_notification)
+                                .setContentTitle("EcoleTrack")
+                                .setContentText("Vous avez une nouvelle notification")
+                                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                                .build())
                         .setPriority(NotificationCompat.PRIORITY_MAX)
                         .setDefaults(NotificationCompat.DEFAULT_ALL)
                         .setAutoCancel(true)
                         .setContentIntent(pendingIntent);
 
-        Log.i(TAG, "showNotification title=" + title + " message=" + message);
+        Log.i(TAG, "Displaying FCM notification");
         manager.notify(1001, builder.build());
     }
 
@@ -149,7 +144,7 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
     public void onNewToken(String token) {
          super.onNewToken(token);
 
-         Log.i(TAG, "MyFirebaseMessagingService.onNewToken token=" + token);
+         Log.i(TAG, "Firebase registration token updated");
          FcmTokenHelper.savePendingToken(this, token);
          FcmTokenHelper.broadcastToken(this, token);
     }

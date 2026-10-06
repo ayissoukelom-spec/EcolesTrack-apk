@@ -15,7 +15,7 @@ public class FcmTokenHelper {
     public static void savePendingToken(Context context, String token) {
         SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
         prefs.edit().putString(PREF_FCM_TOKEN, token).apply();
-        android.util.Log.i("EcoleTrackAndroid", "[FCM_DEBUG] Saved FCM token to SharedPreferences: " + token);
+        android.util.Log.i("EcoleTrackAndroid", "[FCM] Registration token saved");
     }
 
     public static String getSavedToken(Context context) {
@@ -29,7 +29,7 @@ public class FcmTokenHelper {
     }
 
     public static void broadcastToken(Context context, String token) {
-        Intent intent = new Intent(ACTION_FCM_TOKEN_UPDATED);
+        Intent intent = new Intent(ACTION_FCM_TOKEN_UPDATED).setPackage(context.getPackageName());
         intent.putExtra(EXTRA_FCM_TOKEN, token);
         context.sendBroadcast(intent);
     }
@@ -39,16 +39,16 @@ public class FcmTokenHelper {
             return;
         }
 
-        String escapedToken = token.replace("\\", "\\\\").replace("'", "\\'").replace("\"", "\\\"");
+        String escapedToken = JavaScriptStringEscaper.quote(token);
         String script =
                 "if (window.setFcmToken) {" +
-                " window.setFcmToken('" + escapedToken + "');" +
-                " console.log('[FCM_DEBUG] window.setFcmToken called with token');" +
+                " window.setFcmToken(" + escapedToken + ");" +
+                " console.log('[FCM] window.setFcmToken called');" +
                 "} else {" +
-                " console.log('[FCM_DEBUG] window.setFcmToken not ready');" +
+                " console.log('[FCM] window.setFcmToken not ready');" +
                 "}";
 
-        android.util.Log.i("EcoleTrackAndroid", "[FCM_DEBUG] dispatchTokenToWebView sending token to JS: " + token);
+        android.util.Log.i("EcoleTrackAndroid", "[FCM] Dispatching registration token to the app");
 
         webView.post(() -> {
             if (webView != null) {
