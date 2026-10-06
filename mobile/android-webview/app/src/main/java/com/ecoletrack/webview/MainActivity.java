@@ -47,10 +47,8 @@ import java.io.IOException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
 
 import com.google.firebase.messaging.FirebaseMessaging;
 import androidx.activity.OnBackPressedCallback;
@@ -608,41 +606,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private String[] normalizeAcceptedMimeTypes(String[] acceptTypes) {
-        Set<String> acceptedMimeTypes = new LinkedHashSet<>();
-        if (acceptTypes != null) {
-            for (String acceptType : acceptTypes) {
-                if (acceptType == null || acceptType.trim().isEmpty()) {
-                    continue;
-                }
-
-                for (String candidate : acceptType.split(",")) {
-                    String normalized = candidate.trim();
-                    if (normalized.isEmpty()) {
-                        continue;
-                    }
-
-                    String lower = normalized.toLowerCase(Locale.US);
-                    if (lower.contains("pdf") || lower.equals(".pdf")) {
-                        acceptedMimeTypes.add("application/pdf");
-                    } else if (lower.contains("png") || lower.equals(".png")) {
-                        acceptedMimeTypes.add("image/png");
-                    } else if (lower.contains("jpeg") || lower.contains("jpg") || lower.equals(".jpeg") || lower.equals(".jpg")) {
-                        acceptedMimeTypes.add("image/jpeg");
-                    } else if (lower.contains("image/*")) {
-                        acceptedMimeTypes.add("image/png");
-                        acceptedMimeTypes.add("image/jpeg");
-                    }
-                }
-            }
-        }
-
-        if (acceptedMimeTypes.isEmpty()) {
-            acceptedMimeTypes.add("application/pdf");
-            acceptedMimeTypes.add("image/png");
-            acceptedMimeTypes.add("image/jpeg");
-        }
-
-        return acceptedMimeTypes.toArray(new String[0]);
+        return DocumentSelectionPolicy.normalizeAcceptedMimeTypes(acceptTypes);
     }
 
     private String resolveMimeType(Uri uri) {
@@ -656,7 +620,7 @@ public class MainActivity extends AppCompatActivity {
                 return mimeType;
             }
         } catch (Exception e) {
-            Log.w(TAG, "Unable to resolve MIME from content URI: " + uri, e);
+            Log.w(TAG, "Unable to resolve MIME type for selected document", e);
         }
 
         String path = uri.getPath();
@@ -665,6 +629,12 @@ public class MainActivity extends AppCompatActivity {
         }
 
         String lowerPath = path.toLowerCase(Locale.US);
+        if (lowerPath.endsWith(".xlsx")) {
+            return DocumentSelectionPolicy.EXCEL_XLSX_MIME;
+        }
+        if (lowerPath.endsWith(".xls")) {
+            return DocumentSelectionPolicy.EXCEL_XLS_MIME;
+        }
         if (lowerPath.endsWith(".pdf")) {
             return "application/pdf";
         }
@@ -676,6 +646,32 @@ public class MainActivity extends AppCompatActivity {
         }
 
         return null;
+    }
+
+    private boolean isAllowedSelectedDocument(Uri uri) {
+        if (uri == null || !"content".equalsIgnoreCase(uri.getScheme())) {
+            Log.w(TAG, "Rejected selected document with a non-content URI scheme");
+            return false;
+        }
+
+        boolean hasReadPermission = checkUriPermission(
+                uri,
+                android.os.Process.myPid(),
+                android.os.Process.myUid(),
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+        ) == PackageManager.PERMISSION_GRANTED;
+        String mimeType = resolveMimeType(uri);
+        String displayName = resolveDisplayName(uri);
+        boolean allowed = DocumentSelectionPolicy.isAllowed(
+                uri.toString(),
+                mimeType,
+                displayName,
+                hasReadPermission
+        );
+        if (!allowed) {
+            Log.w(TAG, "Rejected selected document due to unsupported type or missing read access");
+        }
+        return allowed;
     }
 
     private String resolveDisplayName(Uri uri) {
@@ -693,7 +689,7 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
         } catch (Exception e) {
-            Log.w(TAG, "Unable to resolve display name for URI: " + uri, e);
+            Log.w(TAG, "Unable to resolve selected document display name", e);
         }
 
         String path = uri.getPath();
@@ -752,7 +748,12 @@ public class MainActivity extends AppCompatActivity {
         }
 
         Intent chooserIntent = Intent.createChooser(contentSelectionIntent, "Choisir un fichier");
-        startActivityForResult(chooserIntent, FILE_CHOOSER_REQUEST_CODE);
+        try {
+            startActivityForResult(chooserIntent, FILE_CHOOSER_REQUEST_CODE);
+        } catch (ActivityNotFoundException | SecurityException | IllegalStateException e) {
+            Log.e(TAG, "Unable to launch file chooser", e);
+            resetFileChooserCallback();
+        }
     }
 
     private void launchCameraCapture() {
@@ -990,7 +991,7 @@ public class MainActivity extends AppCompatActivity {
 
         @JavascriptInterface
         public boolean openDownloadedFile(String base64, String fileName, String mimeType) {
-            Log.i(TAG, "[ATTACHMENT] bridge called fileName=" + fileName + " mime=" + mimeType + " base64Length=" + (base64 == null ? 0 : base64.length()));
+            Log.i(TAG, "[ATTACHMENT] bridge called mime=" + mimeType + " base64Length=" + (base64 == null ? 0 : base64.length()));
 
             if (base64 == null || base64.isEmpty() || fileName == null || fileName.trim().isEmpty()) {
                 Log.e(TAG, "[ATTACHMENT] bridge failed: missing base64 or fileName");
@@ -1105,30 +1106,30 @@ public class MainActivity extends AppCompatActivity {
             Uri[] result = null;
 
             if (resultCode == RESULT_OK) {
-                Log.d("EcoleTrackCamera", "onActivityResult resultCode=RESULT_OK");
+                Log.d(TAG, "File chooser returned a selection");
                 if (data != null) {
                     ClipData clipData = data.getClipData();
                     if (clipData != null) {
                         result = new Uri[clipData.getItemCount()];
                         for (int i = 0; i < clipData.getItemCount(); i++) {
                             Uri uri = clipData.getItemAt(i).getUri();
-                            if (uri != null) {
-                                String resolvedMimeType = resolveMimeType(uri);
-                                String displayName = resolveDisplayName(uri);
-                                Log.i(TAG, "[FILE_CHOOSER] selected uri=" + uri + " mime=" + resolvedMimeType + " name=" + displayName);
-                                result[i] = uri;
+                            if (uri == null || !isAllowedSelectedDocument(uri)) {
+                                result = null;
+                                break;
                             }
+                            result[i] = uri;
                         }
                     } else if (data.getData() != null) {
                         Uri uri = data.getData();
-                        String resolvedMimeType = resolveMimeType(uri);
-                        String displayName = resolveDisplayName(uri);
-                        Log.i(TAG, "[FILE_CHOOSER] selected uri=" + uri + " mime=" + resolvedMimeType + " name=" + displayName);
-                        result = new Uri[]{uri};
+                        if (isAllowedSelectedDocument(uri)) {
+                            result = new Uri[]{uri};
+                        }
                     }
                 }
 
-                if (result == null && cameraImageUri != null) {
+                boolean pickerReturnedNoDocument = data == null
+                        || (data.getData() == null && data.getClipData() == null);
+                if (result == null && pickerReturnedNoDocument && cameraImageUri != null) {
                     result = new Uri[]{cameraImageUri};
                     Log.d("EcoleTrackCamera", "cameraImageUri after result = " + cameraImageUri);
 
