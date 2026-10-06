@@ -40,6 +40,7 @@ import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
+import androidx.webkit.WebViewAssetLoader;
 
 import java.io.File;
 import java.io.IOException;
@@ -61,7 +62,13 @@ public class MainActivity extends AppCompatActivity {
     private static final int FILE_CHOOSER_REQUEST_CODE = 1002;
     private static final int REQUEST_CAMERA_PERMISSION = 1003;
     private String apiServerUrl;
-    private static final String APP_INDEX_URL = "file:///android_asset/index.html";
+    private static final String APP_ASSET_BASE_URL = "https://appassets.androidplatform.net/";
+    private static final String APP_INDEX_URL = APP_ASSET_BASE_URL + "index.html";
+    private static final String CONTENT_SECURITY_POLICY =
+            "<meta http-equiv=\"Content-Security-Policy\" content=\"frame-src 'self'; child-src 'self'; object-src 'none'; base-uri 'self'\">";
+    private final WebViewAssetLoader webViewAssetLoader = new WebViewAssetLoader.Builder()
+            .addPathHandler("/", new WebViewAssetLoader.AssetsPathHandler(this))
+            .build();
     private ValueCallback<Uri[]> filePathCallback;
     private WebChromeClient.FileChooserParams pendingFileChooserParams;
     private ValueCallback<Uri[]> pendingFileChooserCallback;
@@ -190,12 +197,27 @@ public class MainActivity extends AppCompatActivity {
             return buildApiBootstrapScript();
         }
 
+        String securedHtml = injectWebViewContentPolicy(html);
         String injection = buildApiBootstrapScript();
-        if (html.contains("</head>")) {
-            return html.replace("</head>", injection + "</head>");
+        if (securedHtml.contains("</head>")) {
+            return securedHtml.replace("</head>", injection + "</head>");
         }
 
-        return injection + html;
+        return injection + securedHtml;
+    }
+
+    private String injectWebViewContentPolicy(String html) {
+        int headStart = html.toLowerCase(Locale.ROOT).indexOf("<head");
+        if (headStart >= 0) {
+            int headTagEnd = html.indexOf('>', headStart);
+            if (headTagEnd >= 0) {
+                return html.substring(0, headTagEnd + 1)
+                        + CONTENT_SECURITY_POLICY
+                        + html.substring(headTagEnd + 1);
+            }
+        }
+
+        return CONTENT_SECURITY_POLICY + html;
     }
 
     private void loadPreparedIndexHtml() {
@@ -204,15 +226,21 @@ public class MainActivity extends AppCompatActivity {
             String modifiedHtml = injectApiBootstrapIntoHtml(html);
             Log.i(TAG, "[API_TRACE][INIT] Loading prepared index.html with Android API bootstrap: " + apiServerUrl);
             webView.loadDataWithBaseURL(
-                    "file:///android_asset/",
+                    APP_ASSET_BASE_URL,
                     modifiedHtml,
                     "text/html",
                     "UTF-8",
-                    "file:///android_asset/index.html"
+                    APP_INDEX_URL
             );
         } catch (java.io.IOException e) {
             Log.e(TAG, "[API_TRACE][ERROR] Failed to prepare Android index.html bootstrap", e);
-            webView.loadDataWithBaseURL(null, LOADING_HTML, "text/html", "UTF-8", null);
+            webView.loadDataWithBaseURL(
+                    APP_ASSET_BASE_URL,
+                    LOADING_HTML,
+                    "text/html",
+                    "UTF-8",
+                    APP_ASSET_BASE_URL + "loading.html"
+            );
         }
     }
 
@@ -307,12 +335,16 @@ public class MainActivity extends AppCompatActivity {
         WebSettings webSettings = webView.getSettings();
         webSettings.setJavaScriptEnabled(true);
         webSettings.setDomStorageEnabled(true);
-        webSettings.setAllowFileAccess(true);
+        webSettings.setAllowFileAccess(false);
         webSettings.setAllowContentAccess(true);
-        webSettings.setAllowFileAccessFromFileURLs(true);
-        webSettings.setAllowUniversalAccessFromFileURLs(true);
+        webSettings.setAllowFileAccessFromFileURLs(false);
+        webSettings.setAllowUniversalAccessFromFileURLs(false);
         webSettings.setMediaPlaybackRequiresUserGesture(false);
-        webSettings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        boolean isDebuggable = (getApplicationInfo().flags
+                & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0;
+        webSettings.setMixedContentMode(isDebuggable
+                ? WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                : WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         webSettings.setCacheMode(WebSettings.LOAD_NO_CACHE);
         webView.clearCache(true);
         webView.clearHistory();
@@ -341,9 +373,12 @@ public class MainActivity extends AppCompatActivity {
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                String requestedUrl = request != null && request.getUrl() != null ? request.getUrl().toString() : "null";
+                String requestedUrl = request != null && request.getUrl() != null ? request.getUrl().toString() : null;
                 Log.d(TAG, "[WebViewClient] shouldOverrideUrlLoading ts=" + System.currentTimeMillis() + " requestedUrl=" + requestedUrl + " currentUrl=" + view.getUrl());
-                if (WhatsAppUrlPolicy.shouldOpenExternally(requestedUrl)) {
+                boolean isMainFrame = request != null && request.isForMainFrame();
+                WebViewNavigationPolicy.Decision decision =
+                        WebViewNavigationPolicy.decide(requestedUrl, isMainFrame);
+                if (decision == WebViewNavigationPolicy.Decision.OPEN_WHATSAPP_EXTERNALLY) {
                     try {
                         startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(requestedUrl)));
                     } catch (ActivityNotFoundException exception) {
@@ -351,7 +386,7 @@ public class MainActivity extends AppCompatActivity {
                     }
                     return true;
                 }
-                return false;
+                return decision == WebViewNavigationPolicy.Decision.BLOCK;
             }
 
             @Override
@@ -360,24 +395,21 @@ public class MainActivity extends AppCompatActivity {
                     return super.shouldInterceptRequest(view, request);
                 }
 
-                String requestUrl = request.getUrl().toString();
-                if (requestUrl.contains("/index.html")) {
-                    try {
-                        String html = readIndexHtmlFromAssets();
-                        String modifiedHtml = injectApiBootstrapIntoHtml(html);
-                        Log.i(TAG, "[API_TRACE][INIT] Android API bootstrap injected before JS execution: " + apiServerUrl);
-                        return new WebResourceResponse(
-                                "text/html",
-                                "UTF-8",
-                                new java.io.ByteArrayInputStream(modifiedHtml.getBytes(java.nio.charset.StandardCharsets.UTF_8))
-                        );
-                    } catch (java.io.IOException e) {
-                        // Fall back to normal loading if asset injection fails
-                        return super.shouldInterceptRequest(view, request);
-                    }
+                if (request.isForMainFrame()
+                        && !WebViewNavigationPolicy.isTrustedAppUrl(request.getUrl().toString())) {
+                    return new WebResourceResponse(
+                            "text/plain",
+                            "UTF-8",
+                            403,
+                            "Blocked by WebView navigation policy",
+                            java.util.Collections.emptyMap(),
+                            new java.io.ByteArrayInputStream(new byte[0])
+                    );
                 }
 
-                return super.shouldInterceptRequest(view, request);
+                WebResourceResponse assetResponse =
+                        webViewAssetLoader.shouldInterceptRequest(request.getUrl());
+                return assetResponse != null ? assetResponse : super.shouldInterceptRequest(view, request);
             }
 
             @Override
@@ -391,7 +423,7 @@ public class MainActivity extends AppCompatActivity {
                 Log.d(TAG, "[WebViewClient] onPageFinished ts=" + System.currentTimeMillis() + " url=" + url + " currentUrl=" + view.getUrl());
                 view.setBackgroundColor(Color.TRANSPARENT);
 
-                if (url == null || (!url.startsWith("file:///android_asset/") && !url.contains("appassets.androidplatform.net"))) {
+                if (!APP_INDEX_URL.equals(url)) {
                     return;
                 }
 
@@ -435,7 +467,13 @@ public class MainActivity extends AppCompatActivity {
                     String message = error != null ? String.valueOf(error.getDescription()) : "Unknown error";
                     Log.e(TAG, "WebView main frame error: " + message);
                     String html = ERROR_HTML.replace("{DETAIL}", message.replace("'", "&#39;"));
-                    view.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null);
+                    view.loadDataWithBaseURL(
+                            APP_ASSET_BASE_URL,
+                            html,
+                            "text/html",
+                            "UTF-8",
+                            APP_ASSET_BASE_URL + "error.html"
+                    );
                 }
             }
 
@@ -445,7 +483,13 @@ public class MainActivity extends AppCompatActivity {
                     String message = errorResponse != null ? String.valueOf(errorResponse.getStatusCode()) : "unknown";
                     Log.e(TAG, "WebView HTTP error: " + message);
                     String html = ERROR_HTML.replace("{DETAIL}", "HTTP " + message.replace("'", "&#39;"));
-                    view.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null);
+                    view.loadDataWithBaseURL(
+                            APP_ASSET_BASE_URL,
+                            html,
+                            "text/html",
+                            "UTF-8",
+                            APP_ASSET_BASE_URL + "error.html"
+                    );
                 }
             }
         });
@@ -466,7 +510,13 @@ public class MainActivity extends AppCompatActivity {
             });
 
         webView.setBackgroundColor(Color.parseColor("#0f172a"));
-        webView.loadDataWithBaseURL(null, LOADING_HTML, "text/html", "UTF-8", null);
+        webView.loadDataWithBaseURL(
+                APP_ASSET_BASE_URL,
+                LOADING_HTML,
+                "text/html",
+                "UTF-8",
+                APP_ASSET_BASE_URL + "loading.html"
+        );
         webView.post(this::loadPreparedIndexHtml);
     }
 
