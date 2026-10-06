@@ -96,28 +96,7 @@ dependencies {
     testImplementation 'junit:junit:4.13.2'
 }
 
-def webDistDir = file("${projectDir}/../../../dist")
-def androidAssetsDir = file("${projectDir}/src/main/assets")
-
-tasks.register('copyWebAssets', Copy) {
+tasks.register('copyWebAssets') {
     group = 'build'
-    description = 'Copies the latest web build into the Android assets folder'
-
-    from(webDistDir) {
-        include '**/*'
-        exclude '**/*.map'
-    }
-    into(androidAssetsDir)
-
-    onlyIf { webDistDir.exists() }
-
-    doFirst {
-        delete fileTree(androidAssetsDir) {
-            include '**/*'
-        }
-    }
-}
-
-tasks.named('preBuild').configure {
-    dependsOn tasks.named('copyWebAssets')
+    description = 'Deprecated no-op; Android packages the checked-in assets as-is'
 }
