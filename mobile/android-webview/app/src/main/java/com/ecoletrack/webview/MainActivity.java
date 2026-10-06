@@ -17,6 +17,7 @@ import android.os.Bundle;
 import android.os.Build;
 import android.os.Environment;
 import android.util.Base64;
+import android.util.Base64OutputStream;
 import android.provider.MediaStore;
 import android.util.Log;
 import android.view.ViewGroup;
@@ -43,12 +44,16 @@ import androidx.core.view.WindowInsetsCompat;
 import androidx.webkit.WebViewAssetLoader;
 
 import java.io.File;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
+import java.lang.ref.WeakReference;
 
 import com.google.firebase.messaging.FirebaseMessaging;
 import androidx.activity.OnBackPressedCallback;
@@ -59,6 +64,7 @@ public class MainActivity extends AppCompatActivity {
     private static final int REQUEST_POST_NOTIFICATIONS = 1001;
     private static final int FILE_CHOOSER_REQUEST_CODE = 1002;
     private static final int REQUEST_CAMERA_PERMISSION = 1003;
+    private static final long TEMPORARY_FILE_RETENTION_MILLIS = 7L * 24 * 60 * 60 * 1000;
     private String apiServerUrl;
     private static final String APP_ASSET_BASE_URL = "https://appassets.androidplatform.net/";
     private static final String APP_INDEX_URL = APP_ASSET_BASE_URL + "index.html";
@@ -285,6 +291,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        cleanupTemporaryFiles();
         if (savedInstanceState != null) {
             pendingTarget = savedInstanceState.getString(STATE_PENDING_TARGET);
             pendingNotificationId = savedInstanceState.getString(STATE_PENDING_NOTIFICATION_ID);
@@ -353,7 +360,6 @@ public class MainActivity extends AppCompatActivity {
                 ? WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                 : WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         webSettings.setCacheMode(WebSettings.LOAD_NO_CACHE);
-        webView.clearCache(true);
         webView.clearMatches();
 
         webView.addJavascriptInterface(new Object() {
@@ -667,6 +673,27 @@ public class MainActivity extends AppCompatActivity {
         return imageFile;
     }
 
+    private void cleanupTemporaryFiles() {
+        long nowMillis = System.currentTimeMillis();
+        cleanTemporaryDirectory(new File(getCacheDir(), "camera"), nowMillis);
+        cleanTemporaryDirectory(new File(getCacheDir(), "attachments"), nowMillis);
+    }
+
+    private void cleanTemporaryDirectory(File directory, long nowMillis) {
+        try {
+            int deletedCount = TemporaryFilePolicy.deleteExpiredFiles(
+                    directory,
+                    nowMillis,
+                    TEMPORARY_FILE_RETENTION_MILLIS
+            );
+            if (deletedCount > 0) {
+                Log.i(TAG, "Removed " + deletedCount + " expired files from app cache");
+            }
+        } catch (IOException exception) {
+            Log.e(TAG, "Unable to clean expired files in app cache directory", exception);
+        }
+    }
+
     private String[] normalizeAcceptedMimeTypes(String[] acceptTypes) {
         return DocumentSelectionPolicy.normalizeAcceptedMimeTypes(acceptTypes);
     }
@@ -946,29 +973,43 @@ public class MainActivity extends AppCompatActivity {
             return null;
         }
 
-        try {
-            java.io.InputStream inputStream = getContentResolver().openInputStream(uri);
+        try (InputStream inputStream = getContentResolver().openInputStream(uri)) {
             if (inputStream == null) {
                 Log.w("EcoleTrackCamera", "openInputStream returned null for captured photo URI: " + uri);
                 return null;
             }
 
-            java.io.ByteArrayOutputStream outputStream = new java.io.ByteArrayOutputStream();
-            byte[] buffer = new byte[4096];
-            int bytesRead;
-            while ((bytesRead = inputStream.read(buffer)) != -1) {
-                outputStream.write(buffer, 0, bytesRead);
+            ByteArrayOutputStream encodedBytes = new ByteArrayOutputStream();
+            try (OutputStream base64OutputStream = new Base64OutputStream(encodedBytes, Base64.NO_WRAP)) {
+                byte[] buffer = new byte[4096];
+                int bytesRead;
+                while ((bytesRead = inputStream.read(buffer)) != -1) {
+                    base64OutputStream.write(buffer, 0, bytesRead);
+                }
             }
-            inputStream.close();
 
-            byte[] photoBytes = outputStream.toByteArray();
-            String encoded = Base64.encodeToString(photoBytes, Base64.NO_WRAP);
-            Log.d("EcoleTrackCamera", "Captured photo base64 length: " + encoded.length());
+            String encoded = encodedBytes.toString("US-ASCII");
+            Log.d("EcoleTrackCamera", "Captured photo was encoded for the WebView callback");
             return encoded;
-        } catch (Exception e) {
+        } catch (IOException e) {
             Log.e("EcoleTrackCamera", "Unable to read captured photo bytes from URI: " + uri, e);
             return null;
         }
+    }
+
+    private void postCameraCallback(String javascript) {
+        WebView currentWebView = webView;
+        if (currentWebView == null) {
+            return;
+        }
+
+        WeakReference<WebView> webViewReference = new WeakReference<>(currentWebView);
+        currentWebView.post(() -> {
+            WebView target = webViewReference.get();
+            if (target != null) {
+                target.evaluateJavascript(javascript, null);
+            }
+        });
     }
 
     private void completeFileChooserRequest(Uri[] result) {
@@ -1195,29 +1236,15 @@ public class MainActivity extends AppCompatActivity {
                     result = new Uri[]{cameraImageUri};
                     Log.d("EcoleTrackCamera", "cameraImageUri after result = " + cameraImageUri);
 
-                    try {
-                        java.io.InputStream inputStream = getContentResolver().openInputStream(cameraImageUri);
-                        if (inputStream != null) {
-                            Log.d("EcoleTrackCamera", "camera stream opened successfully");
-                            int available = inputStream.available();
-                            Log.d("EcoleTrackCamera", "camera file size bytes = " + available);
-                            inputStream.close();
-                        } else {
-                            Log.w("EcoleTrackCamera", "camera stream could not be opened from URI: " + cameraImageUri);
-                        }
-                    } catch (Exception e) {
-                        Log.e("EcoleTrackCamera", "Unable to inspect captured photo stream", e);
-                    }
-
                     String base64Payload = readCameraPayloadAsBase64(cameraImageUri);
                     if (base64Payload != null && !base64Payload.isEmpty()) {
-                        String js = String.format(Locale.US, CAMERA_CALLBACK_BASE64_JS, base64Payload.replace("\n", "").replace("\r", ""));
+                        String js = String.format(Locale.US, CAMERA_CALLBACK_BASE64_JS, base64Payload);
                         Log.d("EcoleTrackCamera", "Returning captured image to JS callback");
-                        webView.post(() -> webView.evaluateJavascript(js, null));
+                        postCameraCallback(js);
                     } else {
                         Log.w("EcoleTrackCamera", "Unable to read captured file bytes; falling back to URI callback");
                         String js = String.format(Locale.US, CAMERA_CALLBACK_JS, cameraImageUri.toString().replace("'", "\\'"));
-                        webView.post(() -> webView.evaluateJavascript(js, null));
+                        postCameraCallback(js);
                     }
                 }
             } else {
