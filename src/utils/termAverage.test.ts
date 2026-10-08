@@ -60,6 +60,52 @@ test('includes the current semester note but excludes the previous semester note
   assert.equal(result.ignoredEvaluations.length, 1);
 });
 
+test('reassigns existing evaluations by current period dates after period boundaries move', () => {
+  const updatedFirstTerm: TermAveragePeriod = {
+    id: 8,
+    startDate: '2026-10-01',
+    endDate: '2026-10-06',
+  };
+  const result = calculateCurrentTermAverage([
+    grade({ evaluationId: 1, termId: 8, date: '2026-10-01', score: '10' }),
+    grade({ evaluationId: 2, termId: 9, date: '2026-10-04', score: '10' }),
+  ], updatedFirstTerm);
+
+  assert.equal(result.termEvaluationCount, 2);
+  assert.equal(result.termAverage, 10);
+});
+
+test('moves an evaluation into the following period when its start date moves earlier', () => {
+  const updatedSecondTerm: TermAveragePeriod = {
+    id: 9,
+    startDate: '2026-10-02',
+    endDate: '2026-10-06',
+  };
+  const result = calculateCurrentTermAverage([
+    grade({ evaluationId: 1, termId: 8, date: '2026-10-02', score: '11' }),
+    grade({ evaluationId: 2, termId: 8, date: '2026-10-01', score: '19' }),
+  ], updatedSecondTerm);
+
+  assert.equal(result.termEvaluationCount, 1);
+  assert.equal(result.termAverage, 11);
+});
+
+test('uses inclusive date bounds and excludes dates outside the active period regardless of saved term id', () => {
+  const activeTerm: TermAveragePeriod = {
+    id: 8,
+    startDate: '2026-10-01',
+    endDate: '2026-10-06',
+  };
+  const result = calculateCurrentTermAverage([
+    grade({ evaluationId: 1, termId: 9, date: '2026-10-01', score: '10' }),
+    grade({ evaluationId: 2, termId: 9, date: '2026-10-06', score: '10' }),
+    grade({ evaluationId: 3, termId: 8, date: '2026-10-07', score: '20' }),
+  ], activeTerm);
+
+  assert.equal(result.termEvaluationCount, 2);
+  assert.equal(result.termAverage, 10);
+});
+
 test('starts semester two with only semester two grades', () => {
   const result = calculateCurrentTermAverage([
     grade({ evaluationId: 1, termId: semesterOne.id, score: '12', coefficient: 3, date: '2026-09-15' }),
@@ -78,8 +124,8 @@ test('keeps college trimester grades isolated from semester grades', () => {
     endDate: '2027-02-28',
   };
   const result = calculateCurrentTermAverage([
-    grade({ evaluationId: 1, termId: semesterTwo.id, score: '18' }),
-    grade({ evaluationId: 2, termId: trimesterTwo.id, score: '14', coefficient: 2 }),
+    grade({ evaluationId: 1, termId: semesterTwo.id, score: '18', date: '2026-09-15' }),
+    grade({ evaluationId: 2, termId: trimesterTwo.id, score: '14', coefficient: 2, date: '2026-12-15' }),
   ], trimesterTwo);
 
   assert.equal(result.termAverage, 14);
@@ -88,7 +134,7 @@ test('keeps college trimester grades isolated from semester grades', () => {
 
 test('returns null when the current period has no valid calculable grade', () => {
   const previousTermOnly = calculateCurrentTermAverage([
-    grade({ evaluationId: 1, termId: semesterOne.id, score: '15' }),
+    grade({ evaluationId: 1, termId: semesterOne.id, date: '2026-09-15', score: '15' }),
   ], semesterTwo);
   const invalidScore = calculateCurrentTermAverage([
     grade({ evaluationId: 2, score: 'Abs' }),

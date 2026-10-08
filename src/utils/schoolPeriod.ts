@@ -19,8 +19,6 @@ export function isGradeInSchoolPeriod(
   period: { id: string; startDate: string; endDate: string } | null | undefined,
 ): boolean {
   if (!period) return false;
-  if (grade.termId != null) return String(grade.termId) === String(period.id);
-
   const gradeDate = grade.date.slice(0, 10);
   return Boolean(period.startDate && period.endDate && gradeDate >= period.startDate && gradeDate <= period.endDate);
 }

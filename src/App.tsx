@@ -12,7 +12,11 @@ import {
 declare global {
   interface Window {
     setFcmToken?: (token: string) => void;
-    setNotificationTarget?: (target: string) => void;
+    setNotificationTarget?: (target: string, dispatchId: string | null) => void;
+    AndroidNotificationBridge?: {
+      onNotificationBridgeReady?: (bridgeSessionId: string) => void;
+      onNotificationTargetReceived?: (dispatchId: string, bridgeSessionId: string) => void;
+    };
   }
 }
 import ParentPortal from "./components/ParentPortal";
@@ -203,7 +207,16 @@ export default function App() {
 
   const [notificationTarget, setNotificationTarget] = useState<string | null>(null);
   const [notificationTargetSignal, setNotificationTargetSignal] = useState(0);
+  const [notificationDispatchId, setNotificationDispatchId] = useState<string | null>(null);
   const [notificationAlertMenu, setNotificationAlertMenu] = useState<"notes" | "homework" | "absences" | "info" | null>(null);
+  const notificationBridgeSessionIdRef = useRef<string | null>(null);
+  if (notificationBridgeSessionIdRef.current === null) {
+    notificationBridgeSessionIdRef.current = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `notification-bridge-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+  const latestNotificationDispatchIdRef = useRef<string | null>(null);
+  const acknowledgedNotificationDispatchIdRef = useRef<string | null>(null);
   const lastRegisteredPushAssociationRef = useRef<string | null>(null);
   const registeringPushAssociationRef = useRef<string | null>(null);
   const pushSessionGenerationRef = useRef(0);
@@ -239,6 +252,7 @@ export default function App() {
   useEffect(() => {
     const runtime = window as Window & typeof globalThis & {
       setFcmToken?: (token: string) => void;
+      setNotificationTarget?: (target: string, dispatchId: string | null) => void;
     };
 
     console.log("[LIFECYCLE] App useEffect install JS bridges", { url: window.location.href, documentHidden: document.hidden });
@@ -250,18 +264,30 @@ export default function App() {
       console.log("[NOTIFICATION_DEBUG] React stored fcm_token in localStorage");
     };
 
-    runtime.setNotificationTarget = (target: string) => {
+    runtime.setNotificationTarget = (target: string, dispatchId: string | null) => {
       console.log("[NOTIFICATION_DEBUG] window.setNotificationTarget created");
       console.log("[NOTIFICATION_DEBUG] target received by window.setNotificationTarget :", target);
+      latestNotificationDispatchIdRef.current = dispatchId;
       setNotificationTarget(target);
+      setNotificationDispatchId(dispatchId);
       setNotificationTargetSignal((prev) => prev + 1);
     };
 
     const pendingTarget = (window as any).__pendingNotificationTarget;
     if (pendingTarget && typeof pendingTarget === "string" && pendingTarget.trim().length > 0) {
       console.log("[NOTIFICATION_DEBUG] pending target consumed :", pendingTarget);
-      runtime.setNotificationTarget(pendingTarget);
+      const pendingContext = (window as any).__pendingNotificationContext;
+      const pendingDispatchId = typeof pendingContext?.dispatchId === "string"
+        ? pendingContext.dispatchId
+        : null;
+      runtime.setNotificationTarget(pendingTarget, pendingDispatchId);
       delete (window as any).__pendingNotificationTarget;
+      delete (window as any).__pendingNotificationContext;
+    }
+
+    const bridgeSessionId = notificationBridgeSessionIdRef.current;
+    if (bridgeSessionId) {
+      window.AndroidNotificationBridge?.onNotificationBridgeReady?.(bridgeSessionId);
     }
 
     return () => {
@@ -316,6 +342,64 @@ export default function App() {
 
     console.log("[FCM] notification target not recognized, preserving current tab", normalizedTarget);
   }, [notificationTarget, notificationTargetSignal, children, selectedChild]);
+
+  useEffect(() => {
+    if (!notificationTarget || !notificationDispatchId || notificationTargetSignal === 0) {
+      return;
+    }
+
+    const normalizedTarget = notificationTarget.trim().toLowerCase();
+    let expectedTab: string | null = null;
+    let expectedAlertMenu: typeof notificationAlertMenu = null;
+
+    if (normalizedTarget === "absence") {
+      expectedTab = "notifications";
+    } else if (["note", "notes", "grade", "grades"].includes(normalizedTarget)) {
+      expectedTab = "notes";
+    } else if (normalizedTarget === "assignment" || normalizedTarget === "homework") {
+      expectedTab = "alerts";
+      expectedAlertMenu = "homework";
+    } else if (normalizedTarget === "announcement" || normalizedTarget === "payment") {
+      expectedTab = "alerts";
+      expectedAlertMenu = "info";
+    }
+
+    if (expectedTab !== null
+        && (activeTab !== expectedTab || notificationAlertMenu !== expectedAlertMenu)) {
+      return;
+    }
+
+    if (acknowledgedNotificationDispatchIdRef.current === notificationDispatchId) {
+      return;
+    }
+
+    const acknowledgeAfterRender = () => {
+      if (latestNotificationDispatchIdRef.current !== notificationDispatchId
+          || acknowledgedNotificationDispatchIdRef.current === notificationDispatchId) {
+        return;
+      }
+
+      const notificationBridge = window.AndroidNotificationBridge;
+      const bridgeSessionId = notificationBridgeSessionIdRef.current;
+      if (typeof notificationBridge?.onNotificationTargetReceived !== "function"
+          || !bridgeSessionId) {
+        return;
+      }
+
+      acknowledgedNotificationDispatchIdRef.current = notificationDispatchId;
+      console.log("[NOTIFICATION_DEBUG] route applied; acknowledging dispatch", notificationDispatchId);
+      notificationBridge.onNotificationTargetReceived(notificationDispatchId, bridgeSessionId);
+    };
+
+    const frameId = window.requestAnimationFrame(acknowledgeAfterRender);
+    return () => window.cancelAnimationFrame(frameId);
+  }, [
+    activeTab,
+    notificationAlertMenu,
+    notificationDispatchId,
+    notificationTarget,
+    notificationTargetSignal,
+  ]);
 
   useEffect(() => {
     const pushToken = fcmToken;

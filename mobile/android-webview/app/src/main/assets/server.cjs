@@ -1305,7 +1305,7 @@ function calculateCurrentTermAverage(gradeRows, activeTerm) {
   for (const rows of gradesByEvaluation.values()) {
     const evaluation = rows[0];
     const evaluationDate = String(evaluation.date).slice(0, 10);
-    const termMatches = evaluation.termId === activeTerm.id || evaluation.termId == null && evaluationDate >= activeTerm.startDate && evaluationDate <= activeTerm.endDate;
+    const termMatches = evaluationDate >= activeTerm.startDate && evaluationDate <= activeTerm.endDate;
     if (!termMatches) {
       ignoredEvaluations.push(`${evaluation.subject} ${evaluation.score}/${evaluation.maxScore ?? 20} -> term_id=${evaluation.termId}`);
       continue;

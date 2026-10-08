@@ -73,6 +73,7 @@ public class MainActivity extends AppCompatActivity {
     private static final String STATE_PENDING_TARGET = "pending_target";
     private static final String STATE_PENDING_NOTIFICATION_ID = "pending_notification_id";
     private static final String STATE_PENDING_ATTACHMENT_COUNT = "pending_attachment_count";
+    private static final String STATE_PENDING_DISPATCH_ID = "pending_dispatch_id";
     private static final String CONTENT_SECURITY_POLICY =
             "<meta http-equiv=\"Content-Security-Policy\" content=\"frame-src 'self'; child-src 'self'; object-src 'none'; base-uri 'self'\">";
     private final WebViewAssetLoader webViewAssetLoader = new WebViewAssetLoader.Builder()
@@ -110,9 +111,15 @@ public class MainActivity extends AppCompatActivity {
     private String pendingTarget;
     private String pendingNotificationId;
     private String pendingAttachmentCount;
+    private String pendingDispatchId;
+    private boolean notificationDispatchInFlight;
+    private boolean webViewPageReady;
+    private boolean notificationBridgeReady;
+    private String notificationBridgeSessionId;
     private static final String EXTRA_TARGET = "target";
     private static final String EXTRA_NOTIFICATION_ID = "notificationId";
     private static final String EXTRA_ATTACHMENT_COUNT = "attachmentCount";
+    private static final String EXTRA_DISPATCH_ID = "notificationDispatchId";
     private final Runnable initialPageLoadRunnable = this::loadPreparedIndexHtml;
 
     private final BroadcastReceiver fcmTokenReceiver = new BroadcastReceiver() {
@@ -148,26 +155,111 @@ public class MainActivity extends AppCompatActivity {
         String target = intent.getStringExtra(EXTRA_TARGET);
         String notificationId = intent.getStringExtra(EXTRA_NOTIFICATION_ID);
         String attachmentCount = intent.getStringExtra(EXTRA_ATTACHMENT_COUNT);
+        String intentDispatchId = intent.getStringExtra(EXTRA_DISPATCH_ID);
+        Log.i(TAG, "[Notification] target received from Intent = "
+                + (target == null ? "<none>" : target));
         Log.d(TAG, "[MainActivity] handleIncomingIntent hasTarget=" + (target != null)
                 + " hasNotificationId=" + (notificationId != null)
                 + " hasAttachmentCount=" + (attachmentCount != null));
-        if (notificationId != null && !notificationId.trim().isEmpty()) {
-            pendingNotificationId = notificationId;
-        }
-        if (attachmentCount != null && !attachmentCount.trim().isEmpty()) {
-            pendingAttachmentCount = attachmentCount;
-        }
         if (target != null && !target.trim().isEmpty()) {
-            pendingTarget = target;
-            Log.i(TAG, "[MainActivity] Received notification navigation context");
-            if (webView != null) {
-                dispatchNotificationContextToWebView(target, pendingNotificationId, pendingAttachmentCount);
-                pendingTarget = null;
-                pendingNotificationId = null;
-                pendingAttachmentCount = null;
+            if (intentDispatchId != null
+                    && intentDispatchId.equals(pendingDispatchId)
+                    && target.equals(pendingTarget)) {
+                Log.i(TAG, "[Notification] already stored intent restored = " + intentDispatchId);
+                return;
             }
+
+            String dispatchId = java.util.UUID.randomUUID().toString();
+            intent.putExtra(EXTRA_DISPATCH_ID, dispatchId);
+            setIntent(intent);
+            pendingTarget = target;
+            pendingNotificationId = notificationId;
+            pendingAttachmentCount = attachmentCount;
+            pendingDispatchId = dispatchId;
+            notificationDispatchInFlight = false;
+            Log.i(TAG, "[Notification] pending target stored = " + target
+                    + " dispatchId=" + dispatchId);
+            dispatchPendingNotificationContext();
         } else {
             Log.i(TAG, "[MainActivity] no target extra received; keeping default behavior");
+        }
+    }
+
+    private void dispatchPendingNotificationContext() {
+        if (webView == null
+                || !webViewPageReady
+                || !notificationBridgeReady
+                || notificationDispatchInFlight
+                || pendingTarget == null
+                || pendingTarget.trim().isEmpty()
+                || pendingDispatchId == null) {
+            return;
+        }
+
+        String target = pendingTarget;
+        String notificationId = pendingNotificationId;
+        String attachmentCount = pendingAttachmentCount;
+        String dispatchId = pendingDispatchId;
+        notificationDispatchInFlight = true;
+        Log.i(TAG, "[Notification] dispatching target = " + target
+                + " dispatchId=" + dispatchId);
+        dispatchNotificationContextToWebView(target, notificationId, attachmentCount, dispatchId);
+    }
+
+    private void acknowledgeNotificationTarget(String dispatchId, String bridgeSessionId) {
+        if (dispatchId == null
+                || !dispatchId.equals(pendingDispatchId)
+                || bridgeSessionId == null
+                || !bridgeSessionId.equals(notificationBridgeSessionId)) {
+            Log.i(TAG, "[Notification] ignoring stale JavaScript ACK = " + dispatchId
+                    + " bridgeSessionId=" + bridgeSessionId);
+            return;
+        }
+
+        Log.i(TAG, "[Notification] JavaScript ACK received = " + dispatchId);
+        pendingTarget = null;
+        pendingNotificationId = null;
+        pendingAttachmentCount = null;
+        pendingDispatchId = null;
+        notificationDispatchInFlight = false;
+
+        Intent currentIntent = getIntent();
+        if (currentIntent != null
+                && dispatchId.equals(currentIntent.getStringExtra(EXTRA_DISPATCH_ID))) {
+            currentIntent.removeExtra(EXTRA_TARGET);
+            currentIntent.removeExtra(EXTRA_NOTIFICATION_ID);
+            currentIntent.removeExtra(EXTRA_ATTACHMENT_COUNT);
+            currentIntent.removeExtra(EXTRA_DISPATCH_ID);
+            setIntent(currentIntent);
+        }
+        Log.i(TAG, "[Notification] pending target cleared = " + dispatchId);
+    }
+
+    private final class AndroidNotificationBridge {
+        @JavascriptInterface
+        public void onNotificationBridgeReady(String bridgeSessionId) {
+            runOnUiThread(() -> {
+                if (bridgeSessionId == null || bridgeSessionId.trim().isEmpty()) {
+                    Log.w(TAG, "[Notification] ignored empty JavaScript bridge session id");
+                    return;
+                }
+                if (!bridgeSessionId.equals(notificationBridgeSessionId)) {
+                    notificationBridgeSessionId = bridgeSessionId;
+                    notificationDispatchInFlight = false;
+                }
+                notificationBridgeReady = true;
+                if (webView != null && APP_INDEX_URL.equals(webView.getUrl())) {
+                    webViewPageReady = true;
+                }
+                Log.i(TAG, "[Notification] JavaScript bridge ready = true"
+                        + " bridgeSessionId=" + bridgeSessionId);
+                dispatchPendingNotificationContext();
+            });
+        }
+
+        @JavascriptInterface
+        public void onNotificationTargetReceived(String dispatchId, String bridgeSessionId) {
+            runOnUiThread(() -> acknowledgeNotificationTarget(dispatchId, bridgeSessionId));
         }
     }
 
@@ -262,11 +354,12 @@ public class MainActivity extends AppCompatActivity {
         FcmTokenHelper.dispatchTokenToWebView(webView, token);
     }
 
-    private void dispatchTargetToWebView(String target) {
-        dispatchNotificationContextToWebView(target, null, null);
-    }
-
-    private void dispatchNotificationContextToWebView(String target, String notificationId, String attachmentCount) {
+    private void dispatchNotificationContextToWebView(
+            String target,
+            String notificationId,
+            String attachmentCount,
+            String dispatchId
+    ) {
         if (webView == null || target == null || target.trim().isEmpty()) {
             Log.d(TAG, "[MainActivity] dispatchTargetToWebView skipped because webView or target is null/empty");
             return;
@@ -275,16 +368,19 @@ public class MainActivity extends AppCompatActivity {
         String escapedTarget = JavaScriptStringEscaper.quote(target);
         String escapedNotificationId = JavaScriptStringEscaper.quote(notificationId == null ? "" : notificationId);
         String escapedAttachmentCount = JavaScriptStringEscaper.quote(attachmentCount == null ? "" : attachmentCount);
-        String js = "window.__pendingNotificationContext = { notificationId: " + escapedNotificationId + ", attachmentCount: " + escapedAttachmentCount + " }; " +
+        String escapedDispatchId = JavaScriptStringEscaper.quote(dispatchId);
+        String js = "window.__pendingNotificationContext = { notificationId: " + escapedNotificationId + ", attachmentCount: " + escapedAttachmentCount + ", dispatchId: " + escapedDispatchId + " }; " +
                     "if (window.setNotificationTarget) { " +
-                    "window.setNotificationTarget(" + escapedTarget + "); " +
+                    "window.setNotificationTarget(" + escapedTarget + ", " + escapedDispatchId + "); " +
+                    "delete window.__pendingNotificationContext; " +
                     "console.log('[NOTIFICATION_DEBUG] window.setNotificationTarget exists'); " +
                     "} else { " +
                     "window.__pendingNotificationTarget = " + escapedTarget + "; " +
                     "console.log('[NOTIFICATION_DEBUG] window.setNotificationTarget missing, storing pending target'); " +
                     "}";
-        Log.d(TAG, "[MainActivity] Dispatching notification navigation context to WebView");
-        webView.evaluateJavascript(js, null);
+        webView.evaluateJavascript(js, result ->
+                Log.d(TAG, "[Notification] JavaScript dispatch evaluated = " + result
+                        + " dispatchId=" + dispatchId));
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -296,9 +392,10 @@ public class MainActivity extends AppCompatActivity {
             pendingTarget = savedInstanceState.getString(STATE_PENDING_TARGET);
             pendingNotificationId = savedInstanceState.getString(STATE_PENDING_NOTIFICATION_ID);
             pendingAttachmentCount = savedInstanceState.getString(STATE_PENDING_ATTACHMENT_COUNT);
-        } else {
-            handleIncomingIntent(getIntent());
+            pendingDispatchId = savedInstanceState.getString(STATE_PENDING_DISPATCH_ID);
         }
+
+        handleIncomingIntent(getIntent());
 
         WindowCompat.setDecorFitsSystemWindows(getWindow(), true);
 
@@ -370,6 +467,7 @@ public class MainActivity extends AppCompatActivity {
         }, "AndroidBridge");
 
         webView.addJavascriptInterface(new AndroidCameraBridge(), CAMERA_BRIDGE_NAME);
+        webView.addJavascriptInterface(new AndroidNotificationBridge(), "AndroidNotificationBridge");
 
         ensureNotificationPermission();
         createNotificationChannel();
@@ -450,6 +548,12 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
                 Log.d(TAG, "[WebViewClient] onPageStarted ts=" + System.currentTimeMillis() + " url=" + url + " currentUrl=" + view.getUrl());
+                if (APP_INDEX_URL.equals(url)) {
+                    webViewPageReady = false;
+                    notificationBridgeReady = false;
+                    notificationDispatchInFlight = false;
+                    notificationBridgeSessionId = null;
+                }
                 view.setBackgroundColor(Color.parseColor("#0f172a"));
             }
 
@@ -461,6 +565,8 @@ public class MainActivity extends AppCompatActivity {
                 if (!APP_INDEX_URL.equals(url)) {
                     return;
                 }
+                webViewPageReady = true;
+                Log.i(TAG, "[Notification] WebView page finished = " + url);
 
                 if (!initialAppPageLoaded) {
                     initialAppPageLoaded = true;
@@ -488,12 +594,7 @@ public class MainActivity extends AppCompatActivity {
                     pendingFcmToken = null;
                 }
 
-                if (pendingTarget != null && !pendingTarget.trim().isEmpty()) {
-                    dispatchNotificationContextToWebView(pendingTarget, pendingNotificationId, pendingAttachmentCount);
-                    pendingTarget = null;
-                    pendingNotificationId = null;
-                    pendingAttachmentCount = null;
-                }
+                dispatchPendingNotificationContext();
             }
 
             @Override
@@ -566,7 +667,10 @@ public class MainActivity extends AppCompatActivity {
 
         webView.setBackgroundColor(Color.parseColor("#0f172a"));
         boolean restoredWebView = restoreWebViewState(savedInstanceState);
-        if (!restoredWebView) {
+        Log.i(TAG, "[Notification] WebView restored = " + restoredWebView);
+        if (restoredWebView) {
+            webViewPageReady = false;
+        } else {
             webView.clearHistory();
             webView.loadDataWithBaseURL(
                     APP_ASSET_BASE_URL,
@@ -625,6 +729,7 @@ public class MainActivity extends AppCompatActivity {
         outState.putString(STATE_PENDING_TARGET, pendingTarget);
         outState.putString(STATE_PENDING_NOTIFICATION_ID, pendingNotificationId);
         outState.putString(STATE_PENDING_ATTACHMENT_COUNT, pendingAttachmentCount);
+        outState.putString(STATE_PENDING_DISPATCH_ID, pendingDispatchId);
         super.onSaveInstanceState(outState);
     }
 
