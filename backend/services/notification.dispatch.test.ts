@@ -68,7 +68,7 @@ try {
     'Paiement enregistré',
     'Un paiement a été enregistré. Consultez l’application pour le détail.',
     'info',
-    { target: 'home', paymentId: 'payment-100' },
+    { target: 'payment', paymentId: '100' },
     'accounting-payment-100'
   );
   assert.equal(noTokenResult.channels.length, 0, 'A parent without a registered token should not be reported as receiving push');

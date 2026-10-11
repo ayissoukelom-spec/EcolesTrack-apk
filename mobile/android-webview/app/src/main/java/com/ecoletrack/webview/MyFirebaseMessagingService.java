@@ -4,6 +4,7 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.Intent;
+import android.net.Uri;
 import android.os.Build;
 import android.util.Log;
 import android.graphics.BitmapFactory;
@@ -38,6 +39,7 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
         String target = null;
         String notificationId = null;
         String attachmentCount = null;
+        String paymentId = null;
 
         if (notificationTitle != null && !notificationTitle.isEmpty()) {
             title = notificationTitle;
@@ -65,13 +67,29 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
             if (remoteMessage.getData().containsKey("attachmentCount")) {
                 attachmentCount = remoteMessage.getData().get("attachmentCount");
             }
+            if (remoteMessage.getData().containsKey("paymentId")) {
+                paymentId = remoteMessage.getData().get("paymentId");
+            }
         }
 
+        target = NotificationIntentPolicy.resolveTarget(target, title);
         Log.i(TAG, "FCM message received; notification content omitted from logs");
-        showNotification(title, message, target, notificationId, attachmentCount);
+        String notificationKey = NotificationIntentPolicy.createKey(
+                notificationId,
+                paymentId,
+                remoteMessage.getMessageId()
+        );
+        showNotification(title, message, target, notificationId, attachmentCount, notificationKey);
     }
 
-    private void showNotification(String title, String message, String target, String notificationId, String attachmentCount) {
+    private void showNotification(
+            String title,
+            String message,
+            String target,
+            String notificationId,
+            String attachmentCount,
+            String notificationKey
+    ) {
         NotificationManager manager =
                 (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
 
@@ -93,6 +111,7 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
         if (attachmentCount != null && !attachmentCount.trim().isEmpty()) {
             intent.putExtra("attachmentCount", attachmentCount);
         }
+        intent.setData(Uri.parse("ecoletrack://notification/" + Uri.encode(notificationKey)));
 
         PendingIntent pendingIntent =
                 PendingIntent.getActivity(
@@ -124,7 +143,7 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
                         .setContentIntent(pendingIntent);
 
         Log.i(TAG, "Displaying FCM notification");
-        manager.notify(1001, builder.build());
+        manager.notify(notificationKey, 1001, builder.build());
     }
 
     private void createNotificationChannel(NotificationManager manager) {

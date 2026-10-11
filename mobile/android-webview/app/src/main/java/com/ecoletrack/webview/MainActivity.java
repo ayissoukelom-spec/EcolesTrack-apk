@@ -153,6 +153,7 @@ public class MainActivity extends AppCompatActivity {
         }
 
         String target = intent.getStringExtra(EXTRA_TARGET);
+        target = NotificationIntentPolicy.resolveTarget(target, intent.getStringExtra("title"));
         String notificationId = intent.getStringExtra(EXTRA_NOTIFICATION_ID);
         String attachmentCount = intent.getStringExtra(EXTRA_ATTACHMENT_COUNT);
         String intentDispatchId = intent.getStringExtra(EXTRA_DISPATCH_ID);
@@ -162,6 +163,7 @@ public class MainActivity extends AppCompatActivity {
                 + " hasNotificationId=" + (notificationId != null)
                 + " hasAttachmentCount=" + (attachmentCount != null));
         if (target != null && !target.trim().isEmpty()) {
+            intent.putExtra(EXTRA_TARGET, target);
             if (intentDispatchId != null
                     && intentDispatchId.equals(pendingDispatchId)
                     && target.equals(pendingTarget)) {

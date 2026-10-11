@@ -106,6 +106,9 @@ export async function sendPushNotification(
   if (metadata.notificationId != null) {
     data.notificationId = String(metadata.notificationId);
   }
+  if (metadata.paymentId != null) {
+    data.paymentId = String(metadata.paymentId);
+  }
   if (validAttachmentCount > 0) {
     data.attachmentCount = String(validAttachmentCount);
   }

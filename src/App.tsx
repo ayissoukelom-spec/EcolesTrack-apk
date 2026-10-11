@@ -23,6 +23,7 @@ import ParentPortal from "./components/ParentPortal";
 import ThemeToggle from "./components/ThemeToggle";
 import { Parent, Child, AppNotification } from "./types";
 import { parseJsonSafe, withApiBase } from "./utils/http";
+import { getNotificationNavigationRoute } from "./utils/notificationNavigation";
 import { getConfirmedPushAssociationKey, getPushAssociationKey, PushAssociationQueue, shouldRegisterPushAssociation, withPushAssociationTimeout } from "./utils/pushAssociation";
 
 export default function App() {
@@ -301,46 +302,19 @@ export default function App() {
       return;
     }
 
-    const normalizedTarget = notificationTarget.trim().toLowerCase();
-    console.log("[NOTIFICATION_DEBUG] notificationTarget state:", notificationTarget);
-    console.log("[NOTIFICATION_DEBUG] normalizedTarget:", normalizedTarget);
-
-    if (normalizedTarget === "absence") {
-      console.log("[NOTIFICATION_DEBUG] setting activeTab to notifications for absence");
-      setActiveTab("notifications");
-      console.log("[NOTIFICATION_DEBUG] activeTab set to notifications");
-      setNotificationAlertMenu(null);
+    const route = getNotificationNavigationRoute(notificationTarget);
+    if (!route) {
+      console.log("[FCM] notification target not recognized, preserving current tab", notificationTarget.trim().toLowerCase());
       return;
     }
 
-    if (normalizedTarget === "note" || normalizedTarget === "notes" || normalizedTarget === "grade" || normalizedTarget === "grades") {
+    if (route.tab === "notes") {
       if (!selectedChild && children.length > 0) {
         setSelectedChild(children[0]);
       }
-      setActiveTab("notes");
-      setNotificationAlertMenu(null);
-      return;
     }
-
-    if (normalizedTarget === "assignment" || normalizedTarget === "homework") {
-      setActiveTab("alerts");
-      setNotificationAlertMenu("homework");
-      return;
-    }
-
-    if (normalizedTarget === "announcement") {
-      setActiveTab("alerts");
-      setNotificationAlertMenu("info");
-      return;
-    }
-
-    if (normalizedTarget === "payment") {
-      setActiveTab("alerts");
-      setNotificationAlertMenu("info");
-      return;
-    }
-
-    console.log("[FCM] notification target not recognized, preserving current tab", normalizedTarget);
+    setActiveTab(route.tab);
+    setNotificationAlertMenu(route.alertMenu);
   }, [notificationTarget, notificationTargetSignal, children, selectedChild]);
 
   useEffect(() => {
@@ -348,24 +322,9 @@ export default function App() {
       return;
     }
 
-    const normalizedTarget = notificationTarget.trim().toLowerCase();
-    let expectedTab: string | null = null;
-    let expectedAlertMenu: typeof notificationAlertMenu = null;
-
-    if (normalizedTarget === "absence") {
-      expectedTab = "notifications";
-    } else if (["note", "notes", "grade", "grades"].includes(normalizedTarget)) {
-      expectedTab = "notes";
-    } else if (normalizedTarget === "assignment" || normalizedTarget === "homework") {
-      expectedTab = "alerts";
-      expectedAlertMenu = "homework";
-    } else if (normalizedTarget === "announcement" || normalizedTarget === "payment") {
-      expectedTab = "alerts";
-      expectedAlertMenu = "info";
-    }
-
-    if (expectedTab !== null
-        && (activeTab !== expectedTab || notificationAlertMenu !== expectedAlertMenu)) {
+    const expectedRoute = getNotificationNavigationRoute(notificationTarget);
+    if (expectedRoute
+        && (activeTab !== expectedRoute.tab || notificationAlertMenu !== expectedRoute.alertMenu)) {
       return;
     }
 
