@@ -45,8 +45,8 @@ try {
     ['parent-a', 'parent-b'],
     'Titre',
     'Message',
-    'grade',
-    {},
+    'info',
+    { target: 'announcement' },
     'dedupe-test'
   );
 
@@ -57,6 +57,22 @@ try {
     ['token-a-1', 'token-a-2', 'token-b-1'],
     'Expected all device tokens for all parents to be queued'
   );
+  assert.ok(
+    pushJobs.every((job) => job.data.category === 'info' && job.data.target === 'announcement'),
+    'Information notifications should queue push jobs for the supplied recipients'
+  );
+
+  jobs.length = 0;
+  const noTokenResult = await NotificationService.dispatchNotification(
+    'parent-without-device',
+    'Paiement enregistré',
+    'Un paiement a été enregistré. Consultez l’application pour le détail.',
+    'info',
+    { target: 'home', paymentId: 'payment-100' },
+    'accounting-payment-100'
+  );
+  assert.equal(noTokenResult.channels.length, 0, 'A parent without a registered token should not be reported as receiving push');
+  assert.equal(jobs.length, 0, 'A parent without a registered token should not receive a push job');
 
   console.log('notification dispatch regression test passed');
 } finally {

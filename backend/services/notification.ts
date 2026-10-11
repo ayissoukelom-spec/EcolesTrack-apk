@@ -14,7 +14,7 @@ export class NotificationService {
     parentId: string | string[],
     title: string,
     message: string,
-    category: 'absence' | 'grade' | 'test',
+    category: 'absence' | 'grade' | 'info' | 'test',
     metadata: any = {},
     dedupeKey?: string
   ) {

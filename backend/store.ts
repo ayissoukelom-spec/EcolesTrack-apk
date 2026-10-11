@@ -871,7 +871,7 @@ export class PostgresStore {
       if (oldAssociationsDeleteResult.rowCount > 0) {
         logger.info('Removed stale FCM token associations for other parents', {
           parentId,
-          token,
+          tokenPresent: true,
           deleted: oldAssociationsDeleteResult.rowCount,
         });
       }
@@ -879,9 +879,9 @@ export class PostgresStore {
       if (existingRows.length > 0) {
         const existingRow = existingRows[0];
         if (existingRow.push_token !== token) {
-          logger.info('Replacing existing FCM token for parent/device', { parentId, deviceId, platform, oldToken: existingRow.push_token, newToken: token });
+          logger.info('Replacing existing FCM token for parent/device', { parentId, deviceId, platform });
         } else {
-          logger.info('Refreshing existing FCM token metadata for parent/device', { parentId, deviceId, platform, token });
+          logger.info('Refreshing existing FCM token metadata for parent/device', { parentId, deviceId, platform });
         }
 
         const updateResult = await client.query<{ id: number }>(`
@@ -895,7 +895,7 @@ export class PostgresStore {
 
         rowId = updateResult.rows[0]?.id ?? existingRow.id;
       } else {
-        logger.info('Registering new FCM token for parent/device', { parentId, deviceId, platform, token });
+        logger.info('Registering new FCM token for parent/device', { parentId, deviceId, platform });
         const insertResult = await client.query<{ id: number }>(`
           INSERT INTO mobile_parent_devices 
             (parent_id, device_id, platform, push_token, app_version, last_seen_at)
@@ -972,9 +972,9 @@ export class PostgresStore {
     );
 
     if (result.rowCount > 0) {
-      logger.info('Deleted FCM token association', { parentId, token, deviceId, deleted: result.rowCount });
+      logger.info('Deleted FCM token association', { parentId, tokenProvided: Boolean(token), deviceId, deleted: result.rowCount });
     } else {
-      logger.warn('Attempted to delete FCM token association but no matching row was found', { parentId, token, deviceId });
+      logger.warn('Attempted to delete FCM token association but no matching row was found', { parentId, tokenProvided: Boolean(token), deviceId });
     }
   }
 

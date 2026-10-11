@@ -15,10 +15,6 @@ const serviceAccount = process.env.FCM_SERVICE_ACCOUNT_JSON
       )
     );
 
-console.log("[FCM TEST] project:", serviceAccount.project_id);
-console.log("[FCM TEST] email:", serviceAccount.client_email);
-console.log("[FCM TEST KEY]", !!serviceAccount.private_key);
-
 initializeApp({
   credential: cert(serviceAccount),
 });
@@ -28,7 +24,7 @@ export class InvalidFcmTokenError extends Error {
   public originalError: unknown;
 
   constructor(token: string, originalError: unknown) {
-    super(`Invalid FCM registration token: ${token}`);
+    super("Invalid FCM registration token");
     this.token = token;
     this.originalError = originalError;
     Object.setPrototypeOf(this, InvalidFcmTokenError.prototype);
@@ -141,18 +137,17 @@ export async function sendPushNotification(
 
     return response;
   } catch (error) {
-    logger.error("[NOTIF_TRACE] sendPushNotification error", error, {
+    logger.error("[NOTIF_TRACE] sendPushNotification error", undefined, {
       code: (error as any)?.code,
-      message: (error as any)?.message,
-      errorInfo: (error as any)?.errorInfo,
+      errorName: error instanceof Error ? error.name : "UnknownError",
       token: maskedToken
     });
     if (isInvalidFcmTokenError(error)) {
-      logger.error("[FCM] Invalid token detected", error, { token: maskedToken });
+      logger.error("[FCM] Invalid token detected", undefined, { token: maskedToken });
       throw new InvalidFcmTokenError(token, error);
     }
 
-    logger.error("[FCM] Erreur", error, { token: maskedToken });
+    logger.error("[FCM] Erreur", undefined, { token: maskedToken });
     throw error;
   }
 }

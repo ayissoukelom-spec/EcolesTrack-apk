@@ -258,7 +258,7 @@ export default function App() {
     console.log("[LIFECYCLE] App useEffect install JS bridges", { url: window.location.href, documentHidden: document.hidden });
 
     runtime.setFcmToken = (token: string) => {
-      console.log("[NOTIFICATION_DEBUG] React received token via window.setFcmToken", token);
+      console.log("[NOTIFICATION_DEBUG] React received FCM token via native bridge", { tokenPresent: Boolean(token) });
       setFcmToken(token);
       window.localStorage.setItem("fcm_token", token);
       console.log("[NOTIFICATION_DEBUG] React stored fcm_token in localStorage");

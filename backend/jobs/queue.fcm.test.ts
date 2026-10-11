@@ -64,6 +64,11 @@ async function run() {
     false,
     'Should not identify a generic temporary error as invalid'
   );
+  assert.equal(
+    new InvalidFcmTokenError('synthetic-token-value', new Error('test')).message.includes('synthetic-token-value'),
+    false,
+    'Invalid token errors must not include the registration token in their message'
+  );
 
   // Queue behavior tests
   const originalExecuteJobLogic = (QueueManager as any).executeJobLogic;
