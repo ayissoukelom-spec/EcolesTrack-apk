@@ -1,8 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getSchoolPeriodLabel, isGradeInSchoolPeriod, SCHOOL_PERIOD_FALLBACK_LABEL } from './schoolPeriod.ts';
+import { getExpectedPeriodTypeForCycle, getSchoolPeriodLabel, isGradeInSchoolPeriod, SCHOOL_PERIOD_FALLBACK_LABEL } from './schoolPeriod.ts';
 
-test('uses the configured cycle and period for the parent dashboard label', () => {
+test('matches the authoritative school-cycle period mapping used by the parent dashboard', () => {
+  assert.equal(getExpectedPeriodTypeForCycle('primaire'), 'trimester');
+  assert.equal(getExpectedPeriodTypeForCycle('college'), 'trimester');
+  assert.equal(getExpectedPeriodTypeForCycle('lycee'), 'semester');
+  assert.equal(getSchoolPeriodLabel('primaire', 'trimester'), 'Note du trimestre');
   assert.equal(getSchoolPeriodLabel('college', 'trimester'), 'Note du trimestre');
   assert.equal(getSchoolPeriodLabel('lycee', 'semester'), 'Note du semestre');
 });
@@ -11,6 +15,7 @@ test('uses an explicit safe label when cycle or period is missing or inconsisten
   assert.equal(getSchoolPeriodLabel(null, 'semester'), SCHOOL_PERIOD_FALLBACK_LABEL);
   assert.equal(getSchoolPeriodLabel('college', null), SCHOOL_PERIOD_FALLBACK_LABEL);
   assert.equal(getSchoolPeriodLabel('lycee', 'trimester'), SCHOOL_PERIOD_FALLBACK_LABEL);
+  assert.equal(getSchoolPeriodLabel('primaire', 'semester'), SCHOOL_PERIOD_FALLBACK_LABEL);
 });
 
 test('matches grades by the current configured period dates regardless of saved term id', () => {

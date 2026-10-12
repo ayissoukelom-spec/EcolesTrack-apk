@@ -3,7 +3,7 @@ import type { SchoolPeriodType } from '../types';
 export const SCHOOL_PERIOD_FALLBACK_LABEL = 'Période scolaire non configurée';
 
 export function getExpectedPeriodTypeForCycle(cycleCode: string | null | undefined): SchoolPeriodType | null {
-  if (cycleCode === 'college') return 'trimester';
+  if (cycleCode === 'college' || cycleCode === 'primaire') return 'trimester';
   if (cycleCode === 'lycee') return 'semester';
   return null;
 }
