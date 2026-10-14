@@ -799,16 +799,16 @@ var PostgresStore = class {
       if (oldAssociationsDeleteResult.rowCount > 0) {
         logger.info("Removed stale FCM token associations for other parents", {
           parentId,
-          token,
+          tokenPresent: true,
           deleted: oldAssociationsDeleteResult.rowCount
         });
       }
       if (existingRows.length > 0) {
         const existingRow = existingRows[0];
         if (existingRow.push_token !== token) {
-          logger.info("Replacing existing FCM token for parent/device", { parentId, deviceId, platform, oldToken: existingRow.push_token, newToken: token });
+          logger.info("Replacing existing FCM token for parent/device", { parentId, deviceId, platform });
         } else {
-          logger.info("Refreshing existing FCM token metadata for parent/device", { parentId, deviceId, platform, token });
+          logger.info("Refreshing existing FCM token metadata for parent/device", { parentId, deviceId, platform });
         }
         const updateResult = await client.query(`
           UPDATE mobile_parent_devices
@@ -820,7 +820,7 @@ var PostgresStore = class {
         `, [token, appVersion, existingRow.id]);
         rowId = updateResult.rows[0]?.id ?? existingRow.id;
       } else {
-        logger.info("Registering new FCM token for parent/device", { parentId, deviceId, platform, token });
+        logger.info("Registering new FCM token for parent/device", { parentId, deviceId, platform });
         const insertResult = await client.query(`
           INSERT INTO mobile_parent_devices 
             (parent_id, device_id, platform, push_token, app_version, last_seen_at)
@@ -886,9 +886,9 @@ var PostgresStore = class {
       values
     );
     if (result.rowCount > 0) {
-      logger.info("Deleted FCM token association", { parentId, token, deviceId, deleted: result.rowCount });
+      logger.info("Deleted FCM token association", { parentId, tokenProvided: Boolean(token), deviceId, deleted: result.rowCount });
     } else {
-      logger.warn("Attempted to delete FCM token association but no matching row was found", { parentId, token, deviceId });
+      logger.warn("Attempted to delete FCM token association but no matching row was found", { parentId, tokenProvided: Boolean(token), deviceId });
     }
   }
   async getNotificationPreferences(parentId) {
@@ -1281,7 +1281,7 @@ async function relayAbsenceDeclaration(webBackendUrl2, internalSecret, parentUse
 
 // src/utils/schoolPeriod.ts
 function getExpectedPeriodTypeForCycle(cycleCode) {
-  if (cycleCode === "college") return "trimester";
+  if (cycleCode === "college" || cycleCode === "primaire") return "trimester";
   if (cycleCode === "lycee") return "semester";
   return null;
 }
@@ -1567,15 +1567,12 @@ var serviceAccount = process.env.FCM_SERVICE_ACCOUNT_JSON ? JSON.parse(process.e
     "utf8"
   )
 );
-console.log("[FCM TEST] project:", serviceAccount.project_id);
-console.log("[FCM TEST] email:", serviceAccount.client_email);
-console.log("[FCM TEST KEY]", !!serviceAccount.private_key);
 (0, import_app.initializeApp)({
   credential: (0, import_app.cert)(serviceAccount)
 });
 var InvalidFcmTokenError = class _InvalidFcmTokenError extends Error {
   constructor(token, originalError) {
-    super(`Invalid FCM registration token: ${token}`);
+    super("Invalid FCM registration token");
     this.token = token;
     this.originalError = originalError;
     Object.setPrototypeOf(this, _InvalidFcmTokenError.prototype);
@@ -1632,6 +1629,9 @@ async function sendPushNotification(token, title, body, target = "home", metadat
   if (metadata.notificationId != null) {
     data.notificationId = String(metadata.notificationId);
   }
+  if (metadata.paymentId != null) {
+    data.paymentId = String(metadata.paymentId);
+  }
   if (validAttachmentCount > 0) {
     data.attachmentCount = String(validAttachmentCount);
   }
@@ -1659,17 +1659,16 @@ async function sendPushNotification(token, title, body, target = "home", metadat
     logger4.info("[FCM] Succ\xE8s", { messageId: response });
     return response;
   } catch (error) {
-    logger4.error("[NOTIF_TRACE] sendPushNotification error", error, {
+    logger4.error("[NOTIF_TRACE] sendPushNotification error", void 0, {
       code: error?.code,
-      message: error?.message,
-      errorInfo: error?.errorInfo,
+      errorName: error instanceof Error ? error.name : "UnknownError",
       token: maskedToken
     });
     if (isInvalidFcmTokenError(error)) {
-      logger4.error("[FCM] Invalid token detected", error, { token: maskedToken });
+      logger4.error("[FCM] Invalid token detected", void 0, { token: maskedToken });
       throw new InvalidFcmTokenError(token, error);
     }
-    logger4.error("[FCM] Erreur", error, { token: maskedToken });
+    logger4.error("[FCM] Erreur", void 0, { token: maskedToken });
     throw error;
   }
 }
