@@ -12,7 +12,11 @@ import { promises as fsPromises } from "fs";
 import multer from "multer";
 import { createServer as createViteServer } from "vite";
 import { store } from "./backend/store";
-import { authenticateMobileParentLogin } from "./backend/parentLogin";
+import {
+  authenticateMobileParentLogin,
+  authenticateMobileParentLoginAndRecord,
+  MobileParentLoginRecordError,
+} from "./backend/parentLogin";
 import { registerChildPhotoRoutes } from "./backend/mobilePhotoRoutes";
 import { registerParentWhatsAppRoute } from "./backend/parentWhatsAppRoute";
 import { AbsenceJustificationAlreadyRejectedError } from "./backend/absenceJustification";
@@ -306,7 +310,30 @@ app.post("/api/mobile/parent/login", rateLimit(15, 60000), async (req, res) => {
 
   const { email, identifier, phoneCountryCode, password } = validation.data;
   const loginIdentifier = String(identifier ?? email ?? '').trim();
-  const user = await authenticateMobileParentLogin(loginIdentifier, password, phoneCountryCode, store);
+  let user: Awaited<ReturnType<typeof store.findParentByEmail>>;
+  try {
+    user = await authenticateMobileParentLoginAndRecord(
+      loginIdentifier,
+      password,
+      phoneCountryCode,
+      store,
+      async (userId) => {
+        const result = await dbQuery(
+          "UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE id = $1",
+          [Number(userId)],
+        );
+        return result.rowCount ?? 0;
+      },
+    );
+  } catch (error) {
+    if (!(error instanceof MobileParentLoginRecordError)) throw error;
+    logger.error("Impossible d'enregistrer la dernière connexion du parent.", error.originalError);
+    return res.status(500).json({
+      error: "Impossible d'enregistrer la connexion.",
+      code: "LOGIN_RECORD_FAILED"
+    });
+  }
+
   if (!user) {
     logger.warn("Échec de connexion parent: identifiant ou mot de passe invalide.");
     return res.status(401).json({

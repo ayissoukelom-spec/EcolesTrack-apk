@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  authenticateMobileParentLoginAndRecord,
   authenticateMobileParentLogin,
   normalizeParentLoginPhone,
   selectUniqueParentPhoneMatch,
@@ -106,4 +107,83 @@ test('keeps email authentication available to existing non-parent roles but scop
   assert.equal(await authenticateMobileParentLogin('teacher@example.com', 'correct', undefined, emailStore.store), teacher);
   assert.equal(await authenticateMobileParentLogin('78 23 45 67', 'correct', '+228', phoneStore.store), null);
   assert.deepEqual(phoneStore.calls.verify, []);
+});
+
+test('records the authenticated parent id after successful authentication', async () => {
+  const { store } = createStore({ emailUser: parent });
+  const recordedUserIds: string[] = [];
+
+  const result = await authenticateMobileParentLoginAndRecord(
+    'parent@example.com',
+    'correct',
+    undefined,
+    store,
+    async (userId) => { recordedUserIds.push(userId); return 1; },
+  );
+
+  assert.equal(result, parent);
+  assert.deepEqual(recordedUserIds, ['42']);
+});
+
+test('does not record a failed parent login', async () => {
+  const { store } = createStore({ emailUser: parent, passwordValid: false });
+  const recordedUserIds: string[] = [];
+
+  const result = await authenticateMobileParentLoginAndRecord(
+    'parent@example.com',
+    'wrong',
+    undefined,
+    store,
+    async (userId) => { recordedUserIds.push(userId); return 1; },
+  );
+
+  assert.equal(result, null);
+  assert.deepEqual(recordedUserIds, []);
+});
+
+test('does not record an authenticated user with a non-parent role', async () => {
+  const teacher = { id: '9', role: 'teacher' };
+  const { store } = createStore({ emailUser: teacher as typeof parent });
+  const recordedUserIds: string[] = [];
+
+  const result = await authenticateMobileParentLoginAndRecord(
+    'teacher@example.com',
+    'correct',
+    undefined,
+    store,
+    async (userId) => { recordedUserIds.push(userId); return 1; },
+  );
+
+  assert.equal(result, teacher);
+  assert.deepEqual(recordedUserIds, []);
+});
+
+test('propagates a failed last-login write instead of reporting authenticated success', async () => {
+  const { store } = createStore({ emailUser: parent });
+
+  await assert.rejects(
+    authenticateMobileParentLoginAndRecord(
+      'parent@example.com',
+      'correct',
+      undefined,
+      store,
+      async () => { throw new Error('write failed'); },
+    ),
+    /Failed to record the authenticated parent login/,
+  );
+});
+
+test('propagates a failed last-login write when no database row is updated', async () => {
+  const { store } = createStore({ emailUser: parent });
+
+  await assert.rejects(
+    authenticateMobileParentLoginAndRecord(
+      'parent@example.com',
+      'correct',
+      undefined,
+      store,
+      async () => 0,
+    ),
+    /Failed to record the authenticated parent login/,
+  );
 });

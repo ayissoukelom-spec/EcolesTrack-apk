@@ -26,6 +26,13 @@ export interface MobileParentLoginStore<T extends MobileParentLoginUser = Mobile
   verifyParentPasswordByUserId(userId: string, password: string): Promise<boolean>;
 }
 
+export class MobileParentLoginRecordError extends Error {
+  constructor(public readonly originalError: unknown) {
+    super('Failed to record the authenticated parent login.');
+    this.name = 'MobileParentLoginRecordError';
+  }
+}
+
 export const authenticateMobileParentLogin = async <T extends MobileParentLoginUser>(
   identifier: string,
   password: string,
@@ -42,4 +49,23 @@ export const authenticateMobileParentLogin = async <T extends MobileParentLoginU
 
   if (!user || (!isEmail && user.role !== 'parent')) return null;
   return await store.verifyParentPasswordByUserId(user.id, password) ? user : null;
+};
+
+export const authenticateMobileParentLoginAndRecord = async <T extends MobileParentLoginUser>(
+  identifier: string,
+  password: string,
+  phoneCountryCode: string | undefined,
+  store: MobileParentLoginStore<T>,
+  recordParentLogin: (userId: string) => Promise<number>,
+): Promise<T | null> => {
+  const user = await authenticateMobileParentLogin(identifier, password, phoneCountryCode, store);
+  if (user?.role === 'parent') {
+    try {
+      const updatedRows = await recordParentLogin(user.id);
+      if (updatedRows !== 1) throw new Error('Authenticated parent row was not updated.');
+    } catch (error) {
+      throw new MobileParentLoginRecordError(error);
+    }
+  }
+  return user;
 };
