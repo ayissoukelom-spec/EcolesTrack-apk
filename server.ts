@@ -12,6 +12,7 @@ import { promises as fsPromises } from "fs";
 import multer from "multer";
 import { createServer as createViteServer } from "vite";
 import { store } from "./backend/store";
+import { MobileVisitRateLimiter, recordAuthenticatedMobileParentVisit } from "./backend/mobileVisit";
 import {
   authenticateMobileParentLogin,
   authenticateMobileParentLoginAndRecord,
@@ -202,6 +203,7 @@ function verifyToken(token: string): { parentId: string; role: string } | null {
 
 // Simple Rate Limiter to guard auth and notification routes
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
+const mobileVisitRateLimiter = new MobileVisitRateLimiter(60, 60000);
 function rateLimit(limit: number, windowMs: number) {
   return (req: Request, res: Response, next: NextFunction) => {
     const ip = (req.headers["x-forwarded-for"] as string) || req.socket.remoteAddress || "global";
@@ -224,6 +226,26 @@ function rateLimit(limit: number, windowMs: number) {
     next();
   };
 }
+
+const rateLimitMobileParentVisits = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  const parentId = req.parent?.id;
+  if (!parentId) {
+    return res.status(401).json({
+      error: "Authentification requise.",
+      code: "UNAUTHORIZED"
+    });
+  }
+
+  const result = mobileVisitRateLimiter.consume(parentId);
+  if (!result.allowed) {
+    return res.status(429).json({
+      error: "Trop de requêtes. Veuillez patienter avant de réessayer.",
+      code: "TOO_MANY_REQUESTS",
+      details: { resetInSeconds: result.resetInSeconds }
+    });
+  }
+  next();
+};
 
 // Authentication check
 const requireAuth = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
@@ -389,6 +411,57 @@ app.post("/api/mobile/parent/login", rateLimit(15, 60000), async (req, res) => {
     refreshToken: session.refreshToken,
     mustReset: localMustReset
   });
+});
+
+app.post("/api/mobile/parent/visit", requireAuth, requireParentRoleOnly, rateLimitMobileParentVisits, async (req: AuthenticatedRequest, res) => {
+  try {
+    const outcome = await recordAuthenticatedMobileParentVisit(req.parent, async (parentId) => {
+      const result = await dbQuery(`
+        WITH target AS MATERIALIZED (
+          SELECT id, role, last_mobile_visit_at
+          FROM users
+          WHERE id = $1
+          FOR UPDATE
+        ), updated AS (
+          UPDATE users AS user_row
+          SET last_mobile_visit_at = CURRENT_TIMESTAMP
+          FROM target
+          WHERE user_row.id = target.id
+            AND target.role = 'parent'
+            AND (
+              target.last_mobile_visit_at IS NULL
+              OR target.last_mobile_visit_at <= CURRENT_TIMESTAMP - INTERVAL '5 minutes'
+            )
+          RETURNING user_row.id
+        )
+        SELECT CASE
+          WHEN EXISTS (SELECT 1 FROM updated) THEN 'recorded'
+          WHEN NOT EXISTS (SELECT 1 FROM target) THEN 'parent_not_found'
+          WHEN EXISTS (SELECT 1 FROM target WHERE role <> 'parent') THEN 'parent_role_invalid'
+          ELSE 'coalesced'
+        END AS outcome
+      `, [Number(parentId)]);
+      return result.rows[0]?.outcome;
+    });
+
+    if (outcome === "recorded") return res.json({ success: true, recorded: true });
+    if (outcome === "coalesced") {
+      return res.json({ success: true, recorded: false, reason: "recent_visit" });
+    }
+    if (outcome === "parent_not_found") {
+      return res.status(404).json({ error: "Parent introuvable.", code: "PARENT_NOT_FOUND" });
+    }
+    if (outcome === "parent_role_invalid") {
+      return res.status(403).json({ error: "Accès réservé aux parents.", code: "PARENTS_ONLY" });
+    }
+    throw new Error("Unexpected mobile parent visit outcome from database.");
+  } catch (error) {
+    logger.error("Impossible d'enregistrer la dernière visite mobile.", error);
+    return res.status(500).json({
+      error: "Impossible d'enregistrer la visite.",
+      code: "VISIT_RECORD_FAILED"
+    });
+  }
 });
 
 app.post("/api/mobile/parent/change-password", rateLimit(15, 60000), async (req, res) => {

@@ -1409,6 +1409,12 @@ public class MainActivity extends AppCompatActivity {
         super.onResume();
         if (webView != null) {
             webView.onResume();
+            if (webView.getUrl() != null) {
+                webView.evaluateJavascript(
+                        "window.dispatchEvent(new Event('ecoletrack:app-resume'));",
+                        null
+                );
+            }
         }
         Log.d(TAG, "[MainActivity] onResume ts=" + System.currentTimeMillis() + " url=" + (webView != null ? webView.getUrl() : "null"));
     }
@@ -1416,6 +1422,12 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onPause() {
         if (webView != null) {
+            if (webView.getUrl() != null) {
+                webView.evaluateJavascript(
+                        "window.dispatchEvent(new Event('ecoletrack:app-background'));",
+                        null
+                );
+            }
             webView.onPause();
         }
         super.onPause();

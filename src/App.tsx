@@ -23,6 +23,7 @@ import ParentPortal from "./components/ParentPortal";
 import ThemeToggle from "./components/ThemeToggle";
 import { Parent, Child, AppNotification } from "./types";
 import { parseJsonSafe, withApiBase } from "./utils/http";
+import { MobileVisitTracker } from "./utils/mobileVisit";
 import { getNotificationNavigationRoute } from "./utils/notificationNavigation";
 import { getConfirmedPushAssociationKey, getPushAssociationKey, PushAssociationQueue, shouldRegisterPushAssociation, withPushAssociationTimeout } from "./utils/pushAssociation";
 
@@ -45,6 +46,7 @@ export default function App() {
     return window.localStorage.getItem("ecoletrack_refresh_token");
   });
   const refreshPromiseRef = useRef<Promise<string | null> | null>(null);
+  const mobileVisitTrackerRef = useRef(new MobileVisitTracker());
 
   const decodeJwtPayload = (jwt: string): { exp?: number } | null => {
     try {
@@ -148,8 +150,43 @@ export default function App() {
     }
   };
 
+  const recordMobileVisit = async () => {
+    const response = await performProtectedRequest((authToken) => fetch(withApiBase("/api/mobile/parent/visit"), {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${authToken}`,
+        "Content-Type": "application/json"
+      }
+    }));
+
+    if (!response?.ok) {
+      throw new Error(`Mobile visit recording failed with status ${response?.status ?? "no response"}.`);
+    }
+  };
+
+  useEffect(() => {
+    const parentId = parent?.id ? String(parent.id) : null;
+    mobileVisitTrackerRef.current.setAuthenticatedParent(token && parentId ? parentId : null);
+    if (!token || !parentId) return;
+
+    void mobileVisitTrackerRef.current.recordAppOpen(parentId, recordMobileVisit).catch((error) => {
+      console.error("[VISIT] Failed to record authenticated app opening", error);
+    });
+  }, [token, parent?.id]);
+
   useEffect(() => {
     console.log("[LIFECYCLE] App mounted", { tokenPresent: !!token, tokenLength: token?.length, parentPresent: !!parent });
+    const parentId = token && parent?.id ? String(parent.id) : null;
+
+    const handleAppResume = () => {
+      if (!parentId) return;
+      void mobileVisitTrackerRef.current.recordForegroundReturn(parentId, recordMobileVisit).catch((error) => {
+        console.error("[VISIT] Failed to record foreground return", error);
+      });
+    };
+    const handleAppBackground = () => {
+      if (parentId) mobileVisitTrackerRef.current.markBackgrounded(parentId);
+    };
 
     const logTokenState = (label: string) => {
       console.log("[LIFECYCLE] " + label, {
@@ -164,20 +201,30 @@ export default function App() {
       logTokenState("visibilitychange");
       if (document.visibilityState === "visible") {
         void ensureValidAccessToken();
+        handleAppResume();
+      } else if (parentId) {
+        mobileVisitTrackerRef.current.markBackgrounded(parentId);
       }
     };
     const handlePageShow = () => {
       logTokenState("pageshow");
       void ensureValidAccessToken();
+      handleAppResume();
     };
-    const handlePageHide = () => logTokenState("pagehide");
+    const handlePageHide = () => {
+      logTokenState("pagehide");
+      if (parentId) mobileVisitTrackerRef.current.markBackgrounded(parentId);
+    };
     const handleWindowFocus = () => {
       logTokenState("window focus");
       void ensureValidAccessToken();
+      handleAppResume();
     };
     const handleWindowBlur = () => logTokenState("window blur");
 
     document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("ecoletrack:app-resume", handleAppResume);
+    window.addEventListener("ecoletrack:app-background", handleAppBackground);
     window.addEventListener("pageshow", handlePageShow);
     window.addEventListener("pagehide", handlePageHide);
     window.addEventListener("focus", handleWindowFocus);
@@ -185,6 +232,8 @@ export default function App() {
 
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("ecoletrack:app-resume", handleAppResume);
+      window.removeEventListener("ecoletrack:app-background", handleAppBackground);
       window.removeEventListener("pageshow", handlePageShow);
       window.removeEventListener("pagehide", handlePageHide);
       window.removeEventListener("focus", handleWindowFocus);
