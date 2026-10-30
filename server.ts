@@ -517,6 +517,12 @@ app.post("/api/mobile/parent/refresh-token", rateLimit(15, 60000), async (req, r
   try {
     newSession = await AuthService.rotateSession(refreshToken);
   } catch (error) {
+    if (error instanceof MobileSessionAuthorizationError && error.reason === "account_disabled") {
+      return res.status(401).json({
+        error: MOBILE_PARENT_ACCOUNT_DISABLED_MESSAGE,
+        code: "ACCOUNT_DISABLED"
+      });
+    }
     logger.error("Échec de vérification du statut de session mobile.", error);
     return res.status(503).json({
       error: "Vérification de la session indisponible. Réessayez.",

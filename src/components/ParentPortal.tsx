@@ -13,6 +13,7 @@ import logoImage from "../assets/logo.png";
 import ThemeToggle from "./ThemeToggle";
 import { Parent, Child, Absence, AbsenceDeclaration, Grade, AppNotification, ChildGradesResponse } from "../types";
 import { getApiErrorMessage, parseJsonSafe, withApiBase } from "../utils/http";
+import { getDisabledParentMessage } from "../utils/parentSession";
 import { classifyParentNotification } from "../utils/notificationCategory";
 import { getSchoolPeriodLabel, isGradeInSchoolPeriod, SCHOOL_PERIOD_FALLBACK_LABEL } from "../utils/schoolPeriod";
 import { getNewPasswordPolicyError } from "../utils/passwordPolicy";
@@ -22,7 +23,8 @@ interface ParentPortalProps {
   token: string | null;
   parent: Parent | null;
   onLoginSuccess: (token: string, parent: Parent, refreshToken: string) => void;
-  onLogout: () => void;
+  onLogout: (message?: string) => void;
+  sessionEndedMessage?: string | null;
   refreshAccessToken: () => Promise<string | null>;
   activeTab: string;
   setActiveTab: (tab: string) => void;
@@ -42,6 +44,7 @@ export default function ParentPortal({
   parent,
   onLoginSuccess,
   onLogout,
+  sessionEndedMessage,
   refreshAccessToken,
   activeTab,
   setActiveTab,
@@ -244,18 +247,15 @@ export default function ParentPortal({
   const schoolPeriodLabel = getSchoolPeriodLabel(termCycleCode, activeSchoolPeriod?.periodType);
   const hasConfiguredSchoolPeriod = schoolPeriodLabel !== SCHOOL_PERIOD_FALLBACK_LABEL;
 
-  const handleSessionExpired = () => {
-    if (!hasCompletedProtectedLoadRef.current) {
-      return;
-    }
-
+  const handleSessionExpired = (message?: string) => {
     setChildren([]);
     setAbsences([]);
     setAbsenceDeclarations([]);
     setGrades([]);
     setTermAverageApi(null);
     setChildrenLoadError(null);
-    onLogout();
+    if (message) setErrorMsg(message);
+    onLogout(message);
   };
 
   const finishChildPhotoImageLoading = () => {
@@ -394,6 +394,11 @@ export default function ParentPortal({
     try {
       let response = await requestFactory(authToken);
       if (response.status === 401) {
+        const disabledMessage = await getDisabledParentMessage(response);
+        if (disabledMessage) {
+          handleSessionExpired(disabledMessage);
+          return null;
+        }
         const refreshedToken = await refreshAccessToken();
         if (!refreshedToken) {
           handleSessionExpired();
@@ -402,6 +407,10 @@ export default function ParentPortal({
 
         authToken = refreshedToken;
         response = await requestFactory(authToken);
+      }
+      if (response.status === 401) {
+        handleSessionExpired(await getDisabledParentMessage(response) ?? undefined);
+        return null;
       }
       if (response.status === 403) {
         handleSessionExpired();
@@ -1574,7 +1583,7 @@ export default function ParentPortal({
                   </div>
                 </div>
 
-                {errorMsg && (
+                {(errorMsg || sessionEndedMessage) && (
                   <motion.div
                     initial={{ opacity: 0, y: -5 }}
                     animate={{ opacity: 1, y: 0 }}
@@ -1582,7 +1591,7 @@ export default function ParentPortal({
                   >
                     <div className="flex items-start gap-2">
                       <XCircle className="h-4 w-4 text-rose-600 dark:text-rose-300 mt-0.5" />
-                      <span>{errorMsg}</span>
+                      <span>{errorMsg || sessionEndedMessage}</span>
                     </div>
                   </motion.div>
                 )}
@@ -1646,7 +1655,7 @@ export default function ParentPortal({
           </div>
           <ThemeToggle />
           <button 
-            onClick={onLogout}
+            onClick={() => onLogout()}
             className="p-1.5 bg-white/20 hover:bg-white/30 text-white rounded-lg transition-colors border border-white/30"
             title="Se déconnecter"
           >

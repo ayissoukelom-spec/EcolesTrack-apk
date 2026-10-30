@@ -24,6 +24,7 @@ import ThemeToggle from "./components/ThemeToggle";
 import { Parent, Child, AppNotification } from "./types";
 import { parseJsonSafe, withApiBase } from "./utils/http";
 import { MobileVisitTracker } from "./utils/mobileVisit";
+import { clearPersistedParentSession, getDisabledParentMessage } from "./utils/parentSession";
 import { getNotificationNavigationRoute } from "./utils/notificationNavigation";
 import { getConfirmedPushAssociationKey, getPushAssociationKey, PushAssociationQueue, shouldRegisterPushAssociation, withPushAssociationTimeout } from "./utils/pushAssociation";
 
@@ -45,7 +46,9 @@ export default function App() {
     }
     return window.localStorage.getItem("ecoletrack_refresh_token");
   });
+  const [sessionEndedMessage, setSessionEndedMessage] = useState<string | null>(null);
   const refreshPromiseRef = useRef<Promise<string | null> | null>(null);
+  const logoutHandledRef = useRef(false);
   const mobileVisitTrackerRef = useRef(new MobileVisitTracker());
 
   const decodeJwtPayload = (jwt: string): { exp?: number } | null => {
@@ -89,6 +92,9 @@ export default function App() {
         });
 
         if (!response.ok) {
+          if (response.status === 401) {
+            handleLogout(await getDisabledParentMessage(response) ?? undefined);
+          }
           return null;
         }
 
@@ -138,10 +144,22 @@ export default function App() {
     try {
       let response = await requestFactory(authToken);
       if (response.status === 401) {
+        const disabledMessage = await getDisabledParentMessage(response);
+        if (disabledMessage) {
+          handleLogout(disabledMessage);
+          return null;
+        }
         const refreshedToken = await refreshAccessToken();
         if (refreshedToken) {
           authToken = refreshedToken;
           response = await requestFactory(authToken);
+        } else {
+          handleLogout();
+          return null;
+        }
+        if (response.status === 401) {
+          handleLogout(await getDisabledParentMessage(response) ?? undefined);
+          return null;
         }
       }
       return response;
@@ -600,6 +618,8 @@ export default function App() {
 
   // Handlers for session authentication
   const handleLoginSuccess = (newToken: string, newParent: Parent, newRefreshToken: string) => {
+    setSessionEndedMessage(null);
+    logoutHandledRef.current = false;
     pushSessionGenerationRef.current += 1;
     activePushAssociationRef.current = getPushAssociationKey(newParent.id, deviceIdRef.current, fcmToken);
     console.log("[AUTH_DEBUG] handleLoginSuccess new session stored", {
@@ -622,7 +642,10 @@ export default function App() {
     fetchNotifications(newToken);
   };
 
-  const handleLogout = () => {
+  const handleLogout = (message?: string) => {
+    if (message) setSessionEndedMessage(message);
+    if (logoutHandledRef.current) return;
+    logoutHandledRef.current = true;
     const currentToken = token;
     const currentFcmToken = fcmToken ?? (typeof window !== "undefined" ? window.localStorage.getItem("fcm_token") : null);
     const currentDeviceId = typeof window !== "undefined" ? window.localStorage.getItem("ecoletrack_device_id") : null;
@@ -640,9 +663,7 @@ export default function App() {
     activePushAssociationRef.current = null;
     lastRegisteredPushAssociationRef.current = null;
 
-    localStorage.removeItem("ecoletrack_token");
-    localStorage.removeItem("ecoletrack_refresh_token");
-    localStorage.removeItem("ecoletrack_parent");
+    clearPersistedParentSession(localStorage);
     setToken(null);
     setRefreshToken(null);
     refreshPromiseRef.current = null;
@@ -707,6 +728,7 @@ export default function App() {
           parent={parent}
           onLoginSuccess={handleLoginSuccess}
           onLogout={handleLogout}
+          sessionEndedMessage={sessionEndedMessage}
           refreshAccessToken={refreshAccessToken}
           activeTab={activeTab}
           setActiveTab={setActiveTab}
@@ -815,6 +837,7 @@ export default function App() {
             parent={parent}
             onLoginSuccess={handleLoginSuccess}
             onLogout={handleLogout}
+            sessionEndedMessage={sessionEndedMessage}
             refreshAccessToken={refreshAccessToken}
             activeTab={activeTab}
             setActiveTab={setActiveTab}

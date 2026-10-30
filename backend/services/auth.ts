@@ -208,7 +208,11 @@ export class AuthService {
 
     const { parentId, role, exp } = payload;
     const state = await this.getAccountAuthorizationState(parentId);
-    if (getMobileSessionRejection(payload, state)) {
+    const rejection = getMobileSessionRejection(payload, state);
+    if (rejection === "account_disabled") {
+      throw new MobileSessionAuthorizationError(rejection);
+    }
+    if (rejection) {
       logger.warn(`Refresh Token rejected for inactive or revoked parent session: ${parentId}`);
       return null;
     }
@@ -254,7 +258,10 @@ export class AuthService {
       }
       return newSession;
     } catch (error) {
-      if (error instanceof MobileSessionAuthorizationError) return null;
+      if (error instanceof MobileSessionAuthorizationError) {
+        if (error.reason === "account_disabled") throw error;
+        return null;
+      }
       throw error;
     }
   }
