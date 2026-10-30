@@ -46,6 +46,7 @@ interface ParentCredentialRow {
   email: string;
   name: string;
   role: string;
+  is_deleted: boolean;
   phone: string | null;
   school_id: number | null;
   password_hash: string | null;
@@ -344,7 +345,7 @@ export class PostgresStore {
     }) as Parent;
   }
 
-  private async mapParentCredentialRow(row: ParentCredentialRow): Promise<Parent & { passwordHash: string; role: string; salt?: string; mustReset?: boolean }> {
+  private async mapParentCredentialRow(row: ParentCredentialRow): Promise<Parent & { passwordHash: string; role: string; salt?: string; mustReset?: boolean; isDeleted: boolean }> {
     const schoolRows = await dbQuery<{ id: number; name: string }>(`
       SELECT s.id, s.name
       FROM user_schools us
@@ -366,16 +367,17 @@ export class PostgresStore {
       role: row.role,
       salt: row.salt ?? undefined,
       mustReset: row.must_reset == null ? undefined : Boolean(row.must_reset),
+      isDeleted: row.is_deleted,
     };
   }
 
-  private async getParentByEmail(email: string): Promise<(Parent & { passwordHash: string; role: string; salt?: string; mustReset?: boolean }) | null> {
+  private async getParentByEmail(email: string): Promise<(Parent & { passwordHash: string; role: string; salt?: string; mustReset?: boolean; isDeleted: boolean }) | null> {
     const { rows } = await dbQuery<ParentCredentialRow>(`
-      SELECT u.id AS user_id, u.email, u.name, u.role, p.phone, u.school_id, la.password_hash, la.salt, la.must_reset
+      SELECT u.id AS user_id, u.email, u.name, u.role, u.is_deleted, p.phone, u.school_id, la.password_hash, la.salt, la.must_reset
       FROM users u
       LEFT JOIN parents p ON p.user_id = u.id
       LEFT JOIN local_auths la ON la.user_id = u.id
-      WHERE LOWER(u.email) = LOWER($1) AND u.is_deleted = false
+      WHERE LOWER(u.email) = LOWER($1)
       LIMIT 1
     `, [email]);
 
@@ -390,12 +392,11 @@ export class PostgresStore {
   public async findParentByPhone(phoneCandidates: string[]) {
     if (phoneCandidates.length === 0) return null;
     const { rows } = await dbQuery<ParentCredentialRow>(`
-      SELECT u.id AS user_id, u.email, u.name, u.role, p.phone, u.school_id, la.password_hash, la.salt, la.must_reset
+      SELECT u.id AS user_id, u.email, u.name, u.role, u.is_deleted, p.phone, u.school_id, la.password_hash, la.salt, la.must_reset
       FROM users u
       JOIN parents p ON p.user_id = u.id
       LEFT JOIN local_auths la ON la.user_id = u.id
       WHERE u.role = 'parent'
-        AND u.is_deleted = false
         AND (
           regexp_replace(coalesce(p.phone, ''), '[^0-9]', '', 'g') = ANY($1::text[])
           OR regexp_replace(coalesce(u.phone, ''), '[^0-9]', '', 'g') = ANY($1::text[])
@@ -407,7 +408,7 @@ export class PostgresStore {
 
   public async verifyParentPassword(email: string, password: string): Promise<boolean> {
     const user = await this.getParentByEmail(email);
-    if (!user || !user.passwordHash || !user.salt) {
+    if (!user || user.isDeleted || !user.passwordHash || !user.salt) {
       return false;
     }
 
@@ -420,7 +421,7 @@ export class PostgresStore {
       SELECT la.password_hash, la.salt
       FROM users u
       LEFT JOIN local_auths la ON la.user_id = u.id
-      WHERE u.id = $1 AND u.is_deleted = false
+      WHERE u.id = $1
       LIMIT 1
     `, [Number(userId)]);
     const auth = rows[0];

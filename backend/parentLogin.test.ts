@@ -3,6 +3,8 @@ import test from 'node:test';
 import {
   authenticateMobileParentLoginAndRecord,
   authenticateMobileParentLogin,
+  MobileParentAccountDisabledError,
+  MOBILE_PARENT_ACCOUNT_DISABLED_MESSAGE,
   normalizeParentLoginPhone,
   selectUniqueParentPhoneMatch,
 } from './parentLogin.js';
@@ -54,12 +56,12 @@ test('authenticates a parent by email using the existing password verifier', asy
   assert.deepEqual(calls.phone, []);
 });
 
-test('rejects a disabled parent by email before verifying the password', async () => {
+test('does not authenticate a disabled parent by email after verifying the password', async () => {
   const disabledParent = { ...parent, isDeleted: true };
   const { store, calls } = createStore({ emailUser: disabledParent });
 
   assert.equal(await authenticateMobileParentLogin('parent@example.com', 'correct', undefined, store), null);
-  assert.deepEqual(calls.verify, []);
+  assert.deepEqual(calls.verify, [['42', 'correct']]);
 });
 
 test('authenticates a parent by normalized phone', async () => {
@@ -71,12 +73,46 @@ test('authenticates a parent by normalized phone', async () => {
   assert.deepEqual(calls.verify, [['42', 'correct']]);
 });
 
-test('rejects a disabled parent by phone before verifying the password', async () => {
+test('does not authenticate a disabled parent by phone after verifying the password', async () => {
   const disabledParent = { ...parent, isDeleted: true };
   const { store, calls } = createStore({ phoneUser: disabledParent });
 
   assert.equal(await authenticateMobileParentLogin('78 23 45 67', 'correct', '+228', store), null);
-  assert.deepEqual(calls.verify, []);
+  assert.deepEqual(calls.verify, [['42', 'correct']]);
+});
+
+test('distinguishes a disabled parent only after valid credentials and does not record login', async () => {
+  const disabledParent = { ...parent, isDeleted: true };
+  const { store, calls } = createStore({ emailUser: disabledParent });
+  const recordedUserIds: string[] = [];
+
+  await assert.rejects(
+    authenticateMobileParentLoginAndRecord(
+      'parent@example.com',
+      'correct',
+      undefined,
+      store,
+      async (userId) => { recordedUserIds.push(userId); return 1; },
+    ),
+    (error: unknown) => error instanceof MobileParentAccountDisabledError
+      && error.message === 'Ce compte est désactivé. Contactez votre administrateur.',
+  );
+  assert.deepEqual(calls.verify, [['42', 'correct']]);
+  assert.deepEqual(recordedUserIds, []);
+  assert.equal(MOBILE_PARENT_ACCOUNT_DISABLED_MESSAGE, 'Ce compte est désactivé. Contactez votre administrateur.');
+});
+
+test('does not disclose a disabled account when its password is incorrect', async () => {
+  const disabledParent = { ...parent, isDeleted: true };
+  const { store } = createStore({ emailUser: disabledParent, passwordValid: false });
+
+  assert.equal(await authenticateMobileParentLoginAndRecord(
+    'parent@example.com',
+    'wrong',
+    undefined,
+    store,
+    async () => 1,
+  ), null);
 });
 
 test('the same local number produces distinct +228 and +229 account keys', async () => {

@@ -16,6 +16,8 @@ import { MobileVisitRateLimiter, recordAuthenticatedMobileParentVisit } from "./
 import {
   authenticateMobileParentLogin,
   authenticateMobileParentLoginAndRecord,
+  MOBILE_PARENT_ACCOUNT_DISABLED_MESSAGE,
+  MobileParentAccountDisabledError,
   MobileParentLoginRecordError,
 } from "./backend/parentLogin";
 import { createMobileRequireAuth } from "./backend/sessionAuthorization";
@@ -327,6 +329,12 @@ app.post("/api/mobile/parent/login", rateLimit(15, 60000), async (req, res) => {
       },
     );
   } catch (error) {
+    if (error instanceof MobileParentAccountDisabledError) {
+      return res.status(403).json({
+        error: MOBILE_PARENT_ACCOUNT_DISABLED_MESSAGE,
+        code: "ACCOUNT_DISABLED"
+      });
+    }
     if (!(error instanceof MobileParentLoginRecordError)) throw error;
     logger.error("Impossible d'enregistrer la dernière connexion du parent.", error.originalError);
     return res.status(500).json({
@@ -370,7 +378,9 @@ app.post("/api/mobile/parent/login", rateLimit(15, 60000), async (req, res) => {
   } catch (error) {
     if (!(error instanceof MobileSessionAuthorizationError)) throw error;
     return res.status(401).json({
-      error: "Ce compte est désactivé ou sa session a été révoquée.",
+      error: error.reason === "account_disabled"
+        ? MOBILE_PARENT_ACCOUNT_DISABLED_MESSAGE
+        : "Ce compte est désactivé ou sa session a été révoquée.",
       code: error.reason === "account_disabled" ? "ACCOUNT_DISABLED" : "INVALID_SESSION"
     });
   }

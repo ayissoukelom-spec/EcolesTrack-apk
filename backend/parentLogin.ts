@@ -27,6 +27,15 @@ export interface MobileParentLoginStore<T extends MobileParentLoginUser = Mobile
   verifyParentPasswordByUserId(userId: string, password: string): Promise<boolean>;
 }
 
+export const MOBILE_PARENT_ACCOUNT_DISABLED_MESSAGE = 'Ce compte est désactivé. Contactez votre administrateur.';
+
+export class MobileParentAccountDisabledError extends Error {
+  constructor() {
+    super(MOBILE_PARENT_ACCOUNT_DISABLED_MESSAGE);
+    this.name = 'MobileParentAccountDisabledError';
+  }
+}
+
 export class MobileParentLoginRecordError extends Error {
   constructor(public readonly originalError: unknown) {
     super('Failed to record the authenticated parent login.');
@@ -34,22 +43,39 @@ export class MobileParentLoginRecordError extends Error {
   }
 }
 
-export const authenticateMobileParentLogin = async <T extends MobileParentLoginUser>(
+type MobileParentLoginOutcome<T> =
+  | { status: 'invalid' }
+  | { status: 'disabled' }
+  | { status: 'authenticated'; user: T };
+
+const authenticateMobileParentLoginWithStatus = async <T extends MobileParentLoginUser>(
   identifier: string,
   password: string,
   phoneCountryCode: string | undefined,
   store: MobileParentLoginStore<T>,
-): Promise<T | null> => {
+): Promise<MobileParentLoginOutcome<T>> => {
   const normalizedIdentifier = identifier.trim();
-  if (!normalizedIdentifier) return null;
+  if (!normalizedIdentifier) return { status: 'invalid' };
 
   const isEmail = normalizedIdentifier.includes('@');
   const user = isEmail
     ? await store.findParentByEmail(normalizedIdentifier.toLowerCase())
     : await store.findParentByPhone(normalizeParentLoginPhone(normalizedIdentifier, phoneCountryCode));
 
-  if (!user || user.isDeleted || (!isEmail && user.role !== 'parent')) return null;
-  return await store.verifyParentPasswordByUserId(user.id, password) ? user : null;
+  if (!user || (!isEmail && user.role !== 'parent')) return { status: 'invalid' };
+  if (!await store.verifyParentPasswordByUserId(user.id, password)) return { status: 'invalid' };
+  if (user.role === 'parent' && user.isDeleted) return { status: 'disabled' };
+  return { status: 'authenticated', user };
+};
+
+export const authenticateMobileParentLogin = async <T extends MobileParentLoginUser>(
+  identifier: string,
+  password: string,
+  phoneCountryCode: string | undefined,
+  store: MobileParentLoginStore<T>,
+): Promise<T | null> => {
+  const outcome = await authenticateMobileParentLoginWithStatus(identifier, password, phoneCountryCode, store);
+  return outcome.status === 'authenticated' ? outcome.user : null;
 };
 
 export const authenticateMobileParentLoginAndRecord = async <T extends MobileParentLoginUser>(
@@ -59,8 +85,12 @@ export const authenticateMobileParentLoginAndRecord = async <T extends MobilePar
   store: MobileParentLoginStore<T>,
   recordParentLogin: (userId: string) => Promise<number>,
 ): Promise<T | null> => {
-  const user = await authenticateMobileParentLogin(identifier, password, phoneCountryCode, store);
-  if (user?.role === 'parent') {
+  const outcome = await authenticateMobileParentLoginWithStatus(identifier, password, phoneCountryCode, store);
+  if (outcome.status === 'invalid') return null;
+  if (outcome.status === 'disabled') throw new MobileParentAccountDisabledError();
+  const { user } = outcome;
+
+  if (user.role === 'parent') {
     try {
       const updatedRows = await recordParentLogin(user.id);
       if (updatedRows !== 1) throw new Error('Authenticated parent row was not updated.');
