@@ -18,6 +18,7 @@ import {
   authenticateMobileParentLoginAndRecord,
   MobileParentLoginRecordError,
 } from "./backend/parentLogin";
+import { createMobileRequireAuth } from "./backend/sessionAuthorization";
 import { registerChildPhotoRoutes } from "./backend/mobilePhotoRoutes";
 import { registerParentWhatsAppRoute } from "./backend/parentWhatsAppRoute";
 import { AbsenceJustificationAlreadyRejectedError } from "./backend/absenceJustification";
@@ -28,7 +29,7 @@ import { getExpectedPeriodTypeForCycle } from "./src/utils/schoolPeriod";
 import { calculateCurrentTermAverage } from "./src/utils/termAverage";
 import { helmetHeaders, requestIdMiddleware, sanitizePayload } from "./backend/middlewares/security";
 import { Logger } from "./backend/utils/logger";
-import { AuthService } from "./backend/services/auth";
+import { AuthService, MobileSessionAuthorizationError } from "./backend/services/auth";
 import { NotificationService } from "./backend/services/notification";
 import { QueueManager } from "./backend/jobs/queue";
 import { LoginSchema, RegisterPushTokenSchema, NotificationPreferencesSchema, TestNotificationSchema, ParentAbsenceDeclarationSchema } from "./backend/validators/schemas";
@@ -248,33 +249,11 @@ const rateLimitMobileParentVisits = (req: AuthenticatedRequest, res: Response, n
 };
 
 // Authentication check
-const requireAuth = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res.status(401).json({
-      error: "Authentification requise. Jeton de session manquant.",
-      code: "UNAUTHORIZED"
-    });
-  }
-
-  const token = authHeader.split(" ")[1];
-  const decoded = verifyToken(token);
-
-  if (!decoded) {
-    return res.status(401).json({
-      error: "Session invalide ou expirée. Veuillez vous reconnecter.",
-      code: "INVALID_SESSION"
-    });
-  }
-
-  req.parent = {
-    id: decoded.parentId,
-    email: "", // Loaded dynamically if needed
-    role: decoded.role
-  };
-
-  next();
-};
+const requireAuth = createMobileRequireAuth(
+  verifyToken,
+  (parentId) => AuthService.getAccountAuthorizationState(parentId),
+  (error) => logger.error("Impossible de vérifier le statut du compte mobile.", error),
+);
 
 // Strict parental check
 const requireParentRoleOnly = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
@@ -385,7 +364,16 @@ app.post("/api/mobile/parent/login", rateLimit(15, 60000), async (req, res) => {
     }
   }
 
-  const session = await AuthService.createSession(user.id, user.role);
+  let session: Awaited<ReturnType<typeof AuthService.createSession>>;
+  try {
+    session = await AuthService.createSession(user.id, user.role);
+  } catch (error) {
+    if (!(error instanceof MobileSessionAuthorizationError)) throw error;
+    return res.status(401).json({
+      error: "Ce compte est désactivé ou sa session a été révoquée.",
+      code: error.reason === "account_disabled" ? "ACCOUNT_DISABLED" : "INVALID_SESSION"
+    });
+  }
 
   try {
     await dbQuery(`
@@ -515,7 +503,16 @@ app.post("/api/mobile/parent/refresh-token", rateLimit(15, 60000), async (req, r
     });
   }
 
-  const newSession = await AuthService.rotateSession(refreshToken);
+  let newSession: Awaited<ReturnType<typeof AuthService.rotateSession>>;
+  try {
+    newSession = await AuthService.rotateSession(refreshToken);
+  } catch (error) {
+    logger.error("Échec de vérification du statut de session mobile.", error);
+    return res.status(503).json({
+      error: "Vérification de la session indisponible. Réessayez.",
+      code: "AUTH_STATUS_UNAVAILABLE"
+    });
+  }
   if (!newSession) {
     logger.warn("Échec de rotation du Jeton de Rafraîchissement. Token expiré, compromis ou invalide.");
     return res.status(401).json({

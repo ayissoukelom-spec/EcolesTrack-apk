@@ -1,6 +1,11 @@
 import crypto from "crypto";
 import { Logger } from "../utils/logger";
 import { dbQuery } from "../postgres";
+import {
+  getMobileSessionRejection,
+  type MobileAccountAuthorizationState,
+  type MobileSessionClaims,
+} from "../sessionAuthorization";
 
 const logger = new Logger("AuthService");
 
@@ -16,6 +21,14 @@ export interface TokenPayload {
   parentId: string;
   role: string;
   exp: number;
+  authRevocationEventId?: number;
+}
+
+export class MobileSessionAuthorizationError extends Error {
+  constructor(public readonly reason: "account_disabled" | "session_revoked" | "invalid_session") {
+    super("Mobile parent session is no longer authorized.");
+    this.name = "MobileSessionAuthorizationError";
+  }
 }
 
 function hashRefreshToken(refreshToken: string): string {
@@ -32,6 +45,41 @@ interface PersistedSession {
 }
 
 export class AuthService {
+  public static async getAccountAuthorizationState(parentId: string): Promise<MobileAccountAuthorizationState | null> {
+    const parsedParentId = Number(parentId);
+    if (!Number.isSafeInteger(parsedParentId) || parsedParentId <= 0) return null;
+
+    const { rows } = await dbQuery<{
+      role: string;
+      is_deleted: boolean;
+      latest_revocation_event_id: number | string;
+    }>(`
+      SELECT u.role,
+             u.is_deleted,
+             COALESCE((
+               SELECT MAX(event.id)
+               FROM audit_events event
+               WHERE event.resource_type = 'user'
+                 AND event.resource_id = u.id
+                 AND event.action IN ('delete', 'session_revoked')
+             ), 0) AS latest_revocation_event_id
+      FROM users u
+      WHERE u.id = $1
+    `, [parsedParentId]);
+
+    const account = rows[0];
+    if (!account) return null;
+    const latestRevocationEventId = Number(account.latest_revocation_event_id);
+    if (!Number.isSafeInteger(latestRevocationEventId) || latestRevocationEventId < 0) {
+      throw new Error("Invalid mobile session revocation boundary returned by the database.");
+    }
+    return {
+      role: account.role,
+      isDeleted: account.is_deleted,
+      latestRevocationEventId,
+    };
+  }
+
   /**
    * Generates a secure JWT-like token
    */
@@ -83,9 +131,19 @@ export class AuthService {
    * Generates a pair of (Access Token, Refresh Token) for a user session
    */
   public static async createSession(parentId: string, role: string): Promise<{ accessToken: string; refreshToken: string }> {
-    const accessToken = this.generateJWT({ parentId, role }, JWT_SECRET, ACCESS_TOKEN_EXPIRY_MS);
+    const state = await this.getAccountAuthorizationState(parentId);
+    const authRevocationEventId = state?.latestRevocationEventId ?? 0;
+    const rejection = getMobileSessionRejection({
+      parentId,
+      role,
+      authRevocationEventId,
+    }, state);
+    if (rejection) throw new MobileSessionAuthorizationError(rejection);
+
+    const tokenClaims = { parentId, role, authRevocationEventId };
+    const accessToken = this.generateJWT(tokenClaims, JWT_SECRET, ACCESS_TOKEN_EXPIRY_MS);
     const entropy = crypto.randomBytes(16).toString("hex");
-    const refreshToken = this.generateJWT({ parentId, role, entropy }, JWT_SECRET, REFRESH_TOKEN_EXPIRY_MS);
+    const refreshToken = this.generateJWT({ ...tokenClaims, entropy }, JWT_SECRET, REFRESH_TOKEN_EXPIRY_MS);
     const refreshTokenHash = hashRefreshToken(refreshToken);
     const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_MS).toISOString();
 
@@ -93,6 +151,17 @@ export class AuthService {
       INSERT INTO mobile_parent_sessions (parent_id, role, refresh_token_hash, expires_at, is_active)
       VALUES ($1, $2, $3, $4, true)
     `, [parentId, role, refreshTokenHash, expiresAt]);
+
+    const currentState = await this.getAccountAuthorizationState(parentId);
+    const currentRejection = getMobileSessionRejection(tokenClaims, currentState);
+    if (currentRejection || currentState?.latestRevocationEventId !== authRevocationEventId) {
+      await dbQuery(`
+        UPDATE mobile_parent_sessions
+        SET is_active = false, revoked_at = now()
+        WHERE refresh_token_hash = $1 AND is_active = true
+      `, [refreshTokenHash]);
+      throw new MobileSessionAuthorizationError(currentRejection ?? "session_revoked");
+    }
 
     logger.info(`Session created for parent: ${parentId}`);
     return { accessToken, refreshToken };
@@ -138,6 +207,12 @@ export class AuthService {
     }
 
     const { parentId, role, exp } = payload;
+    const state = await this.getAccountAuthorizationState(parentId);
+    if (getMobileSessionRejection(payload, state)) {
+      logger.warn(`Refresh Token rejected for inactive or revoked parent session: ${parentId}`);
+      return null;
+    }
+
     const refreshTokenHash = hashRefreshToken(oldRefreshToken);
     const expiresAt = new Date(exp).toISOString();
 
@@ -151,15 +226,37 @@ export class AuthService {
       logger.warn(`Refresh Token expired in DB for parent: ${parentId}`);
       return null;
     }
+    if (existingSession.parent_id !== parentId || existingSession.role !== role) {
+      logger.warn(`Refresh Token session identity mismatch for parent: ${parentId}`);
+      return null;
+    }
 
-    await dbQuery(`
+    const revokedSession = await dbQuery(`
       UPDATE mobile_parent_sessions
       SET is_active = false, revoked_at = now(), last_used_at = now()
-      WHERE id = $1
+      WHERE id = $1 AND is_active = true
+      RETURNING id
     `, [existingSession.id]);
+    if (!revokedSession.rowCount) {
+      logger.warn(`Refresh Token was already rotated for parent: ${parentId}`);
+      return null;
+    }
 
-    const newSession = await this.createSession(parentId, role);
-    return newSession;
+    try {
+      const newSession = await this.createSession(parentId, role);
+      if (newSession.accessToken) {
+        const newPayload = this.verifyJWT(newSession.accessToken);
+        if (newPayload?.authRevocationEventId !== payload.authRevocationEventId) {
+          logger.warn(`Refresh Token boundary changed during rotation for parent: ${parentId}`);
+          await this.revokeAllSessions(parentId);
+          return null;
+        }
+      }
+      return newSession;
+    } catch (error) {
+      if (error instanceof MobileSessionAuthorizationError) return null;
+      throw error;
+    }
   }
 
   /**

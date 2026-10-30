@@ -18,6 +18,7 @@ export const selectUniqueParentPhoneMatch = <T extends { user_id: number | strin
 export interface MobileParentLoginUser {
   id: string;
   role: string;
+  isDeleted?: boolean;
 }
 
 export interface MobileParentLoginStore<T extends MobileParentLoginUser = MobileParentLoginUser> {
@@ -47,7 +48,7 @@ export const authenticateMobileParentLogin = async <T extends MobileParentLoginU
     ? await store.findParentByEmail(normalizedIdentifier.toLowerCase())
     : await store.findParentByPhone(normalizeParentLoginPhone(normalizedIdentifier, phoneCountryCode));
 
-  if (!user || (!isEmail && user.role !== 'parent')) return null;
+  if (!user || user.isDeleted || (!isEmail && user.role !== 'parent')) return null;
   return await store.verifyParentPasswordByUserId(user.id, password) ? user : null;
 };
 

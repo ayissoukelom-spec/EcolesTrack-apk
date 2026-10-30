@@ -54,6 +54,14 @@ test('authenticates a parent by email using the existing password verifier', asy
   assert.deepEqual(calls.phone, []);
 });
 
+test('rejects a disabled parent by email before verifying the password', async () => {
+  const disabledParent = { ...parent, isDeleted: true };
+  const { store, calls } = createStore({ emailUser: disabledParent });
+
+  assert.equal(await authenticateMobileParentLogin('parent@example.com', 'correct', undefined, store), null);
+  assert.deepEqual(calls.verify, []);
+});
+
 test('authenticates a parent by normalized phone', async () => {
   const { store, calls } = createStore({ phoneUser: parent });
   const result = await authenticateMobileParentLogin('78 23 45 67', 'correct', '+228', store);
@@ -61,6 +69,14 @@ test('authenticates a parent by normalized phone', async () => {
   assert.equal(result, parent);
   assert.deepEqual(calls.phone, [['22878234567']]);
   assert.deepEqual(calls.verify, [['42', 'correct']]);
+});
+
+test('rejects a disabled parent by phone before verifying the password', async () => {
+  const disabledParent = { ...parent, isDeleted: true };
+  const { store, calls } = createStore({ phoneUser: disabledParent });
+
+  assert.equal(await authenticateMobileParentLogin('78 23 45 67', 'correct', '+228', store), null);
+  assert.deepEqual(calls.verify, []);
 });
 
 test('the same local number produces distinct +228 and +229 account keys', async () => {

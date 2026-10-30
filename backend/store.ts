@@ -320,7 +320,7 @@ export class PostgresStore {
       SELECT u.id AS user_id, u.email, u.name, u.role, u.school_id, p.phone
       FROM users u
       LEFT JOIN parents p ON p.user_id = u.id
-      WHERE u.id = $1
+      WHERE u.id = $1 AND u.is_deleted = false
     `, [Number(parentId)]);
 
     if (rows.length === 0) return null;
@@ -375,7 +375,7 @@ export class PostgresStore {
       FROM users u
       LEFT JOIN parents p ON p.user_id = u.id
       LEFT JOIN local_auths la ON la.user_id = u.id
-      WHERE LOWER(u.email) = LOWER($1)
+      WHERE LOWER(u.email) = LOWER($1) AND u.is_deleted = false
       LIMIT 1
     `, [email]);
 
@@ -395,6 +395,7 @@ export class PostgresStore {
       JOIN parents p ON p.user_id = u.id
       LEFT JOIN local_auths la ON la.user_id = u.id
       WHERE u.role = 'parent'
+        AND u.is_deleted = false
         AND (
           regexp_replace(coalesce(p.phone, ''), '[^0-9]', '', 'g') = ANY($1::text[])
           OR regexp_replace(coalesce(u.phone, ''), '[^0-9]', '', 'g') = ANY($1::text[])
@@ -419,7 +420,7 @@ export class PostgresStore {
       SELECT la.password_hash, la.salt
       FROM users u
       LEFT JOIN local_auths la ON la.user_id = u.id
-      WHERE u.id = $1
+      WHERE u.id = $1 AND u.is_deleted = false
       LIMIT 1
     `, [Number(userId)]);
     const auth = rows[0];
