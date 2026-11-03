@@ -28,6 +28,9 @@ const pool = new Pool({
   user: process.env.SQL_USER,
   password: process.env.SQL_PASSWORD,
   database: process.env.SQL_DB_NAME,
+  ssl: process.env.SQL_SSL === 'true'
+    ? { rejectUnauthorized: false }
+    : undefined,
   connectionTimeoutMillis: 15000,
   max: 10,
 });
