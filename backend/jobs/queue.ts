@@ -16,12 +16,36 @@ export interface QueueJob<T = any> {
   errorHistory: Array<{ timestamp: string; message: string }>;
 }
 
+export type PushDeliveryOutcome = 'sent' | 'retryable_failure' | 'permanent_failure';
+
 // In-Memory Storage for Active and Dead-Letter Queues (DLQ)
 export const activeQueue: QueueJob[] = [];
 export const deadLetterQueue: QueueJob[] = [];
 export const completedJobIds = new Set<string>(); // Idempotence check
 
 export class QueueManager {
+  private static readonly dedupeOutcomes = new Map<string, PushDeliveryOutcome>();
+  private static readonly dedupeWaiters = new Map<string, Array<(outcome: PushDeliveryOutcome) => void>>();
+
+  public static waitForDedupeKey(dedupeKey: string): Promise<PushDeliveryOutcome> {
+    const completedOutcome = this.dedupeOutcomes.get(dedupeKey);
+    if (completedOutcome) return Promise.resolve(completedOutcome);
+
+    return new Promise((resolve) => {
+      const waiters = this.dedupeWaiters.get(dedupeKey) ?? [];
+      waiters.push(resolve);
+      this.dedupeWaiters.set(dedupeKey, waiters);
+    });
+  }
+
+  private static settleDedupeKey(dedupeKey: string | undefined, outcome: PushDeliveryOutcome) {
+    if (!dedupeKey) return;
+    this.dedupeOutcomes.set(dedupeKey, outcome);
+    const waiters = this.dedupeWaiters.get(dedupeKey) ?? [];
+    this.dedupeWaiters.delete(dedupeKey);
+    waiters.forEach((resolve) => resolve(outcome));
+  }
+
   /**
    * Add a job to the queue
    */
@@ -75,6 +99,8 @@ export class QueueManager {
       }
       return `queued-${dedupeKey}`;
     }
+
+    if (dedupeKey) this.dedupeOutcomes.delete(dedupeKey);
 
     const job: QueueJob<T> = {
       id: `job-${Math.random().toString(36).substring(2, 11)}`,
@@ -132,6 +158,7 @@ export class QueueManager {
       // Successfully processed
       if (job.dedupeKey) {
         completedJobIds.add(job.dedupeKey);
+        this.settleDedupeKey(job.dedupeKey, 'sent');
       }
       if (jobData?.category === "grade" && job.name.startsWith("send-notification-push")) {
         logger.info("grade push sent", {
@@ -183,6 +210,7 @@ export class QueueManager {
 
         if (job.dedupeKey) {
           completedJobIds.add(job.dedupeKey);
+          this.settleDedupeKey(job.dedupeKey, 'permanent_failure');
         }
 
         return;
@@ -226,6 +254,7 @@ export class QueueManager {
         // Route to Dead Letter Queue (DLQ)
         logger.error(`Job failed maximum attempts: ${job.name} [ID: ${job.id}]. Moving to DLQ.`);
         deadLetterQueue.push(job);
+        this.settleDedupeKey(job.dedupeKey, 'retryable_failure');
         
         // Audit trail trail of failure
         logger.audit("JOB_DLQ_ROUTED", "QueueProcessor", { jobId: job.id, jobName: job.name, errors: job.errorHistory }, "FAILURE");

@@ -1314,6 +1314,44 @@ app.post("/api/internal/evaluation-notification", verifyInternalAuth, async (req
       });
     }
 
+    if (req.body?.groupedDelivery === true) {
+      if (
+        category !== "evaluation"
+        || !metadata
+        || !Number.isInteger(metadata.notificationId)
+        || metadata.notificationId <= 0
+        || !Number.isInteger(metadata.publicationId)
+        || metadata.publicationId <= 0
+      ) {
+        return res.status(400).json({
+          error: "Invalid grouped publication push parameters",
+          code: "INVALID_GROUPED_PUBLICATION_PUSH"
+        });
+      }
+
+      const dispatchResult = await NotificationService.dispatchNotification(
+        String(parentId),
+        title,
+        message,
+        category,
+        metadata,
+        dedupeKey,
+        { pushOnly: true, awaitPushDelivery: true }
+      );
+      if (
+        dispatchResult.deliveryOutcome !== 'sent'
+        && dispatchResult.deliveryOutcome !== 'retryable_failure'
+        && dispatchResult.deliveryOutcome !== 'permanent_failure'
+        && dispatchResult.deliveryOutcome !== 'no_subscription'
+      ) {
+        throw new Error('Notification dispatcher did not return a provider delivery outcome.');
+      }
+      return res.json({
+        success: true,
+        delivery: { outcome: dispatchResult.deliveryOutcome },
+      });
+    }
+
     const result = await NotificationService.dispatchNotification(
       String(parentId),
       title,

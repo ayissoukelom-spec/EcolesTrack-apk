@@ -7,17 +7,19 @@ import { createHash } from "node:crypto";
 const logger = new Logger("NotificationService");
 
 export class NotificationService {
-  /**
-   * Orchestrates multi-channel delivery based on parent consents and quiet hours
-   */
   public static async dispatchNotification(
     parentId: string | string[],
     title: string,
     message: string,
-    category: 'absence' | 'grade' | 'info' | 'test',
+    category: 'absence' | 'grade' | 'evaluation' | 'info' | 'test',
     metadata: any = {},
-    dedupeKey?: string
+    dedupeKey?: string,
+    options: { pushOnly?: boolean; awaitPushDelivery?: boolean } = {},
   ) {
+    if (options.awaitPushDelivery && !dedupeKey) {
+      throw new Error('A stable dedupe key is required when awaiting push delivery.');
+    }
+
     logger.info("[NOTIF_TRACE] dispatchNotification start", { parentId, category, title, hasDedupeKey: Boolean(dedupeKey), metadata });
     const effectiveParentIds = await this.resolveParentIds(parentId, metadata);
     logger.info(`Orchestrating notification for Parent IDs: ${effectiveParentIds.join(", ") || "<none>"}`, { category, dedupeKey });
@@ -29,12 +31,15 @@ export class NotificationService {
       return {
         success: true,
         channels: [],
-        jobs: []
+        jobs: [],
+        ...(options.awaitPushDelivery ? { deliveryOutcome: 'no_subscription' as const } : {}),
       };
     }
 
     const jobsTriggered: string[] = [];
     const channelsToDeliver: NotificationChannel[] = [];
+    const pushDeliveryResults: Array<Promise<'sent' | 'retryable_failure' | 'permanent_failure'>> = [];
+    let hasPushRecipient = false;
 
     for (const effectiveParentId of effectiveParentIds) {
       // 1. Fetch parent preferences and consent from DB
@@ -99,7 +104,14 @@ export class NotificationService {
         );
       }
 
-      for (const channel of parentChannelsToDeliver) {
+      const selectedChannels = options.pushOnly
+        ? parentChannelsToDeliver.filter((channel) => channel === 'push')
+        : parentChannelsToDeliver;
+      if (options.awaitPushDelivery && isPushAuthorized && pushTokens.length > 0) {
+        hasPushRecipient = true;
+      }
+
+      for (const channel of selectedChannels) {
         const priority = category === "absence" ? 10 : 5;
         const jobName = `send-notification-${channel}`;
 
@@ -136,6 +148,9 @@ export class NotificationService {
             logger.info("[NOTIF_TRACE] QueueManager.addJob completed", { jobName, jobId, parentId: effectiveParentId, channel, hasDedupeKey: Boolean(jobDedupeKey), tokenPresent: Boolean(token) });
 
             jobsTriggered.push(jobId);
+            if (options.awaitPushDelivery && jobDedupeKey) {
+              pushDeliveryResults.push(QueueManager.waitForDedupeKey(jobDedupeKey));
+            }
           }
         } else {
           const jobDedupeKey = dedupeKey ? `${dedupeKey}-${channel}` : undefined;
@@ -159,13 +174,27 @@ export class NotificationService {
         }
       }
 
-      parentChannelsToDeliver.forEach((channel) => channelsToDeliver.push(channel));
+      selectedChannels.forEach((channel) => channelsToDeliver.push(channel));
+    }
+
+    let deliveryOutcome: 'sent' | 'retryable_failure' | 'permanent_failure' | 'no_subscription' | undefined;
+    if (options.awaitPushDelivery) {
+      const outcomes = await Promise.all(pushDeliveryResults);
+      deliveryOutcome = outcomes.includes('sent')
+        ? 'sent'
+        : outcomes.includes('retryable_failure')
+          ? 'retryable_failure'
+          : outcomes.includes('permanent_failure')
+            ? 'permanent_failure'
+            : 'no_subscription';
+      if (!hasPushRecipient) deliveryOutcome = 'no_subscription';
     }
 
     const result = {
       success: true,
       channels: Array.from(new Set(channelsToDeliver)),
-      jobs: jobsTriggered
+      jobs: jobsTriggered,
+      ...(deliveryOutcome ? { deliveryOutcome } : {}),
     };
     logger.info("[TRACE] dispatchNotification completed", { channels: result.channels, jobs: result.jobs });
     return result;

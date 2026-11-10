@@ -92,6 +92,8 @@ async function run() {
       });
     };
 
+    const invalidTokenKey = 'grouped-publication-invalid-token';
+    const invalidTokenDelivery = QueueManager.waitForDedupeKey(invalidTokenKey);
     QueueManager.addJob('send-notification-push', {
       parentId: 'parent-x',
       token: 'token-invalid-1',
@@ -100,8 +102,9 @@ async function run() {
       category: 'grade',
       metadata: {},
       channel: 'push',
-    }, { maxAttempts: 3 });
+    }, { dedupeKey: invalidTokenKey, maxAttempts: 3 });
 
+    assert.equal(await invalidTokenDelivery, 'permanent_failure', 'Invalid device tokens should be reported as permanent failures');
     await delay(500);
 
     assert.strictEqual(invalidJobCount, 1, 'Invalid token job should run exactly once');
@@ -166,6 +169,41 @@ async function run() {
 
     assert.ok(temporaryAttempts >= 2, 'Temporary error should retry at least once');
     assert.strictEqual(deadLetterQueue.length, 0, 'Temporary error should not go directly to DLQ');
+
+    await resetQueue();
+    const confirmedKey = 'grouped-publication-17-notification-91-push-token';
+    (QueueManager as any).executeJobLogic = async () => undefined;
+    const confirmedDelivery = QueueManager.waitForDedupeKey(confirmedKey);
+    QueueManager.addJob('send-notification-push', {
+      parentId: 'parent-grouped',
+      token: 'token-confirmed',
+      title: 'Programme',
+      message: 'Message',
+      category: 'evaluation',
+      metadata: {},
+      channel: 'push',
+    }, { dedupeKey: confirmedKey, maxAttempts: 3 });
+    assert.equal(await confirmedDelivery, 'sent', 'Queue completion should report confirmed provider success');
+
+    await resetQueue();
+    let failedAttempts = 0;
+    const failedKey = 'grouped-publication-18-notification-92-push-token';
+    (QueueManager as any).executeJobLogic = async () => {
+      failedAttempts += 1;
+      throw new Error('Temporary FCM error');
+    };
+    const failedDelivery = QueueManager.waitForDedupeKey(failedKey);
+    QueueManager.addJob('send-notification-push', {
+      parentId: 'parent-grouped',
+      token: 'token-failing',
+      title: 'Programme',
+      message: 'Message',
+      category: 'evaluation',
+      metadata: {},
+      channel: 'push',
+    }, { dedupeKey: failedKey, maxAttempts: 2 });
+    assert.equal(await failedDelivery, 'retryable_failure', 'Exhausted queue retries should be surfaced to the outbox');
+    assert.equal(failedAttempts, 2, 'Dispatcher outcome should wait until the queue retry policy is exhausted');
 
     // Case 4: parent with 3 tokens, only invalid B removed
     deletedTokens.length = 0;
