@@ -26,6 +26,7 @@ export const completedJobIds = new Set<string>(); // Idempotence check
 export class QueueManager {
   private static readonly dedupeOutcomes = new Map<string, PushDeliveryOutcome>();
   private static readonly dedupeWaiters = new Map<string, Array<(outcome: PushDeliveryOutcome) => void>>();
+  private static readonly reservedDedupeKeys = new Set<string>();
 
   public static waitForDedupeKey(dedupeKey: string): Promise<PushDeliveryOutcome> {
     const completedOutcome = this.dedupeOutcomes.get(dedupeKey);
@@ -40,6 +41,7 @@ export class QueueManager {
 
   private static settleDedupeKey(dedupeKey: string | undefined, outcome: PushDeliveryOutcome) {
     if (!dedupeKey) return;
+    this.reservedDedupeKeys.delete(dedupeKey);
     this.dedupeOutcomes.set(dedupeKey, outcome);
     const waiters = this.dedupeWaiters.get(dedupeKey) ?? [];
     this.dedupeWaiters.delete(dedupeKey);
@@ -86,7 +88,8 @@ export class QueueManager {
     }
 
     // Check if the exact dedupeKey is already in the active queue to prevent queuing duplicates
-    if (dedupeKey && activeQueue.some(j => j.dedupeKey === dedupeKey)) {
+    if (dedupeKey && (this.reservedDedupeKeys.has(dedupeKey)
+      || activeQueue.some(j => j.dedupeKey === dedupeKey))) {
       if (jobData?.category === "grade") {
         logger.info("grade push deduplicated", {
           gradeId: jobData?.metadata?.gradeId,
@@ -101,6 +104,7 @@ export class QueueManager {
     }
 
     if (dedupeKey) this.dedupeOutcomes.delete(dedupeKey);
+    if (dedupeKey) this.reservedDedupeKeys.add(dedupeKey);
 
     const job: QueueJob<T> = {
       id: `job-${Math.random().toString(36).substring(2, 11)}`,
