@@ -37,10 +37,13 @@ export function classifyParentNotification(notif: ParentNotificationClassificati
 
   const normalizedTitle = normalizeNotificationText(notif.title);
   const payload = `${normalizedTitle} ${normalizeNotificationText(notif.message)}`;
+  const isScheduledGroupedEvaluation =
+    /^nouveau programme\b/.test(normalizedTitle)
+    && /\b(devoirs?|compositions?|examens?)\b/.test(normalizedTitle);
   const isPublishedHomework =
     /^(nouveau devoir publie|nouveau devoir a venir)\b/.test(normalizedTitle)
     || /\bun nouveau devoir\b.*\b(a ete programme|programme|publie)\b/.test(payload);
-  if (isPublishedHomework) return "homework";
+  if (isScheduledGroupedEvaluation || isPublishedHomework) return "homework";
 
   if (notif.type) {
     return explicitTypeCategories[notif.type] ?? "info";
@@ -67,4 +70,13 @@ export function classifyParentNotification(notif: ParentNotificationClassificati
   }
 
   return "info";
+}
+
+export function mapParentNotificationType(
+  notif: Pick<AppNotification, "type" | "title" | "message">,
+): AppNotificationType {
+  if (notif.type === "grade" && classifyParentNotification(notif) === "homework") {
+    return "homework";
+  }
+  return notif.type ?? "info";
 }

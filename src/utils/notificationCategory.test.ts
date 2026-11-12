@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { classifyParentNotification } from "./notificationCategory.js";
+import { classifyParentNotification, mapParentNotificationType } from "./notificationCategory.js";
 
 test("explicit info type stays in Info regardless of note and homework keywords", () => {
   for (const message of [
@@ -51,14 +51,28 @@ test("persisted homework publication text is classified as homework without push
   }), "homework");
 });
 
+test("scheduled compositions and exams are exposed to the installed app as homework, not grades", () => {
+  for (const title of ["Nouveau programme de compositions", "Nouveau programme d’examens"]) {
+    const notification = {
+      type: "grade" as const,
+      title,
+      message: "Un programme d’évaluation est prévu en novembre.",
+    };
+
+    assert.equal(classifyParentNotification(notification), "homework", title);
+    assert.equal(mapParentNotificationType(notification), "homework", title);
+  }
+});
+
 test("a real grade notification remains in Notes even when it mentions a devoir", () => {
   const notification = {
     type: "grade" as const,
     title: "Nouvelle note pour Awa",
-    message: "La note est disponible pour le devoir Devoir S1.1.",
+    message: "La note est disponible pour le devoir Devoir S1.1 et l’examen de composition.",
   };
 
   assert.equal(classifyParentNotification(notification), "notes");
+  assert.equal(mapParentNotificationType(notification), "grade");
 });
 
 test("explicit absence and homework types take precedence over message keywords", () => {

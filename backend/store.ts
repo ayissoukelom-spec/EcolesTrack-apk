@@ -16,6 +16,7 @@ import { logger } from './utils/logger';
 import { mapWebParentToMobileParent, mapWebStudentToChild } from './mobileAdapter';
 import { mapParentAbsenceRow, submitAbsenceJustificationForReview } from './absenceJustification';
 import { normalizeParentLoginPhone, selectUniqueParentPhoneMatch } from './parentLogin';
+import { mapParentNotificationType } from '../src/utils/notificationCategory.js';
 
 export interface MobileNotificationAttachment {
   id: number;
@@ -747,7 +748,7 @@ export class PostgresStore {
       parentId,
       title: row.title,
       message: row.body,
-      type: row.type,
+      type: mapParentNotificationType({ type: row.type, title: row.title, message: row.body }),
       read: row.is_read,
       createdAt: row.created_at,
       deepLink: undefined,
