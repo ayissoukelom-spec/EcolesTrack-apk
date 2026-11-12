@@ -17,6 +17,10 @@ import { mapWebParentToMobileParent, mapWebStudentToChild } from './mobileAdapte
 import { mapParentAbsenceRow, submitAbsenceJustificationForReview } from './absenceJustification';
 import { normalizeParentLoginPhone, selectUniqueParentPhoneMatch } from './parentLogin';
 import { mapParentNotificationType } from '../src/utils/notificationCategory.js';
+import {
+  filterCompletedGroupedPublicationNotifications,
+  getCompletedGroupedPublicationIds,
+} from '../src/utils/groupedEvaluationVisibility.js';
 
 export interface MobileNotificationAttachment {
   id: number;
@@ -717,14 +721,49 @@ export class PostgresStore {
     const userId = Number(parentId);
     if (!Number.isInteger(userId)) return [];
 
-    const { rows } = await dbQuery<{ id: number; title: string; body: string; type: NonNullable<AppNotification['type']>; is_read: boolean; created_at: string }>(`
-      SELECT id, title, body, type, is_read, created_at
+    const { rows } = await dbQuery<{
+      id: number;
+      title: string;
+      body: string;
+      type: NonNullable<AppNotification['type']>;
+      is_read: boolean;
+      created_at: string;
+      publicationId: number | null;
+    }>(`
+      SELECT id, title, body, type, is_read, created_at, publication_id AS "publicationId"
       FROM notifications
       WHERE user_id = $1
       ORDER BY created_at DESC
     `, [userId]);
 
-    const notificationIds = rows.map((row) => row.id);
+    const publicationIds = Array.from(new Set(
+      rows
+        .map((row) => row.publicationId)
+        .filter((publicationId): publicationId is number => publicationId != null),
+    ));
+    let visibleRows = rows;
+    if (publicationIds.length > 0) {
+      const { rows: evaluationCounts } = await dbQuery<{
+        publicationId: number;
+        expectedStudentCount: number;
+        recordedGradeCount: number;
+      }>(`
+        SELECT e.publication_id AS "publicationId",
+               COUNT(DISTINCT s.id)::integer AS "expectedStudentCount",
+               COUNT(DISTINCT g.id)::integer AS "recordedGradeCount"
+        FROM evaluations e
+        LEFT JOIN students s
+          ON s.class_id = e.class_id
+         AND s.school_id = e.school_id
+        LEFT JOIN grades g ON g.evaluation_id = e.id
+        WHERE e.publication_id = ANY($1::int[])
+        GROUP BY e.id, e.publication_id
+      `, [publicationIds]);
+      const completedPublicationIds = getCompletedGroupedPublicationIds(evaluationCounts);
+      visibleRows = filterCompletedGroupedPublicationNotifications(rows, completedPublicationIds);
+    }
+
+    const notificationIds = visibleRows.map((row) => row.id);
     const attachmentsByNotification = new Map<number, MobileNotificationAttachment[]>();
     if (notificationIds.length > 0) {
       const attachmentRows = await dbQuery<MobileNotificationAttachment>(`
@@ -743,7 +782,7 @@ export class PostgresStore {
       }
     }
 
-    return rows.map((row) => ({
+    return visibleRows.map((row) => ({
       id: String(row.id),
       parentId,
       title: row.title,
