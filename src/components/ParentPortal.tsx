@@ -15,6 +15,7 @@ import { Parent, Child, Absence, AbsenceDeclaration, Grade, AppNotification, Chi
 import { getApiErrorMessage, parseJsonSafe, withApiBase } from "../utils/http";
 import {
   getAttendanceJustificationCopy,
+  getAttendanceReasonLabel,
   getAttendanceJustificationRequest,
 } from "../utils/attendanceJustification";
 import { AttendanceJustificationButton } from "./AttendanceJustificationButton";
@@ -2318,7 +2319,7 @@ export default function ParentPortal({
                                 : abs.period || 'Horaire non précisé'}
                             </p>
                             <h4 className="text-xs font-bold text-slate-900 dark:text-white mt-0.5">
-                              Motif : {abs.reason}
+                              Motif : {getAttendanceReasonLabel(abs.reason, abs.eventType, justificationStatus)}
                             </h4>
                           </div>
                           {isPending ? (

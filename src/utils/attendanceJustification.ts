@@ -28,6 +28,18 @@ export function getAttendanceJustificationCopy(eventType: Absence["eventType"]) 
   };
 }
 
+export function getAttendanceReasonLabel(
+  reason: string,
+  eventType: Absence["eventType"],
+  justificationStatus: Absence["justificationStatus"],
+) {
+  if (eventType === "late" && justificationStatus === "APPROVED" && reason === "Retard enregistré") {
+    return "Retard justifié";
+  }
+
+  return reason;
+}
+
 export function getAttendanceJustificationButtonColorClasses(eventType: Absence["eventType"]) {
   return eventType === "late"
     ? "bg-[#C65A11] hover:bg-[#A64A0D]"
