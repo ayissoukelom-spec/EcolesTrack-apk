@@ -18,7 +18,12 @@ import {
   getAttendanceReasonLabel,
   getAttendanceJustificationRequest,
 } from "../utils/attendanceJustification";
+import {
+  getAttendanceAlertPresentation,
+  getAttendanceEventPresentation,
+} from "../utils/attendancePresentation";
 import { AttendanceJustificationButton } from "./AttendanceJustificationButton";
+import { AttendanceEventMarker } from "./AttendanceEventMarker";
 import { getDisabledParentMessage } from "../utils/parentSession";
 import { classifyParentNotification } from "../utils/notificationCategory";
 import { getSchoolPeriodLabel, isGradeInSchoolPeriod, SCHOOL_PERIOD_FALLBACK_LABEL } from "../utils/schoolPeriod";
@@ -2293,17 +2298,23 @@ export default function ParentPortal({
                   <div className="space-y-2.5">
                     {attendanceRecords.map((abs) => {
                       const isLateArrival = abs.eventType === "late";
+                      const eventPresentation = getAttendanceEventPresentation(isLateArrival ? "late" : "absence");
                       const justificationStatus = abs.justificationStatus ?? (abs.justified ? "APPROVED" : null);
                       const isApproved = justificationStatus === "APPROVED";
                       const isPending = justificationStatus === "PENDING";
                       const isRejected = justificationStatus === "REJECTED";
                       const isParentDeclared = Boolean(abs.declarationId) && !justificationStatus && !abs.justified;
                       return (
-                      <div key={`${abs.eventType || "absence"}-${abs.id}`} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl p-3 shadow-sm">
+                      <div key={`${abs.eventType || "absence"}-${abs.id}`} className={`bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 border-l-4 ${eventPresentation.cardAccentClassName} rounded-2xl p-3 shadow-sm`}>
                         <div className="flex items-start justify-between gap-2">
                           <div>
                             <p className="text-[10px] font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
-                              {isLateArrival ? "Retard · " : "Absence · "}{new Date(abs.date).toLocaleDateString("fr-FR")}
+                              <span className="inline-flex items-center gap-1.5">
+                                <AttendanceEventMarker eventType={abs.eventType} />
+                                <span>
+                                  {new Date(abs.date).toLocaleDateString("fr-FR")}
+                                </span>
+                              </span>
                             </p>
                             <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
                               Classe : {abs.className || currentChild?.className || 'Non précisée'}
@@ -2464,7 +2475,7 @@ export default function ParentPortal({
                           : "bg-transparent text-slate-700 hover:bg-emerald-50/70 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100"
                       }`}
                     >
-                      Absences
+                      Absences et retards
                       <span className={`rounded-md px-1.5 py-0.5 text-[9px] font-bold ${alertMenu === "absences" ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/70 dark:text-emerald-200" : "bg-white/90 text-slate-700 dark:bg-slate-900 dark:text-slate-300"}`}>
                         {absenceNotifications.filter((n) => !n.read).length}
                       </span>
@@ -2490,12 +2501,26 @@ export default function ParentPortal({
                     <CheckCircle2 className="mx-auto mb-2 h-8 w-8 text-emerald-600 dark:text-emerald-400" />
                     {alertMenu === "notes" && "Aucune alerte de notes publiée pour le moment."}
                     {alertMenu === "homework" && "Aucune alerte de devoirs à venir pour le moment."}
-                    {alertMenu === "absences" && "Aucune alerte d'absence pour le moment."}
+                    {alertMenu === "absences" && "Aucune alerte d'absence ou de retard pour le moment."}
                     {alertMenu === "info" && "Aucune information à afficher pour le moment."}
                   </div>
                 ) : (
                   <div className="space-y-2.5">
-                    {visibleAlertNotifications.map((notif) => (
+                    {visibleAlertNotifications.map((notif) => {
+                      const attendancePresentation = alertMenu === "absences"
+                        ? getAttendanceAlertPresentation(notif.title, notif.message)
+                        : null;
+                      const alertStripClassName = alertMenu === "absences"
+                        ? attendancePresentation?.stripClassName ?? "bg-slate-400"
+                        : alertMenu === "notes" ? "bg-indigo-400" : alertMenu === "homework" ? "bg-amber-400" : "bg-sky-400";
+                      const alertIconClassName = alertMenu === "absences"
+                        ? attendancePresentation?.iconClassName ?? "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                        : notif.read
+                          ? "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                          : alertMenu === "notes" ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/70 dark:text-indigo-300"
+                            : alertMenu === "homework" ? "bg-amber-100 text-amber-700 dark:bg-amber-900/70 dark:text-amber-300"
+                              : "bg-sky-100 text-sky-700 dark:bg-sky-900/70 dark:text-sky-300";
+                      return (
                       <div
                         key={notif.id}
                         role="button"
@@ -2527,14 +2552,14 @@ export default function ParentPortal({
                             : "border-indigo-200 bg-indigo-50/80 text-slate-800 shadow-[0_10px_24px_rgba(79,70,229,0.10)] dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-slate-200"
                         }`}
                       >
-                        <div className={`absolute left-0 top-0 h-full w-1.5 ${alertMenu === "notes" ? "bg-indigo-400" : alertMenu === "homework" ? "bg-amber-400" : alertMenu === "absences" ? "bg-emerald-400" : "bg-sky-400"}`} />
+                        <div className={`absolute left-0 top-0 h-full w-1.5 ${alertStripClassName}`} />
                         {!notif.read && (
                           <span className="absolute right-3.5 top-3.5 h-2.5 w-2.5 rounded-full bg-indigo-600 animate-pulse dark:bg-indigo-400" />
                         )}
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-2">
-                              <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ${notif.read ? "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300" : alertMenu === "notes" ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/70 dark:text-indigo-300" : alertMenu === "homework" ? "bg-amber-100 text-amber-700 dark:bg-amber-900/70 dark:text-amber-300" : alertMenu === "absences" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/70 dark:text-emerald-300" : "bg-sky-100 text-sky-700 dark:bg-sky-900/70 dark:text-sky-300"}`}>
+                              <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ${alertIconClassName}`}>
                                 <AlertTriangle className="h-3.5 w-3.5" />
                               </div>
                               <div className="min-w-0">
@@ -2583,15 +2608,21 @@ export default function ParentPortal({
                           </div>
                         </div>
                         <div className="mt-3 flex flex-wrap items-center gap-2">
+                          {attendancePresentation && (
+                            <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold ${attendancePresentation.badgeClassName}`}>
+                              {attendancePresentation.label}
+                            </span>
+                          )}
                           <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold ${notif.read ? "border-slate-200 bg-slate-100 text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300" : alertMenu === "notes" ? "border-indigo-200 bg-indigo-100 text-indigo-800 dark:border-indigo-800 dark:bg-indigo-900/70 dark:text-indigo-200" : alertMenu === "homework" ? "border-amber-200 bg-amber-100 text-amber-800 dark:border-amber-800 dark:bg-amber-900/70 dark:text-amber-200" : alertMenu === "absences" ? "border-emerald-200 bg-emerald-100 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-900/70 dark:text-emerald-200" : "border-sky-200 bg-sky-100 text-sky-800 dark:border-sky-800 dark:bg-sky-900/70 dark:text-sky-200"}`}>
                             {notif.read ? "Consultée" : "Nouvelle"}
                           </span>
-                          <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold ${alertMenu === "notes" ? "border-indigo-200 bg-indigo-100 text-indigo-800 dark:border-indigo-800 dark:bg-indigo-900/70 dark:text-indigo-200" : alertMenu === "homework" ? "border-amber-200 bg-amber-100 text-amber-800 dark:border-amber-800 dark:bg-amber-900/70 dark:text-amber-200" : alertMenu === "absences" ? "border-emerald-200 bg-emerald-100 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-900/70 dark:text-emerald-200" : "border-sky-200 bg-sky-100 text-sky-800 dark:border-sky-800 dark:bg-sky-900/70 dark:text-sky-200"}`}>
-                            {alertMenu === "notes" ? "Notes" : alertMenu === "homework" ? "Devoirs" : alertMenu === "absences" ? "Absences" : "Info"}
+                          <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold ${alertMenu === "notes" ? "border-indigo-200 bg-indigo-100 text-indigo-800 dark:border-indigo-800 dark:bg-indigo-900/70 dark:text-indigo-200" : alertMenu === "homework" ? "border-amber-200 bg-amber-100 text-amber-800 dark:border-amber-800 dark:bg-amber-900/70 dark:text-amber-200" : alertMenu === "absences" ? "border-sky-200 bg-sky-100 text-sky-800 dark:border-sky-800 dark:bg-sky-900/70 dark:text-sky-200" : "border-sky-200 bg-sky-100 text-sky-800 dark:border-sky-800 dark:bg-sky-900/70 dark:text-sky-200"}`}>
+                            {alertMenu === "notes" ? "Notes" : alertMenu === "homework" ? "Devoirs" : alertMenu === "absences" ? "Absences et retards" : "Info"}
                           </span>
                         </div>
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </motion.div>
