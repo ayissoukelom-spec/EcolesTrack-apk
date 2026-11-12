@@ -14,7 +14,8 @@ import {
 import { initializeMobileTables, dbQuery, pool } from './postgres';
 import { logger } from './utils/logger';
 import { mapWebParentToMobileParent, mapWebStudentToChild } from './mobileAdapter';
-import { mapParentAbsenceRow, submitAbsenceJustificationForReview } from './absenceJustification';
+import { submitAbsenceJustificationForReview } from './absenceJustification';
+import { getParentAttendance } from './parentAttendance';
 import { normalizeParentLoginPhone, selectUniqueParentPhoneMatch } from './parentLogin';
 import { mapParentNotificationType } from '../src/utils/notificationCategory.js';
 import {
@@ -568,40 +569,7 @@ export class PostgresStore {
   }
 
   public async getAbsencesOfChild(childId: string): Promise<Absence[]> {
-  const childIdNum = Number(childId);
-  if (!Number.isInteger(childIdNum)) return [];
-
-  const { rows } = await dbQuery<{
-    id: number;
-    declaration_id: number | null;
-    date: string;
-    period: string | null;
-    is_justified: boolean;
-    justification_reason: string | null;
-    justification_status: 'PENDING' | 'APPROVED' | 'REJECTED' | null;
-    rejection_reason: string | null;
-    subject_name: string | null;
-    start_time: string | null;
-    end_time: string | null;
-  }>(`
-    SELECT 
-      a.id,
-      a.declaration_id,
-      a.date,
-      a.period,
-      a.is_justified,
-      a.justification_reason,
-      a.justification_status,
-      a.rejection_reason,
-      s.name AS subject_name,
-      a.start_time,
-      a.end_time
-    FROM absences a
-    LEFT JOIN subjects s ON s.id = a.subject_id
-    WHERE a.student_id = $1
-  `, [childIdNum]);
-
-  return rows.map((row) => mapParentAbsenceRow(row, childId));
+  return getParentAttendance(dbQuery, childId);
 }
 
   public async justifyAbsence(absenceId: string, parentId: string, justificationReason: string): Promise<Absence | null> {

@@ -1,15 +1,19 @@
 import assert from 'node:assert/strict';
 import { activeQueue, deadLetterQueue, completedJobIds, QueueManager } from './queue.ts';
 import { store } from '../store.ts';
-import { InvalidFcmTokenError, isInvalidFcmTokenError } from '../services/fcm.ts';
+import {
+  InvalidFcmTokenError,
+  isInvalidFcmTokenError,
+  isPermanentFcmCredentialError,
+} from '../services/fcm.ts';
 
 function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function deferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((complete) => {
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((complete) => {
     resolve = complete;
   });
   return { promise, resolve };
@@ -72,6 +76,26 @@ async function run() {
     false,
     'Should not identify a generic temporary error as invalid'
   );
+  assert.strictEqual(
+    isPermanentFcmCredentialError({ code: 'messaging/mismatched-credential' }),
+    true,
+    'Should identify a permanent Firebase credential mismatch'
+  );
+  assert.strictEqual(
+    isPermanentFcmCredentialError({ errorInfo: { code: 'messaging/sender-id-mismatch' } }),
+    true,
+    'Should identify a permanent sender ID mismatch'
+  );
+  assert.strictEqual(
+    isPermanentFcmCredentialError({ code: 'messaging/server-unavailable' }),
+    false,
+    'Should leave transient Firebase errors retryable'
+  );
+  assert.strictEqual(
+    isPermanentFcmCredentialError(new Error('ECONNRESET')),
+    false,
+    'Should distinguish network errors from credential mismatches'
+  );
   assert.equal(
     new InvalidFcmTokenError('synthetic-token-value', new Error('test')).message.includes('synthetic-token-value'),
     false,
@@ -100,8 +124,6 @@ async function run() {
       });
     };
 
-    const invalidTokenKey = 'grouped-publication-invalid-token';
-    const invalidTokenDelivery = QueueManager.waitForDedupeKey(invalidTokenKey);
     QueueManager.addJob('send-notification-push', {
       parentId: 'parent-x',
       token: 'token-invalid-1',
@@ -110,9 +132,8 @@ async function run() {
       category: 'grade',
       metadata: {},
       channel: 'push',
-    }, { dedupeKey: invalidTokenKey, maxAttempts: 3 });
+    }, { maxAttempts: 3 });
 
-    assert.equal(await invalidTokenDelivery, 'permanent_failure', 'Invalid device tokens should be reported as permanent failures');
     await delay(500);
 
     assert.strictEqual(invalidJobCount, 1, 'Invalid token job should run exactly once');
@@ -178,147 +199,124 @@ async function run() {
     assert.ok(temporaryAttempts >= 2, 'Temporary error should retry at least once');
     assert.strictEqual(deadLetterQueue.length, 0, 'Temporary error should not go directly to DLQ');
 
+    // A queued job reserves its key while another job is processing.
     await resetQueue();
-    const confirmedKey = 'grouped-publication-17-notification-91-push-token';
-    (QueueManager as any).executeJobLogic = async () => undefined;
-    const confirmedDelivery = QueueManager.waitForDedupeKey(confirmedKey);
-    QueueManager.addJob('send-notification-push', {
-      parentId: 'parent-grouped',
-      token: 'token-confirmed',
-      title: 'Programme',
-      message: 'Message',
-      category: 'evaluation',
-      metadata: {},
-      channel: 'push',
-    }, { dedupeKey: confirmedKey, maxAttempts: 3 });
-    assert.equal(await confirmedDelivery, 'sent', 'Queue completion should report confirmed provider success');
 
-    await resetQueue();
-    let failedAttempts = 0;
-    const failedKey = 'grouped-publication-18-notification-92-push-token';
-    (QueueManager as any).executeJobLogic = async () => {
-      failedAttempts += 1;
-      throw new Error('Temporary FCM error');
+    const blockerStarted = deferred();
+    const releaseBlocker = deferred();
+    let queuedJobAttempts = 0;
+    const queuedDedupeKey = 'queued-dedupe-key';
+    (QueueManager as any).executeJobLogic = async (job: any) => {
+      if (job.data.token === 'token-blocker') {
+        blockerStarted.resolve();
+        await releaseBlocker.promise;
+        return;
+      }
+      queuedJobAttempts += 1;
     };
-    const failedDelivery = QueueManager.waitForDedupeKey(failedKey);
+
     QueueManager.addJob('send-notification-push', {
-      parentId: 'parent-grouped',
-      token: 'token-failing',
-      title: 'Programme',
+      parentId: 'parent-blocker',
+      token: 'token-blocker',
+      title: 'Titre',
       message: 'Message',
-      category: 'evaluation',
-      metadata: {},
       channel: 'push',
-    }, { dedupeKey: failedKey, maxAttempts: 2 });
-    assert.equal(await failedDelivery, 'retryable_failure', 'Exhausted queue retries should be surfaced to the outbox');
-    assert.equal(failedAttempts, 2, 'Dispatcher outcome should wait until the queue retry policy is exhausted');
+    });
+    await blockerStarted.promise;
 
-    (QueueManager as any).executeJobLogic = async () => undefined;
-    const retryAfterExhaustionJobId = QueueManager.addJob('send-notification-push', {
-      parentId: 'parent-grouped',
-      token: 'token-failing',
-      title: 'Programme',
+    QueueManager.addJob('send-notification-push', {
+      parentId: 'parent-queued',
+      token: 'token-queued',
+      title: 'Titre',
       message: 'Message',
-      category: 'evaluation',
-      metadata: {},
       channel: 'push',
-    }, { dedupeKey: failedKey, maxAttempts: 2 });
-    assert.ok(
-      !retryAfterExhaustionJobId.startsWith('queued-') && !retryAfterExhaustionJobId.startsWith('skipped-'),
-      'A retryable terminal failure should release its deduplication key for a later dispatch',
-    );
-    const retryAfterExhaustion = QueueManager.waitForDedupeKey(failedKey);
-    assert.equal(await retryAfterExhaustion, 'sent', 'A later dispatch should be able to complete after retries are exhausted');
+    }, { dedupeKey: queuedDedupeKey });
+    const queuedDuplicateId = QueueManager.addJob('send-notification-push', {
+      parentId: 'parent-queued',
+      token: 'token-queued',
+      title: 'Titre',
+      message: 'Message',
+      channel: 'push',
+    }, { dedupeKey: queuedDedupeKey });
 
+    assert.equal(queuedDuplicateId, `queued-${queuedDedupeKey}`);
+    assert.equal(activeQueue.filter((job) => job.dedupeKey === queuedDedupeKey).length, 1);
+    releaseBlocker.resolve();
+    await delay(500);
+    assert.equal(queuedJobAttempts, 1, 'A duplicate queued request must not execute twice');
+
+    // The reservation also remains active after the job leaves activeQueue to execute.
     await resetQueue();
-    const executionStarted = deferred<void>();
-    const finishExecution = deferred<void>();
+
+    const executionStarted = deferred();
+    const finishExecution = deferred();
     let concurrentExecutionCount = 0;
+    const concurrentKey = 'in-flight-dedupe-key';
     (QueueManager as any).executeJobLogic = async () => {
       concurrentExecutionCount += 1;
       executionStarted.resolve();
       await finishExecution.promise;
     };
-    const concurrentKey = 'grouped-publication-concurrent-key';
-    const firstConcurrentDelivery = QueueManager.waitForDedupeKey(concurrentKey);
-    try {
-      QueueManager.addJob('send-notification-push', {
-        parentId: 'parent-grouped',
-        token: 'token-concurrent',
-        title: 'Programme',
-        message: 'Message',
-        category: 'evaluation',
-        metadata: {},
-        channel: 'push',
-      }, { dedupeKey: concurrentKey, maxAttempts: 2 });
-      await executionStarted.promise;
 
-      const duplicateConcurrentDelivery = QueueManager.waitForDedupeKey(concurrentKey);
-      const duplicateJobId = QueueManager.addJob('send-notification-push', {
-        parentId: 'parent-grouped',
-        token: 'token-concurrent',
-        title: 'Programme',
-        message: 'Message',
-        category: 'evaluation',
-        metadata: {},
-        channel: 'push',
-      }, { dedupeKey: concurrentKey, maxAttempts: 2 });
-      assert.equal(duplicateJobId, `queued-${concurrentKey}`, 'A duplicate request during execution should reuse the reserved job');
+    QueueManager.addJob('send-notification-push', {
+      parentId: 'parent-concurrent',
+      token: 'token-concurrent',
+      title: 'Titre',
+      message: 'Message',
+      channel: 'push',
+    }, { dedupeKey: concurrentKey });
+    await executionStarted.promise;
+    const concurrentDuplicateId = QueueManager.addJob('send-notification-push', {
+      parentId: 'parent-concurrent',
+      token: 'token-concurrent',
+      title: 'Titre',
+      message: 'Message',
+      channel: 'push',
+    }, { dedupeKey: concurrentKey });
 
-      finishExecution.resolve();
-      assert.deepEqual(
-        await Promise.all([firstConcurrentDelivery, duplicateConcurrentDelivery]),
-        ['sent', 'sent'],
-        'Concurrent callers should receive the existing job outcome',
-      );
-      assert.equal(concurrentExecutionCount, 1, 'Only the original job should execute for a reserved key');
-    } finally {
-      finishExecution.resolve();
-    }
+    assert.equal(concurrentDuplicateId, `queued-${concurrentKey}`);
+    finishExecution.resolve();
+    await delay(300);
+    assert.equal(concurrentExecutionCount, 1, 'An in-flight job must not be accepted a second time');
+    assert.equal(completedJobIds.has(concurrentKey), true);
 
+    // A transient failure retains its reservation through the scheduled retry.
     await resetQueue();
-    const retryExecutionStarted = deferred<void>();
-    const finishRetryExecution = deferred<void>();
+
+    const retryStarted = deferred();
+    const finishRetry = deferred();
     let retryReservationAttempts = 0;
+    const retryDedupeKey = 'retry-reservation-key';
     (QueueManager as any).executeJobLogic = async () => {
       retryReservationAttempts += 1;
       if (retryReservationAttempts === 1) {
         throw new Error('Temporary FCM error');
       }
-      retryExecutionStarted.resolve();
-      await finishRetryExecution.promise;
+      retryStarted.resolve();
+      await finishRetry.promise;
     };
-    const retryReservationKey = 'grouped-publication-retry-reservation';
-    const retryReservationDelivery = QueueManager.waitForDedupeKey(retryReservationKey);
-    QueueManager.addJob('send-notification-push', {
-      parentId: 'parent-grouped',
-      token: 'token-retry-reservation',
-      title: 'Programme',
-      message: 'Message',
-      category: 'evaluation',
-      metadata: {},
-      channel: 'push',
-    }, { dedupeKey: retryReservationKey, maxAttempts: 2 });
-    await retryExecutionStarted.promise;
 
-    const retryDuplicateDelivery = QueueManager.waitForDedupeKey(retryReservationKey);
-    const retryDuplicateJobId = QueueManager.addJob('send-notification-push', {
-      parentId: 'parent-grouped',
-      token: 'token-retry-reservation',
-      title: 'Programme',
+    QueueManager.addJob('send-notification-push', {
+      parentId: 'parent-retry',
+      token: 'token-retry',
+      title: 'Titre',
       message: 'Message',
-      category: 'evaluation',
-      metadata: {},
       channel: 'push',
-    }, { dedupeKey: retryReservationKey, maxAttempts: 2 });
-    assert.equal(retryDuplicateJobId, `queued-${retryReservationKey}`, 'The dedupe key should remain reserved during retry execution');
-    finishRetryExecution.resolve();
-    assert.deepEqual(
-      await Promise.all([retryReservationDelivery, retryDuplicateDelivery]),
-      ['sent', 'sent'],
-      'Both callers should receive the retrying job outcome',
-    );
-    assert.equal(retryReservationAttempts, 2, 'The retry should execute once without creating a duplicate job');
+    }, { dedupeKey: retryDedupeKey, maxAttempts: 2 });
+    await retryStarted.promise;
+    const retryDuplicateId = QueueManager.addJob('send-notification-push', {
+      parentId: 'parent-retry',
+      token: 'token-retry',
+      title: 'Titre',
+      message: 'Message',
+      channel: 'push',
+    }, { dedupeKey: retryDedupeKey, maxAttempts: 2 });
+    assert.equal(retryDuplicateId, `queued-${retryDedupeKey}`);
+    finishRetry.resolve();
+    await delay(300);
+    assert.equal(retryReservationAttempts, 2, 'A duplicate must not bypass a scheduled retry');
+    assert.equal(completedJobIds.has(retryDedupeKey), true);
+    assert.equal(deadLetterQueue.length, 0);
 
     // Case 4: parent with 3 tokens, only invalid B removed
     deletedTokens.length = 0;
@@ -346,6 +344,49 @@ async function run() {
     assert.deepStrictEqual(deletedTokens, [{ parentId, token: 'token-b' }], 'Only invalid token B should be deleted');
     assert.deepStrictEqual(executionOrder.sort(), ['token-a', 'token-b', 'token-c'].sort(), 'All three tokens must be processed');
     assert.strictEqual(deadLetterQueue.length, 0, 'None of the three jobs should go to DLQ');
+
+    // Case 5: permanent credential mismatch -> DLQ once, without retry or token deletion
+    deletedTokens.length = 0;
+    await resetQueue();
+
+    let credentialAttempts = 0;
+    const mismatchDedupeKey = 'late-arrival-credential-mismatch';
+    (QueueManager as any).executeJobLogic = async () => {
+      credentialAttempts += 1;
+      throw {
+        name: 'FirebaseMessagingError',
+        code: 'messaging/mismatched-credential',
+      };
+    };
+
+    QueueManager.addJob('send-notification-push', {
+      parentId: 'parent-mismatch',
+      token: 'token-mismatch',
+      title: 'Retard',
+      message: 'Retard enregistré',
+      category: 'absence',
+      metadata: { target: 'late-arrival' },
+      channel: 'push',
+    }, { maxAttempts: 3, dedupeKey: mismatchDedupeKey });
+
+    await delay(400);
+
+    assert.strictEqual(credentialAttempts, 1, 'Permanent credential errors must not be retried');
+    assert.deepStrictEqual(deletedTokens, [], 'Credential errors must not delete the device token');
+    assert.strictEqual(activeQueue.length, 0, 'Permanent credential job must leave the active queue');
+    assert.strictEqual(deadLetterQueue.length, 1, 'Permanent credential job must be routed to DLQ');
+    assert.strictEqual(completedJobIds.has(mismatchDedupeKey), true, 'A permanent failure must retain its deduplication key');
+    const duplicateAfterDlqId = QueueManager.addJob('send-notification-push', {
+      parentId: 'parent-mismatch',
+      token: 'token-mismatch',
+      title: 'Retard',
+      message: 'Retard enregistré',
+      category: 'absence',
+      metadata: { target: 'late-arrival' },
+      channel: 'push',
+    }, { maxAttempts: 3, dedupeKey: mismatchDedupeKey });
+    assert.equal(duplicateAfterDlqId, `skipped-${mismatchDedupeKey}`);
+    assert.strictEqual(credentialAttempts, 1, 'A permanently failed DLQ job must not be re-enqueued');
   } finally {
     (QueueManager as any).executeJobLogic = originalExecuteJobLogic;
     store.deletePushToken = originalDeletePushToken;

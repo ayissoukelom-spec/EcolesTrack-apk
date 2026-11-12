@@ -24,6 +24,7 @@ import { createMobileRequireAuth } from "./backend/sessionAuthorization";
 import { registerChildPhotoRoutes } from "./backend/mobilePhotoRoutes";
 import { registerParentWhatsAppRoute } from "./backend/parentWhatsAppRoute";
 import { AbsenceJustificationAlreadyRejectedError } from "./backend/absenceJustification";
+import { relayLateArrivalJustification } from "./backend/lateArrivalJustificationRelay";
 import { withTemporaryUploadCleanup } from "./backend/temporaryUploadCleanup";
 import { AbsenceDeclarationRelayError, relayAbsenceDeclaration } from "./backend/absenceDeclarations";
 import { dbQuery, initializeMobileTables } from "./backend/postgres";
@@ -164,6 +165,89 @@ async function forwardAbsenceJustificationToWeb(absenceId: string, parentId: str
     }
     throw new Error(`Web justification upload failed with status ${response.status}`);
   }
+}
+
+function signInternalRequest(payload: object): { signature: string; timestamp: string } {
+  const internalSecret = process.env.INTERNAL_SECRET;
+  if (!internalSecret || !internalSecret.trim()) {
+    throw new Error("INTERNAL_SECRET is not configured");
+  }
+  const timestamp = Date.now().toString();
+  const hmac = crypto.createHmac("sha256", internalSecret);
+  hmac.update(`${JSON.stringify(payload)}${timestamp}`);
+  return { signature: hmac.digest("hex"), timestamp };
+}
+
+async function forwardLateArrivalJustificationToWeb(
+  lateArrivalId: string,
+  parentId: string,
+  justificationReason: string,
+  uploadedFiles: Express.Multer.File[],
+) {
+  const targetBaseUrl = webBackendUrl();
+  if (!targetBaseUrl) throw new Error("WEB_BACKEND_URL is not configured");
+
+  const files = await Promise.all(uploadedFiles.map(async (file) => {
+    const buffer = await fsPromises.readFile(file.path);
+    return {
+      file,
+      buffer,
+      metadata: {
+        fileName: file.originalname,
+        fileMimeType: file.mimetype,
+        fileSize: String(file.size),
+        fileSha256: crypto.createHash("sha256").update(buffer).digest("hex"),
+      },
+    };
+  }));
+  const payload = {
+    lateArrivalId: String(lateArrivalId),
+    parentId: String(parentId),
+    justificationReason,
+    files: files.map(({ metadata }) => metadata),
+  };
+  const { signature, timestamp } = signInternalRequest(payload);
+  const formData = new FormData();
+  formData.append("lateArrivalId", payload.lateArrivalId);
+  formData.append("parentId", payload.parentId);
+  formData.append("justificationReason", payload.justificationReason);
+  formData.append("filesMetadata", JSON.stringify(payload.files));
+  files.forEach(({ file, buffer }) => {
+    formData.append("files", new Blob([buffer], { type: file.mimetype }), file.originalname);
+  });
+
+  return fetch(`${targetBaseUrl}/api/internal/late-arrival-justification`, {
+    method: "POST",
+    headers: {
+      "X-Internal-Signature": signature,
+      "X-Internal-Timestamp": timestamp,
+    },
+    body: formData,
+  });
+}
+
+async function fetchLateArrivalJustificationFileFromWeb(
+  lateArrivalId: string,
+  parentId: string,
+  fileId: string,
+) {
+  const targetBaseUrl = webBackendUrl();
+  if (!targetBaseUrl) throw new Error("WEB_BACKEND_URL is not configured");
+  const payload = {
+    lateArrivalId: String(lateArrivalId),
+    parentId: String(parentId),
+    fileId: String(fileId),
+  };
+  const { signature, timestamp } = signInternalRequest(payload);
+  return fetch(`${targetBaseUrl}/api/internal/late-arrival-justification-file`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Internal-Signature": signature,
+      "X-Internal-Timestamp": timestamp,
+    },
+    body: JSON.stringify(payload),
+  });
 }
 
 app.use(express.json());
@@ -627,6 +711,46 @@ app.get("/api/mobile/parent/children/:childId/absences", requireAuth, requirePar
   return res.json(absences);
 });
 
+app.get(
+  "/api/mobile/parent/late-arrivals/:lateArrivalId/justification/files/:fileId",
+  requireAuth,
+  requireParentRoleOnly,
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      const { lateArrivalId, fileId } = req.params;
+      if (![lateArrivalId, fileId].every((value) => /^\d+$/.test(value) && Number(value) > 0)) {
+        return res.status(400).json({ error: "Identifiant de retard ou de fichier invalide." });
+      }
+
+      const response = await fetchLateArrivalJustificationFileFromWeb(
+        lateArrivalId,
+        req.parent!.id,
+        fileId,
+      );
+      if (!response.ok) {
+        const responseBody = await response.text();
+        let payload: unknown;
+        try {
+          payload = JSON.parse(responseBody);
+        } catch {
+          payload = { error: "Le justificatif n'est pas disponible." };
+        }
+        return res.status(response.status).json(payload);
+      }
+
+      const contentType = response.headers.get("content-type");
+      const contentDisposition = response.headers.get("content-disposition");
+      if (contentType) res.setHeader("Content-Type", contentType);
+      if (contentDisposition) res.setHeader("Content-Disposition", contentDisposition);
+      res.setHeader("Cache-Control", "private, no-store");
+      return res.status(200).send(Buffer.from(await response.arrayBuffer()));
+    } catch (error: any) {
+      console.error("Failed to download late-arrival justification file:", error?.name || "Unknown error");
+      return res.status(502).json({ error: "Le justificatif n'a pas pu être téléchargé." });
+    }
+  },
+);
+
 const toMobileAbsenceDeclaration = (row: any) => row && ({
   id: String(row.id),
   childId: String(row.studentId),
@@ -663,7 +787,14 @@ app.post("/api/mobile/parent/absence-declarations", requireAuth, requireParentRo
       process.env.INTERNAL_SECRET || "",
       req.parent!.id,
       "create",
-      { studentId: Number(input.childId), date: input.date, startTime: input.startTime, endTime: input.endTime, reason: input.reason },
+      {
+        studentId: Number(input.childId),
+        ...(input.schoolId == null ? {} : { schoolId: input.schoolId }),
+        date: input.date,
+        startTime: input.startTime,
+        endTime: input.endTime,
+        reason: input.reason,
+      },
     );
     return res.status(result.status).json(toMobileAbsenceDeclaration(result.body));
   } catch (error: any) {
@@ -682,7 +813,15 @@ app.put("/api/mobile/parent/absence-declarations/:id", requireAuth, requireParen
       process.env.INTERNAL_SECRET || "",
       req.parent!.id,
       "update",
-      { id: req.params.id, studentId: Number(input.childId), date: input.date, startTime: input.startTime, endTime: input.endTime, reason: input.reason },
+      {
+        id: req.params.id,
+        studentId: Number(input.childId),
+        ...(input.schoolId == null ? {} : { schoolId: input.schoolId }),
+        date: input.date,
+        startTime: input.startTime,
+        endTime: input.endTime,
+        reason: input.reason,
+      },
     );
     return res.json(toMobileAbsenceDeclaration(result.body));
   } catch (error: any) {
@@ -822,6 +961,51 @@ app.post("/api/absences/:id/justifications", requireAuth, requireParentRoleOnly,
     });
   }
 });
+
+app.post(
+  "/api/mobile/parent/late-arrivals/:id/justification",
+  requireAuth,
+  requireParentRoleOnly,
+  handleAbsenceJustificationUpload,
+  async (req: AuthenticatedRequest, res) => {
+    const uploadedFiles = ((req as any).uploadedFiles ?? []) as Express.Multer.File[];
+    return withTemporaryUploadCleanup(uploadedFiles, uploadStorageDir, async () => {
+      const lateArrivalId = String(req.params.id);
+      const parentId = req.parent!.id;
+      const justificationReason = typeof req.body?.justificationReason === "string"
+        ? req.body.justificationReason.trim()
+        : "";
+      if (!/^\d+$/.test(lateArrivalId) || Number(lateArrivalId) <= 0) {
+        return res.status(400).json({ error: "Identifiant de retard invalide." });
+      }
+      if (!justificationReason || justificationReason.length > 2000) {
+        return res.status(400).json({ error: "Veuillez saisir un motif de justification de 2000 caractères maximum." });
+      }
+      if (uploadedFiles.length > MAX_ABSENCE_ATTACHMENT_COUNT) {
+        return res.status(400).json({
+          error: `Vous pouvez joindre jusqu'à ${MAX_ABSENCE_ATTACHMENT_COUNT} fichiers maximum.`,
+          code: "JUSTIFICATION_FILE_LIMIT_EXCEEDED"
+        });
+      }
+
+      const relayResult = await relayLateArrivalJustification(
+        () => forwardLateArrivalJustificationToWeb(
+          lateArrivalId,
+          parentId,
+          justificationReason,
+          uploadedFiles,
+        ),
+        (error) => {
+          console.error(
+            "Failed to forward late-arrival justification to Web backend:",
+            error instanceof Error ? error.name : "Unknown error",
+          );
+        },
+      );
+      return res.status(relayResult.status).json(relayResult.payload);
+    });
+  },
+);
 
 // 6. GET /api/mobile/parent/children/:childId/grades
 app.get("/api/mobile/parent/children/:childId/grades", requireAuth, requireParentRoleOnly, async (req: AuthenticatedRequest, res) => {
@@ -1303,52 +1487,20 @@ app.post("/api/internal/evaluation-notification", verifyInternalAuth, async (req
       parentId,
       title,
       message,
-      category = "evaluation",
       metadata = {},
       dedupeKey
     } = req.body;
+    const requestedCategory: unknown = req.body?.category;
 
     if (!parentId || !title || !message) {
       return res.status(400).json({
         error: "Missing notification parameters"
       });
     }
-
-    if (req.body?.groupedDelivery === true) {
-      if (
-        category !== "evaluation"
-        || !metadata
-        || !Number.isInteger(metadata.notificationId)
-        || metadata.notificationId <= 0
-        || !Number.isInteger(metadata.publicationId)
-        || metadata.publicationId <= 0
-      ) {
-        return res.status(400).json({
-          error: "Invalid grouped publication push parameters",
-          code: "INVALID_GROUPED_PUBLICATION_PUSH"
-        });
-      }
-
-      const dispatchResult = await NotificationService.dispatchNotification(
-        String(parentId),
-        title,
-        message,
-        category,
-        metadata,
-        dedupeKey,
-        { pushOnly: true, awaitPushDelivery: true }
-      );
-      if (
-        dispatchResult.deliveryOutcome !== 'sent'
-        && dispatchResult.deliveryOutcome !== 'retryable_failure'
-        && dispatchResult.deliveryOutcome !== 'permanent_failure'
-        && dispatchResult.deliveryOutcome !== 'no_subscription'
-      ) {
-        throw new Error('Notification dispatcher did not return a provider delivery outcome.');
-      }
-      return res.json({
-        success: true,
-        delivery: { outcome: dispatchResult.deliveryOutcome },
+    if (requestedCategory !== undefined && requestedCategory !== "evaluation") {
+      return res.status(400).json({
+        error: "Invalid notification category",
+        code: "INVALID_NOTIFICATION_CATEGORY"
       });
     }
 
@@ -1356,7 +1508,7 @@ app.post("/api/internal/evaluation-notification", verifyInternalAuth, async (req
       String(parentId),
       title,
       message,
-      category,
+      "evaluation",
       metadata,
       dedupeKey
     );

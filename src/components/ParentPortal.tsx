@@ -11,8 +11,13 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import logoImage from "../assets/logo.png";
 import ThemeToggle from "./ThemeToggle";
-import { Parent, Child, Absence, AbsenceDeclaration, Grade, AppNotification, ChildGradesResponse } from "../types";
+import { Parent, Child, Absence, AbsenceDeclaration, Grade, AppNotification, ChildGradesResponse, JustificationFile } from "../types";
 import { getApiErrorMessage, parseJsonSafe, withApiBase } from "../utils/http";
+import {
+  getAttendanceJustificationCopy,
+  getAttendanceJustificationRequest,
+} from "../utils/attendanceJustification";
+import { AttendanceJustificationButton } from "./AttendanceJustificationButton";
 import { getDisabledParentMessage } from "../utils/parentSession";
 import { classifyParentNotification } from "../utils/notificationCategory";
 import { getSchoolPeriodLabel, isGradeInSchoolPeriod, SCHOOL_PERIOD_FALLBACK_LABEL } from "../utils/schoolPeriod";
@@ -33,6 +38,7 @@ interface ParentPortalProps {
   notifications: AppNotification[];
   fetchNotifications: () => void;
   notificationAlertMenu?: "notes" | "homework" | "absences" | "info" | null;
+  notificationDispatchId?: string | null;
 }
 
 const formatChildName = (child: Pick<Child, "firstName" | "lastName"> | null | undefined): string => (
@@ -52,7 +58,8 @@ export default function ParentPortal({
   setSelectedChild,
   notifications,
   fetchNotifications,
-  notificationAlertMenu
+  notificationAlertMenu,
+  notificationDispatchId,
 }: ParentPortalProps) {
   // APK debug: log incoming props
   console.log('[APK DEBUG] ParentPortal props', JSON.stringify({ notifications }, null, 2));
@@ -85,6 +92,7 @@ export default function ParentPortal({
   const [whatsappUrl, setWhatsappUrl] = useState<string | null>(null);
   const [isLoadingWhatsAppContact, setIsLoadingWhatsAppContact] = useState(false);
   const [absences, setAbsences] = useState<Absence[]>([]);
+  const [lateArrivals, setLateArrivals] = useState<Absence[]>([]);
   const [absenceDeclarations, setAbsenceDeclarations] = useState<AbsenceDeclaration[]>([]);
   const [showAbsenceDeclarationForm, setShowAbsenceDeclarationForm] = useState(false);
   const [editingAbsenceDeclarationId, setEditingAbsenceDeclarationId] = useState<string | null>(null);
@@ -105,6 +113,8 @@ export default function ParentPortal({
   const [readOverrides, setReadOverrides] = useState<Set<string>>(new Set());
   const [downloadingAttachmentKey, setDownloadingAttachmentKey] = useState<string | null>(null);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [downloadingJustificationFileKey, setDownloadingJustificationFileKey] = useState<string | null>(null);
+  const [justificationFileError, setJustificationFileError] = useState<{ key: string; message: string } | null>(null);
   const hasCompletedProtectedLoadRef = useRef(false);
 
   // Keep a local copy of notifications so the badge updates immediately.
@@ -136,6 +146,7 @@ export default function ParentPortal({
   const [justificationAttachments, setJustificationAttachments] = useState<File[]>([]);
   const [isJustifying, setIsJustifying] = useState(false);
   const [justificationError, setJustificationError] = useState<string | null>(null);
+  const [justificationConfirmation, setJustificationConfirmation] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const childPhotoInputRef = useRef<HTMLInputElement | null>(null);
@@ -250,6 +261,7 @@ export default function ParentPortal({
   const handleSessionExpired = (message?: string) => {
     setChildren([]);
     setAbsences([]);
+    setLateArrivals([]);
     setAbsenceDeclarations([]);
     setGrades([]);
     setTermAverageApi(null);
@@ -505,6 +517,8 @@ export default function ParentPortal({
   const selectedChildId = selectedChild?.id;
   useEffect(() => {
     if (token && selectedChildId) {
+      setAbsences([]);
+      setLateArrivals([]);
       fetchChildAbsences(selectedChildId);
       fetchAbsenceDeclarations();
       fetchChildGrades(selectedChildId);
@@ -746,6 +760,7 @@ export default function ParentPortal({
 
   const handleOpenJustificationModal = (absence: Absence) => {
     setJustificationError(null);
+    setJustificationConfirmation(null);
     setJustificationReason("");
     setShowJustificationModal(absence);
   };
@@ -762,8 +777,9 @@ export default function ParentPortal({
 
   const submitAbsenceJustification = async () => {
     if (!showJustificationModal) return;
+    const copy = getAttendanceJustificationCopy(showJustificationModal.eventType);
     if (!justificationReason.trim()) {
-      setJustificationError("Veuillez saisir un motif de justification.");
+      setJustificationError(copy.missingReason);
       return;
     }
 
@@ -777,19 +793,22 @@ export default function ParentPortal({
 
     try {
       const hasAttachments = justificationAttachments.length > 0;
-      const requestUrl = `/api/absences/${showJustificationModal.id}` + (hasAttachments ? "/justifications" : "/justify");
-      const method = hasAttachments ? "POST" : "PUT";
+      const request = getAttendanceJustificationRequest(
+        showJustificationModal.eventType,
+        showJustificationModal.id,
+        hasAttachments,
+      );
 
       const response = await performProtectedRequest((authToken) => {
-        if (hasAttachments) {
+        if (request.useMultipart) {
           const formData = new FormData();
           justificationAttachments.forEach((file) => {
             formData.append("files", file);
           });
           formData.append("justificationReason", justificationReason.trim());
 
-          return fetch(withApiBase(requestUrl), {
-            method,
+          return fetch(withApiBase(request.url), {
+            method: request.method,
             headers: {
               "Authorization": `Bearer ${authToken}`
             },
@@ -797,8 +816,8 @@ export default function ParentPortal({
           });
         }
 
-        return fetch(withApiBase(requestUrl), {
-          method,
+        return fetch(withApiBase(request.url), {
+          method: request.method,
           headers: {
             "Authorization": `Bearer ${authToken}`,
             "Content-Type": "application/json"
@@ -808,54 +827,64 @@ export default function ParentPortal({
       });
 
       if (!response) {
-        throw new Error("Impossible de justifier l'absence pour le moment.");
+        throw new Error(copy.requestError);
       }
       const data = await parseJsonSafe(response);
       if (!response.ok) {
-        throw new Error(getApiErrorMessage(data, "Impossible de justifier l'absence."));
+        throw new Error(getApiErrorMessage(data, copy.requestError));
       }
 
-      await fetchChildAbsences(String(showJustificationModal.childId));
+      const refreshed = await fetchChildAbsences(String(showJustificationModal.childId));
+      setJustificationConfirmation(refreshed ? copy.submitted : copy.submittedRefreshPending);
       handleCloseJustificationModal();
     } catch (err: any) {
       console.error("[APK JUSTIFY ERROR]", err);
-      setJustificationError(err?.message || "Erreur lors de la justification.");
+      setJustificationError(err?.message || copy.requestError);
     } finally {
       setIsJustifying(false);
     }
   };
 
   // API Call: Fetch Child Absences
-  const fetchChildAbsences = async (childId: string) => {
+  const fetchChildAbsences = async (childId: string): Promise<boolean> => {
     try {
       console.log("[AUTH_DEBUG] fetchChildAbsences starting", { childId, tokenPresent: !!token, tokenLength: token?.length });
       const response = await performProtectedRequest((authToken) => fetch(withApiBase(`/api/mobile/parent/children/${childId}/absences`), {
         headers: { "Authorization": `Bearer ${authToken}` }
       }));
       if (!response) {
-        return;
+        return false;
       }
       if (response.ok) {
         hasCompletedProtectedLoadRef.current = true;
         const data = await parseJsonSafe<Absence[]>(response);
-        // Sort absences by date descending (most recent first)
-        const sortedAbsences = Array.isArray(data)
+        const sortedAttendance = Array.isArray(data)
           ? [...data].sort((a, b) => {
-        const dateDiff = new Date(b.date).getTime() - new Date(a.date).getTime();
-
-        if (dateDiff !== 0) {
-        return dateDiff;
+              const dateDiff = new Date(b.date).getTime() - new Date(a.date).getTime();
+              if (dateDiff !== 0) return dateDiff;
+              const idDiff = Number(b.id) - Number(a.id);
+              if (idDiff !== 0) return idDiff;
+              return (a.eventType || "absence").localeCompare(b.eventType || "absence");
+            })
+          : [];
+        setAbsences(sortedAttendance.filter((record) => record.eventType !== "late"));
+        setLateArrivals(sortedAttendance.filter((record) => record.eventType === "late"));
+        return true;
       }
-
-      return Number(b.id) - Number(a.id);
-    })
-  : [];
-        setAbsences(sortedAbsences);
-      }
+      return false;
     } catch (e) {
       console.error("Failed to fetch absences", e);
+      return false;
     }
   };
+
+  useEffect(() => {
+    if (token && selectedChildId && (
+      childDetailTab === "absences" || notificationAlertMenu === "absences"
+    )) {
+      fetchChildAbsences(selectedChildId);
+    }
+  }, [token, selectedChildId, childDetailTab, notificationAlertMenu, notificationDispatchId]);
 
   const fetchAbsenceDeclarations = async () => {
     try {
@@ -1077,6 +1106,16 @@ export default function ParentPortal({
   const currentTrimesterAbsences = useMemo(
     () => absences.filter((absence) => new Date(absence.date).getTime() >= trimesterStart.getTime()),
     [absences, trimesterStart]
+  );
+  const attendanceRecords = useMemo(
+    () => [...absences, ...lateArrivals].sort((a, b) => {
+      const dateDiff = new Date(b.date).getTime() - new Date(a.date).getTime();
+      if (dateDiff !== 0) return dateDiff;
+      const idDiff = Number(b.id) - Number(a.id);
+      if (idDiff !== 0) return idDiff;
+      return (a.eventType || "absence").localeCompare(b.eventType || "absence");
+    }),
+    [absences, lateArrivals]
   );
 
   const absenceCount = currentTrimesterAbsences.length;
@@ -1338,6 +1377,66 @@ export default function ParentPortal({
       }
     } finally {
       setDownloadingAttachmentKey(null);
+    }
+  };
+
+  const handleJustificationFileDownload = async (record: Absence, file: JustificationFile) => {
+    const key = `${record.id}-${file.id}`;
+    setJustificationFileError(null);
+    setDownloadingJustificationFileKey(key);
+    try {
+      const response = await performProtectedRequest((authToken) => fetch(withApiBase(
+        `/api/mobile/parent/late-arrivals/${record.id}/justification/files/${file.id}`,
+      ), {
+        headers: { "Authorization": `Bearer ${authToken}` },
+      }));
+      if (!response?.ok) {
+        throw Object.assign(new Error("download"), { status: response?.status });
+      }
+
+      const blob = await response.blob();
+      if (!blob.size) throw new Error("empty-file");
+
+      const nativeBridge = (window as Window & {
+        AndroidCamera?: { openDownloadedFile?: (base64: string, fileName: string, mimeType: string) => boolean };
+      }).AndroidCamera;
+      if (typeof nativeBridge?.openDownloadedFile === "function") {
+        const base64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const result = typeof reader.result === "string" ? reader.result : "";
+            const commaIndex = result.indexOf(",");
+            if (commaIndex < 0) {
+              reject(new Error("invalid-file"));
+              return;
+            }
+            resolve(result.slice(commaIndex + 1));
+          };
+          reader.onerror = () => reject(new Error("invalid-file"));
+          reader.readAsDataURL(blob);
+        });
+        if (!nativeBridge.openDownloadedFile(base64, file.fileName, file.mimeType)) {
+          throw new Error("unsupported-file");
+        }
+      } else {
+        const objectUrl = URL.createObjectURL(blob);
+        const downloadLink = document.createElement("a");
+        downloadLink.href = objectUrl;
+        downloadLink.download = file.fileName;
+        document.body.appendChild(downloadLink);
+        downloadLink.click();
+        downloadLink.remove();
+        window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+      }
+    } catch (error: any) {
+      const message = error?.status === 403
+        ? "Vous n'avez pas accès à ce justificatif."
+        : error?.status === 404
+          ? "Ce justificatif n'est plus disponible."
+          : "Impossible de télécharger le justificatif.";
+      setJustificationFileError({ key, message });
+    } finally {
+      setDownloadingJustificationFileKey(null);
     }
   };
 
@@ -1925,9 +2024,11 @@ export default function ParentPortal({
                       >
                         <div className="flex items-start justify-between gap-4 mb-4">
                           <div>
-                            <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">Justifier l'absence</h2>
+                            <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                              {getAttendanceJustificationCopy(showJustificationModal.eventType).dialogTitle}
+                            </h2>
                             <p className="text-[11px] text-slate-600 dark:text-slate-400 mt-1">
-                              {formatChildName(currentChild) || "Motif de l'absence"}
+                              {formatChildName(currentChild) || "Motif de justification"}
                             </p>
                           </div>
                           <button
@@ -1941,13 +2042,13 @@ export default function ParentPortal({
                         <textarea
                           value={justificationReason}
                           onChange={(event) => setJustificationReason(event.target.value)}
-                          placeholder="Décrivez le motif de justification..."
+                          placeholder={getAttendanceJustificationCopy(showJustificationModal.eventType).reasonPlaceholder}
                           rows={5}
                           className="w-full rounded-2xl border border-slate-300 bg-white p-3 text-sm text-slate-900 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:focus:ring-indigo-500/30"
                         />
                         <div className="mt-4">
                           <label className="mb-2 block text-[11px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400">
-                            Pièce justificative (facultative)
+                            {getAttendanceJustificationCopy(showJustificationModal.eventType).fileLabel}
                           </label>
 
                           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -2056,7 +2157,7 @@ export default function ParentPortal({
                             disabled={isJustifying}
                             className="rounded-2xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-indigo-400"
                           >
-                            {isJustifying ? "Envoi..." : "Envoyer la justification"}
+                            {isJustifying ? "Envoi..." : getAttendanceJustificationCopy(showJustificationModal.eventType).submitLabel}
                           </button>
                         </div>
                       </motion.div>
@@ -2165,7 +2266,7 @@ export default function ParentPortal({
                   )}
                 </section>
                 <div className="flex items-center justify-between">
-                  <h3 className="text-[10px] font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider">Absences de l&apos;élève</h3>
+                  <h3 className="text-[10px] font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider">Absences et retards de l&apos;élève</h3>
                   {currentChild && (
                     <span className="text-[10px] text-indigo-700 dark:text-indigo-400 font-bold">
                       {formatChildName(currentChild)}
@@ -2173,39 +2274,52 @@ export default function ParentPortal({
                   )}
                 </div>
 
-                {absences.length === 0 ? (
+                {justificationConfirmation && (
+                  <p
+                    role="status"
+                    className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/50 dark:text-emerald-200"
+                  >
+                    {justificationConfirmation}
+                  </p>
+                )}
+
+                {attendanceRecords.length === 0 ? (
                   <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 p-8 text-center text-slate-700 dark:text-slate-300 text-xs font-medium">
                     <Bell className="h-8 w-8 text-slate-400 dark:text-slate-500 mx-auto mb-2" />
-                    Aucune absence enregistrée pour cet élève.
+                    Aucune absence ni aucun retard enregistré pour cet élève.
                   </div>
                 ) : (
                   <div className="space-y-2.5">
-                    {absences.map((abs) => {
+                    {attendanceRecords.map((abs) => {
+                      const isLateArrival = abs.eventType === "late";
                       const justificationStatus = abs.justificationStatus ?? (abs.justified ? "APPROVED" : null);
                       const isApproved = justificationStatus === "APPROVED";
                       const isPending = justificationStatus === "PENDING";
                       const isRejected = justificationStatus === "REJECTED";
                       const isParentDeclared = Boolean(abs.declarationId) && !justificationStatus && !abs.justified;
                       return (
-                      <div key={abs.id} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl p-3 shadow-sm">
+                      <div key={`${abs.eventType || "absence"}-${abs.id}`} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl p-3 shadow-sm">
                         <div className="flex items-start justify-between gap-2">
                           <div>
                             <p className="text-[10px] font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
-                              {new Date(abs.date).toLocaleDateString("fr-FR")}
+                              {isLateArrival ? "Retard · " : "Absence · "}{new Date(abs.date).toLocaleDateString("fr-FR")}
                             </p>
                             <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
-  Matière : {abs.subjectName || abs.subject || 'Non précisée'}
-</p>
-
-<p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
-  {abs.startTime && abs.endTime
-    ? `${abs.startTime} - ${abs.endTime}`
-    : abs.period || 'Horaire non précisé'}
-</p>
-
-<h4 className="text-xs font-bold text-slate-900 dark:text-white mt-0.5">
-  Motif : {abs.reason}
-</h4>
+                              Classe : {abs.className || currentChild?.className || 'Non précisée'}
+                            </p>
+                            <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
+                              Matière : {abs.subjectName || abs.subject || 'Non précisée'}
+                            </p>
+                            <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
+                              {abs.startTime && abs.endTime
+                                ? isLateArrival
+                                  ? `Heure prévue ${abs.startTime} · arrivée ${abs.endTime}${abs.lateMinutes != null ? ` · ${abs.lateMinutes} min` : ''}`
+                                  : `${abs.startTime} - ${abs.endTime}`
+                                : abs.period || 'Horaire non précisé'}
+                            </p>
+                            <h4 className="text-xs font-bold text-slate-900 dark:text-white mt-0.5">
+                              Motif : {abs.reason}
+                            </h4>
                           </div>
                           {isPending ? (
                             <span className="shrink-0 text-[10px] font-bold text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-900 px-2 py-0.5 rounded-full">
@@ -2244,6 +2358,7 @@ export default function ParentPortal({
                         {isPending && (
                           <p className="text-[11px] text-amber-700 dark:text-amber-300 mt-2 leading-normal font-medium">
                             Justification en attente de traitement.
+                            {isLateArrival && abs.justificationText ? ` Motif envoyé : ${abs.justificationText}` : ""}
                           </p>
                         )}
                         {isParentDeclared && (
@@ -2256,14 +2371,29 @@ export default function ParentPortal({
                             {abs.justificationText || "Justification acceptée."}
                           </p>
                         )}
+                        {isLateArrival && abs.justificationFiles?.map((file) => {
+                          const fileKey = `${abs.id}-${file.id}`;
+                          return (
+                            <button
+                              key={file.id}
+                              type="button"
+                              disabled={downloadingJustificationFileKey === fileKey}
+                              onClick={() => void handleJustificationFileDownload(abs, file)}
+                              className="mt-2 mr-2 inline-flex items-center gap-1 rounded-lg border border-indigo-200 px-2 py-1 text-[10px] font-semibold text-indigo-700 disabled:opacity-60 dark:border-indigo-800 dark:text-indigo-300"
+                            >
+                              <Paperclip className="h-3 w-3" />
+                              {downloadingJustificationFileKey === fileKey ? "Téléchargement..." : file.fileName}
+                            </button>
+                          );
+                        })}
+                        {justificationFileError?.key.startsWith(`${abs.id}-`) && isLateArrival && (
+                          <p className="mt-2 text-[10px] text-rose-700 dark:text-rose-300">{justificationFileError.message}</p>
+                        )}
                         {!justificationStatus && (
-                          <button
-                            type="button"
+                          <AttendanceJustificationButton
+                            eventType={abs.eventType}
                             onClick={() => handleOpenJustificationModal(abs)}
-                            className="mt-3 w-full rounded-xl bg-indigo-600 text-white text-[10px] font-bold uppercase tracking-wide py-2 transition-colors hover:bg-indigo-700"
-                          >
-                            Justifier cette absence
-                          </button>
+                          />
                         )}
                       </div>
                       );

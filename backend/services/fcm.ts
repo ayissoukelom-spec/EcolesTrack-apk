@@ -72,6 +72,22 @@ export function isInvalidFcmTokenError(error: unknown): boolean {
   return false;
 }
 
+const permanentCredentialErrorCodes = new Set([
+  "messaging/mismatched-credential",
+  "messaging/sender-id-mismatch",
+]);
+
+export function isPermanentFcmCredentialError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const candidate = error as { code?: unknown; errorInfo?: { code?: unknown } | null };
+  const rawCode = candidate.code ?? candidate.errorInfo?.code ?? "";
+  const code = typeof rawCode === "string" ? rawCode.toLowerCase() : "";
+  return permanentCredentialErrorCodes.has(code);
+}
+
 export async function sendPushNotification(
   token: string,
   title: string,

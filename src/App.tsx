@@ -737,6 +737,7 @@ export default function App() {
           notifications={notifications}
           fetchNotifications={fetchNotifications}
           notificationAlertMenu={notificationAlertMenu}
+          notificationDispatchId={notificationDispatchId}
         />
       </div>
     );
@@ -845,6 +846,8 @@ export default function App() {
             setSelectedChild={setSelectedChild}
             notifications={notifications}
             fetchNotifications={fetchNotifications}
+            notificationAlertMenu={notificationAlertMenu}
+            notificationDispatchId={notificationDispatchId}
           />
         </div>
 

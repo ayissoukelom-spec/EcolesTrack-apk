@@ -34,6 +34,7 @@ export interface Child {
 export interface Absence {
   id: string;
   childId: string;
+  eventType?: 'absence' | 'late';
   declarationId?: string;
   date: string;
   reason: string;
@@ -46,6 +47,16 @@ export interface Absence {
   subjectName?: string;
   startTime?: string;
   endTime?: string;
+  className?: string;
+  lateMinutes?: number;
+  justificationFiles?: JustificationFile[];
+}
+
+export interface JustificationFile {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  fileSize: number;
 }
 
 export interface AbsenceDeclaration {

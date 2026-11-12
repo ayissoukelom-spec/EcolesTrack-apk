@@ -46,6 +46,19 @@ test('requires a trimmed nonblank mobile declaration reason and retains its leng
   assert.equal(ParentAbsenceDeclarationSchema.safeParse({ ...base, reason: 'x'.repeat(1001) }).success, false);
 });
 
+test('preserves an optional asserted school id for server-side child-school verification', () => {
+  const parsed = ParentAbsenceDeclarationSchema.safeParse({
+    childId: '15',
+    schoolId: '42',
+    date: '2026-09-30',
+    startTime: '08:00',
+    endTime: '10:00',
+    reason: 'Maladie',
+  });
+  assert.equal(parsed.success, true);
+  if (parsed.success) assert.equal(parsed.data.schoolId, 42);
+});
+
 test('mobile parent declaration UI requires and blocks a blank reason', () => {
   const parentPortal = readFileSync(new URL('../src/components/ParentPortal.tsx', import.meta.url), 'utf8');
   assert.match(parentPortal, /Motif\s*<input required value=\{absenceDeclarationReason\}/);
@@ -69,6 +82,7 @@ test('mobile create and update routes validate the payload before relaying it', 
     const validationIndex = routeBody.indexOf('ParentAbsenceDeclarationSchema.safeParse(req.body)');
     const relayIndex = routeBody.indexOf('relayAbsenceDeclaration(');
     assert.ok(validationIndex >= 0 && relayIndex > validationIndex, `${routeDeclaration} must validate before relay`);
+    assert.match(routeBody, /schoolId:\s*input\.schoolId/);
   }
 });
 
@@ -95,6 +109,7 @@ test('relays parent declaration operations to the Web API with a signed payload'
   assert.equal(payload.parentUserId, '42');
   assert.equal(payload.action, 'create');
   assert.equal(payload.input.studentId, 15);
+  assert.equal(payload.input.schoolId, undefined);
   const timestamp = new Headers(capturedInit?.headers).get('X-Internal-Timestamp');
   const signature = new Headers(capturedInit?.headers).get('X-Internal-Signature');
   const expected = crypto.createHmac('sha256', 'internal-secret').update(`${JSON.stringify(payload)}${timestamp}`).digest('hex');

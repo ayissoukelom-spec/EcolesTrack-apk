@@ -1,3 +1,4 @@
+
 import java.util.Properties
 
 plugins {
@@ -7,6 +8,7 @@ plugins {
 
 def releaseSigningPropertiesFile = rootProject.file('keystore.properties')
 def releaseSigningProperties = new Properties()
+
 if (releaseSigningPropertiesFile.isFile()) {
     releaseSigningPropertiesFile.withInputStream { stream ->
         releaseSigningProperties.load(stream)
@@ -17,11 +19,13 @@ gradle.taskGraph.whenReady { taskGraph ->
     def releaseTasksRequested = taskGraph.allTasks.any { task ->
         task.name.toLowerCase(Locale.ROOT).contains('release')
     }
+
     if (releaseTasksRequested) {
         def requiredProperties = ['storeFile', 'storePassword', 'keyAlias', 'keyPassword']
         def missingProperties = requiredProperties.findAll {
             !releaseSigningProperties.getProperty(it)
         }
+
         if (!missingProperties.isEmpty()) {
             throw new GradleException(
                 "Release signing requires ${missingProperties.join(', ')} in ${releaseSigningPropertiesFile}."
@@ -29,6 +33,7 @@ gradle.taskGraph.whenReady { taskGraph ->
         }
 
         def releaseKeystore = file(releaseSigningProperties.getProperty('storeFile'))
+
         if (!releaseKeystore.isFile()) {
             throw new GradleException("Release keystore does not exist: ${releaseKeystore}.")
         }
@@ -48,8 +53,24 @@ android {
         applicationId "com.ecoletrack.webview"
         minSdk 24
         targetSdk 36
-        versionCode 8
-        versionName "1.0.7"
+        versionCode 10
+        versionName "1.0.9"
+    }
+
+    // Variantes de l'application
+    flavorDimensions "environment"
+
+    productFlavors {
+        production {
+            dimension "environment"
+            // Identifiant de production conservé
+        }
+
+        staging {
+            dimension "environment"
+            applicationIdSuffix ".staging"
+            versionNameSuffix "-staging"
+        }
     }
 
     signingConfigs {
@@ -59,6 +80,7 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+
         release {
             storeFile file(releaseSigningProperties.getProperty('storeFile', 'release.keystore'))
             storePassword releaseSigningProperties.getProperty('storePassword', '')
@@ -71,6 +93,7 @@ android {
         debug {
             signingConfig signingConfigs.debug
         }
+
         release {
             minifyEnabled false
             shrinkResources false
@@ -96,7 +119,32 @@ dependencies {
     testImplementation 'junit:junit:4.13.2'
 }
 
-tasks.register('copyWebAssets') {
+def webProjectDir = rootProject.projectDir.parentFile.parentFile
+def webDistDir = new File(webProjectDir, 'dist')
+def windowsHost = System.getProperty('os.name').toLowerCase(Locale.ROOT).contains('windows')
+
+tasks.register('buildWebBundle', Exec) {
     group = 'build'
-    description = 'Deprecated no-op; Android packages the checked-in assets as-is'
+    description = 'Build the WebView frontend bundle'
+    workingDir webProjectDir
+    if (windowsHost) {
+      commandLine 'cmd', '/c', 'npm run build'
+    } else {
+      commandLine 'npm', 'run', 'build'
+    }
+}
+
+tasks.register('copyWebAssets', Copy) {
+    group = 'build'
+    description = 'Build and copy the WebView frontend bundle into Android assets'
+    dependsOn tasks.named('buildWebBundle')
+    from(webDistDir) {
+      include 'index.html'
+      include 'assets/**'
+    }
+    into file('src/main/assets')
+}
+
+tasks.named('preBuild').configure {
+    dependsOn tasks.named('copyWebAssets')
 }

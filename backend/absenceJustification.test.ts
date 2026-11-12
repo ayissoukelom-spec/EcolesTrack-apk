@@ -94,3 +94,19 @@ test('parent absence response preserves pending review status and rejection reas
   assert.equal(absence.justificationStatus, 'PENDING');
   assert.equal(absence.justificationText, 'Maladie');
 });
+
+test('parent absence response exposes a reexamined approval as justified', () => {
+  const absence = mapParentAbsenceRow({
+    id: 45,
+    student_id: 12,
+    date: '2026-09-26',
+    is_justified: true,
+    justification_reason: 'Maladie',
+    justification_status: 'APPROVED',
+    rejection_reason: null,
+  }, '12');
+
+  assert.equal(absence.justified, true);
+  assert.equal(absence.justificationStatus, 'APPROVED');
+  assert.equal(absence.rejectionReason, undefined);
+});

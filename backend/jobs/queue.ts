@@ -1,5 +1,9 @@
 import { Logger } from "../utils/logger";
-import { sendPushNotification, InvalidFcmTokenError } from "../services/fcm";
+import {
+  sendPushNotification,
+  InvalidFcmTokenError,
+  isPermanentFcmCredentialError,
+} from "../services/fcm";
 import { store } from "../store";
 
 const logger = new Logger("QueueProcessor");
@@ -16,37 +20,13 @@ export interface QueueJob<T = any> {
   errorHistory: Array<{ timestamp: string; message: string }>;
 }
 
-export type PushDeliveryOutcome = 'sent' | 'retryable_failure' | 'permanent_failure';
-
 // In-Memory Storage for Active and Dead-Letter Queues (DLQ)
 export const activeQueue: QueueJob[] = [];
 export const deadLetterQueue: QueueJob[] = [];
 export const completedJobIds = new Set<string>(); // Idempotence check
 
 export class QueueManager {
-  private static readonly dedupeOutcomes = new Map<string, PushDeliveryOutcome>();
-  private static readonly dedupeWaiters = new Map<string, Array<(outcome: PushDeliveryOutcome) => void>>();
   private static readonly reservedDedupeKeys = new Set<string>();
-
-  public static waitForDedupeKey(dedupeKey: string): Promise<PushDeliveryOutcome> {
-    const completedOutcome = this.dedupeOutcomes.get(dedupeKey);
-    if (completedOutcome) return Promise.resolve(completedOutcome);
-
-    return new Promise((resolve) => {
-      const waiters = this.dedupeWaiters.get(dedupeKey) ?? [];
-      waiters.push(resolve);
-      this.dedupeWaiters.set(dedupeKey, waiters);
-    });
-  }
-
-  private static settleDedupeKey(dedupeKey: string | undefined, outcome: PushDeliveryOutcome) {
-    if (!dedupeKey) return;
-    this.reservedDedupeKeys.delete(dedupeKey);
-    this.dedupeOutcomes.set(dedupeKey, outcome);
-    const waiters = this.dedupeWaiters.get(dedupeKey) ?? [];
-    this.dedupeWaiters.delete(dedupeKey);
-    waiters.forEach((resolve) => resolve(outcome));
-  }
 
   /**
    * Add a job to the queue
@@ -103,7 +83,6 @@ export class QueueManager {
       return `queued-${dedupeKey}`;
     }
 
-    if (dedupeKey) this.dedupeOutcomes.delete(dedupeKey);
     if (dedupeKey) this.reservedDedupeKeys.add(dedupeKey);
 
     const job: QueueJob<T> = {
@@ -162,7 +141,7 @@ export class QueueManager {
       // Successfully processed
       if (job.dedupeKey) {
         completedJobIds.add(job.dedupeKey);
-        this.settleDedupeKey(job.dedupeKey, 'sent');
+        this.reservedDedupeKeys.delete(job.dedupeKey);
       }
       if (jobData?.category === "grade" && job.name.startsWith("send-notification-push")) {
         logger.info("grade push sent", {
@@ -214,13 +193,34 @@ export class QueueManager {
 
         if (job.dedupeKey) {
           completedJobIds.add(job.dedupeKey);
-          this.settleDedupeKey(job.dedupeKey, 'permanent_failure');
+          this.reservedDedupeKeys.delete(job.dedupeKey);
         }
 
         return;
       }
 
-      const jobData = job.data as any;
+      if (isPermanentFcmCredentialError(err)) {
+        const errorCode = err?.code ?? err?.errorInfo?.code ?? "FCM_CREDENTIAL_ERROR";
+        logger.error("Permanent FCM credential error; routing job to DLQ without retry", undefined, {
+          jobId: job.id,
+          jobName: job.name,
+          parentId: jobData?.parentId,
+          errorCode,
+        });
+        deadLetterQueue.push(job);
+        if (job.dedupeKey) {
+          completedJobIds.add(job.dedupeKey);
+          this.reservedDedupeKeys.delete(job.dedupeKey);
+        }
+        logger.audit(
+          "JOB_DLQ_ROUTED",
+          "QueueProcessor",
+          { jobId: job.id, jobName: job.name, errorCode },
+          "FAILURE",
+        );
+        return;
+      }
+
       logger.error(`Job execution failed: ${job.name} [ID: ${job.id}]`, undefined, {
         errorName: err?.name || "Unknown error",
         jobId: job.id,
@@ -258,7 +258,9 @@ export class QueueManager {
         // Route to Dead Letter Queue (DLQ)
         logger.error(`Job failed maximum attempts: ${job.name} [ID: ${job.id}]. Moving to DLQ.`);
         deadLetterQueue.push(job);
-        this.settleDedupeKey(job.dedupeKey, 'retryable_failure');
+        if (job.dedupeKey) {
+          this.reservedDedupeKeys.delete(job.dedupeKey);
+        }
         
         // Audit trail trail of failure
         logger.audit("JOB_DLQ_ROUTED", "QueueProcessor", { jobId: job.id, jobName: job.name, errors: job.errorHistory }, "FAILURE");

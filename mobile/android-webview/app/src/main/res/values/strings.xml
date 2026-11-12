@@ -2,4 +2,5 @@
 <resources>
     <string name="app_name">EcoleTrack</string>
     <string name="api_base_url">https://ecoletrack-mobile-api-apk.onrender.com</string>
+    <string name="mobile_production_mode">true</string>
 </resources>

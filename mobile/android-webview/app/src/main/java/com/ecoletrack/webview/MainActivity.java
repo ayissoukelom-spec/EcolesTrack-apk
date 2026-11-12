@@ -283,7 +283,7 @@ public class MainActivity extends AppCompatActivity {
                 + "try {"
                 + "window.ECOLETRACK_API_BASE_URL = '" + safeApiUrl + "';"
                 + "localStorage.setItem('ecoletrack_api_base_url', '" + safeApiUrl + "');"
-                + "localStorage.setItem('ecoletrack_mobile_production', 'true');"
+                + "localStorage.setItem('ecoletrack_mobile_production', '" + getString(R.string.mobile_production_mode) + "');"
                 + "if (window.AndroidBridge && window.AndroidBridge.log) {"
                 + "window.AndroidBridge.log('[API_TRACE][A] ANDROID_INJECTION window.ECOLETRACK_API_BASE_URL = " + safeApiUrl + "');"
                 + "window.AndroidBridge.log('[API_TRACE][B] ANDROID_INJECTION localStorage = " + safeApiUrl + "');"
@@ -583,7 +583,7 @@ public class MainActivity extends AppCompatActivity {
                             "window.AndroidBridge && window.AndroidBridge.log('[API_TRACE][LATE] BEFORE_SET localStorage = ' + (localStorage.getItem('ecoletrack_api_base_url') || '<not-set>')); " +
                             "window.ECOLETRACK_API_BASE_URL = '" + safeApiUrl + "'; " +
                             "localStorage.setItem('ecoletrack_api_base_url', '" + safeApiUrl + "'); " +
-                            "localStorage.setItem('ecoletrack_mobile_production', 'true'); " +
+                            "localStorage.setItem('ecoletrack_mobile_production', '" + getString(R.string.mobile_production_mode) + "'); " +
                             "window.AndroidBridge && window.AndroidBridge.log('[API_TRACE][LATE] AFTER_SET window.ECOLETRACK_API_BASE_URL = ' + window.ECOLETRACK_API_BASE_URL); " +
                             "window.AndroidBridge && window.AndroidBridge.log('[API_TRACE][LATE] AFTER_SET localStorage = ' + localStorage.getItem('ecoletrack_api_base_url')); " +
                             "console.log('[API_TRACE][LATE] AFTER_SET window.ECOLETRACK_API_BASE_URL = ' + window.ECOLETRACK_API_BASE_URL); " +

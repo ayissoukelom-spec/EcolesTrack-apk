@@ -52,6 +52,10 @@ export const DevAddAbsenceSchema = z.object({
 
 export const ParentAbsenceDeclarationSchema = z.object({
   childId: z.string().regex(/^\d+$/, { message: "Identifiant d’enfant invalide." }),
+  schoolId: z.union([
+    z.number().int().positive(),
+    z.string().regex(/^[1-9]\d*$/, { message: "Identifiant d’établissement invalide." }),
+  ]).optional().transform((schoolId) => schoolId === undefined ? undefined : Number(schoolId)),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, { message: "Format de date invalide (AAAA-MM-JJ)." }),
   startTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, { message: "Format d’heure invalide (HH:MM)." }),
   endTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, { message: "Format d’heure invalide (HH:MM)." }),
