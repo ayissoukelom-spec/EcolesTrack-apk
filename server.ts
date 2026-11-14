@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import "dotenv/config";
 import express, { Request, Response, NextFunction } from "express";
 import path from "path";
 import crypto from "crypto";
@@ -27,7 +26,7 @@ import { AbsenceJustificationAlreadyRejectedError } from "./backend/absenceJusti
 import { relayLateArrivalJustification } from "./backend/lateArrivalJustificationRelay";
 import { withTemporaryUploadCleanup } from "./backend/temporaryUploadCleanup";
 import { AbsenceDeclarationRelayError, relayAbsenceDeclaration } from "./backend/absenceDeclarations";
-import { dbQuery, initializeMobileTables } from "./backend/postgres";
+import { dbQuery, initializeMobileTables, verifyMobileTables } from "./backend/postgres";
 import { getExpectedPeriodTypeForCycle } from "./src/utils/schoolPeriod";
 import { calculateCurrentTermAverage } from "./src/utils/termAverage";
 import { helmetHeaders, requestIdMiddleware, sanitizePayload } from "./backend/middlewares/security";
@@ -1800,7 +1799,12 @@ app.post("/api/internal/info-notification", verifyInternalAuth, async (req: Requ
 // ====================================================================
 async function startServer() {
   await fsPromises.mkdir(uploadStorageDir, { recursive: true });
-  await initializeMobileTables();
+  if (process.env.ECOLETRACK_RESTRICTED_DB_RUNTIME === "true") {
+    await verifyMobileTables();
+    console.info("Restricted mobile API database schema verified in read-only mode.");
+  } else {
+    await initializeMobileTables();
+  }
 
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({

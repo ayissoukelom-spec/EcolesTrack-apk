@@ -11,7 +11,7 @@ import {
   NotificationEvent, NotificationDelivery, NotificationChannel,
   CompleteDeliveryLog
 } from '../src/types';
-import { initializeMobileTables, dbQuery, pool } from './postgres';
+import { dbQuery, pool } from './postgres';
 import { logger } from './utils/logger';
 import { mapWebParentToMobileParent, mapWebStudentToChild } from './mobileAdapter';
 import { submitAbsenceJustificationForReview } from './absenceJustification';
@@ -324,10 +324,6 @@ const INITIAL_DATABASE: DatabaseSchema = {
 };
 
 export class PostgresStore {
-  constructor() {
-    void initializeMobileTables();
-  }
-
   private async ensureParentRecord(parentId: string): Promise<Parent | null> {
     const { rows } = await dbQuery<{ user_id: number; email: string; name: string; role: string; school_id: number | null; phone: string | null }>(`
       SELECT u.id AS user_id, u.email, u.name, u.role, u.school_id, p.phone
