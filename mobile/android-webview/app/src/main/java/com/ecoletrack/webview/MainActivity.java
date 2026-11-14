@@ -51,9 +51,14 @@ import java.io.OutputStream;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.lang.ref.WeakReference;
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
 
 import com.google.firebase.messaging.FirebaseMessaging;
 import androidx.activity.OnBackPressedCallback;
@@ -74,6 +79,11 @@ public class MainActivity extends AppCompatActivity {
     private static final String STATE_PENDING_NOTIFICATION_ID = "pending_notification_id";
     private static final String STATE_PENDING_ATTACHMENT_COUNT = "pending_attachment_count";
     private static final String STATE_PENDING_DISPATCH_ID = "pending_dispatch_id";
+    private static final String DATA_INVALIDATION_PREFERENCES = "ecoletrack_data_invalidations";
+    private static final String DATA_INVALIDATION_QUEUE_KEY = "pending_events";
+    private static final int MAX_PENDING_DATA_INVALIDATIONS = 50;
+    private static final Object DATA_INVALIDATION_LOCK = new Object();
+    private static volatile WeakReference<MainActivity> activeActivityRef = new WeakReference<>(null);
     private static final String CONTENT_SECURITY_POLICY =
             "<meta http-equiv=\"Content-Security-Policy\" content=\"frame-src 'self'; child-src 'self'; object-src 'none'; base-uri 'self'\">";
     private final WebViewAssetLoader webViewAssetLoader = new WebViewAssetLoader.Builder()
@@ -116,6 +126,8 @@ public class MainActivity extends AppCompatActivity {
     private boolean webViewPageReady;
     private boolean notificationBridgeReady;
     private String notificationBridgeSessionId;
+    private boolean activityResumed;
+    private final Set<String> dispatchedDataInvalidationIds = new HashSet<>();
     private static final String EXTRA_TARGET = "target";
     private static final String EXTRA_NOTIFICATION_ID = "notificationId";
     private static final String EXTRA_ATTACHMENT_COUNT = "attachmentCount";
@@ -248,6 +260,7 @@ public class MainActivity extends AppCompatActivity {
                 if (!bridgeSessionId.equals(notificationBridgeSessionId)) {
                     notificationBridgeSessionId = bridgeSessionId;
                     notificationDispatchInFlight = false;
+                    dispatchedDataInvalidationIds.clear();
                 }
                 notificationBridgeReady = true;
                 if (webView != null && APP_INDEX_URL.equals(webView.getUrl())) {
@@ -256,6 +269,7 @@ public class MainActivity extends AppCompatActivity {
                 Log.i(TAG, "[Notification] JavaScript bridge ready = true"
                         + " bridgeSessionId=" + bridgeSessionId);
                 dispatchPendingNotificationContext();
+                dispatchPendingDataInvalidations();
             });
         }
 
@@ -263,6 +277,173 @@ public class MainActivity extends AppCompatActivity {
         public void onNotificationTargetReceived(String dispatchId, String bridgeSessionId) {
             runOnUiThread(() -> acknowledgeNotificationTarget(dispatchId, bridgeSessionId));
         }
+
+        @JavascriptInterface
+        public void onDataInvalidationReceived(String eventId) {
+            runOnUiThread(() -> acknowledgeDataInvalidation(eventId));
+        }
+
+        @JavascriptInterface
+        public void clearPendingDataInvalidations() {
+            runOnUiThread(() -> {
+                clearStoredDataInvalidations(MainActivity.this);
+                dispatchedDataInvalidationIds.clear();
+            });
+        }
+    }
+
+    static void queueDataInvalidation(Context context, String serializedEvent) {
+        JSONObject incomingEvent;
+        try {
+            incomingEvent = new JSONObject(serializedEvent);
+        } catch (JSONException error) {
+            Log.e(TAG, "Ignoring malformed FCM data invalidation", error);
+            return;
+        }
+
+        String domain = incomingEvent.optString("domain", "");
+        String eventId = incomingEvent.optString("eventId", "");
+        if (!domain.matches("[a-z][a-z0-9_-]{0,39}")
+                || eventId.trim().isEmpty()
+                || eventId.length() > 200) {
+            Log.w(TAG, "Ignoring invalid FCM data invalidation");
+            return;
+        }
+
+        JSONObject event = new JSONObject();
+        try {
+            event.put("domain", domain);
+            event.put("eventId", eventId);
+            JSONArray incomingEntityIds = incomingEvent.optJSONArray("entityIds");
+            if (incomingEntityIds != null && incomingEntityIds.length() <= 100) {
+                JSONArray entityIds = new JSONArray();
+                for (int index = 0; index < incomingEntityIds.length(); index++) {
+                    Object value = incomingEntityIds.opt(index);
+                    if (value instanceof String && !((String) value).isEmpty()
+                            && ((String) value).length() <= 64) {
+                        entityIds.put(value);
+                    }
+                }
+                if (entityIds.length() > 0) {
+                    event.put("entityIds", entityIds);
+                }
+            }
+            String revision = incomingEvent.optString("revision", "");
+            if (!revision.isEmpty() && revision.length() <= 64) {
+                event.put("revision", revision);
+            }
+        } catch (JSONException error) {
+            Log.e(TAG, "Ignoring invalid FCM data invalidation metadata", error);
+            return;
+        }
+
+        synchronized (DATA_INVALIDATION_LOCK) {
+            JSONArray pending = readStoredDataInvalidations(context);
+            boolean alreadyQueued = false;
+            for (int index = 0; index < pending.length(); index++) {
+                JSONObject queuedEvent = pending.optJSONObject(index);
+                if (queuedEvent != null
+                        && domain.equals(queuedEvent.optString("domain"))
+                        && eventId.equals(queuedEvent.optString("eventId"))) {
+                    alreadyQueued = true;
+                    break;
+                }
+            }
+            if (!alreadyQueued) {
+                if (pending.length() >= MAX_PENDING_DATA_INVALIDATIONS) {
+                    pending.remove(0);
+                }
+                pending.put(event);
+                context.getSharedPreferences(DATA_INVALIDATION_PREFERENCES, Context.MODE_PRIVATE)
+                        .edit()
+                        .putString(DATA_INVALIDATION_QUEUE_KEY, pending.toString())
+                        .apply();
+            }
+        }
+
+        MainActivity activity = activeActivityRef.get();
+        if (activity != null) {
+            activity.runOnUiThread(activity::dispatchPendingDataInvalidations);
+        }
+    }
+
+    private static JSONArray readStoredDataInvalidations(Context context) {
+        String stored = context.getSharedPreferences(DATA_INVALIDATION_PREFERENCES, Context.MODE_PRIVATE)
+                .getString(DATA_INVALIDATION_QUEUE_KEY, "[]");
+        try {
+            return new JSONArray(stored);
+        } catch (JSONException error) {
+            Log.e(TAG, "Clearing malformed pending data invalidations", error);
+            return new JSONArray();
+        }
+    }
+
+    private static void clearStoredDataInvalidations(Context context) {
+        synchronized (DATA_INVALIDATION_LOCK) {
+            context.getSharedPreferences(DATA_INVALIDATION_PREFERENCES, Context.MODE_PRIVATE)
+                    .edit()
+                    .remove(DATA_INVALIDATION_QUEUE_KEY)
+                    .apply();
+        }
+    }
+
+    private void dispatchPendingDataInvalidations() {
+        if (webView == null || !activityResumed || !notificationBridgeReady) {
+            return;
+        }
+
+        JSONArray pending;
+        synchronized (DATA_INVALIDATION_LOCK) {
+            pending = readStoredDataInvalidations(this);
+        }
+        for (int index = 0; index < pending.length(); index++) {
+            JSONObject event = pending.optJSONObject(index);
+            if (event == null) {
+                continue;
+            }
+            String eventId = event.optString("eventId", "");
+            String eventKey = event.optString("domain", "") + ":" + eventId;
+            if (eventId.isEmpty() || !dispatchedDataInvalidationIds.add(eventKey)) {
+                continue;
+            }
+
+            String eventLiteral = JavaScriptStringEscaper.quote(event.toString());
+            String script = "(function(){var event=JSON.parse(" + eventLiteral + ");" +
+                    "if(typeof window.onEcoleTrackDataInvalidation==='function'){" +
+                    "window.onEcoleTrackDataInvalidation(event);" +
+                    "}else{var pending=window.__pendingDataInvalidations||(window.__pendingDataInvalidations=[]);" +
+                    "pending.push(event);}" +
+                    "return true;})()";
+            webView.evaluateJavascript(script, null);
+        }
+    }
+
+    private void acknowledgeDataInvalidation(String eventKey) {
+        if (eventKey == null || eventKey.trim().isEmpty()) {
+            return;
+        }
+        int separator = eventKey.indexOf(':');
+        if (separator <= 0 || separator == eventKey.length() - 1) {
+            return;
+        }
+        String domain = eventKey.substring(0, separator);
+        String invalidationId = eventKey.substring(separator + 1);
+        synchronized (DATA_INVALIDATION_LOCK) {
+            JSONArray pending = readStoredDataInvalidations(this);
+            JSONArray remaining = new JSONArray();
+            for (int index = 0; index < pending.length(); index++) {
+                JSONObject event = pending.optJSONObject(index);
+                if (event != null && !(domain.equals(event.optString("domain"))
+                        && invalidationId.equals(event.optString("eventId")))) {
+                    remaining.put(event);
+                }
+            }
+            getSharedPreferences(DATA_INVALIDATION_PREFERENCES, MODE_PRIVATE)
+                    .edit()
+                    .putString(DATA_INVALIDATION_QUEUE_KEY, remaining.toString())
+                    .apply();
+        }
+        dispatchedDataInvalidationIds.remove(eventKey);
     }
 
     private String readIndexHtmlFromAssets() throws java.io.IOException {
@@ -389,6 +570,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        activeActivityRef = new WeakReference<>(this);
         cleanupTemporaryFiles();
         if (savedInstanceState != null) {
             pendingTarget = savedInstanceState.getString(STATE_PENDING_TARGET);
@@ -1407,8 +1589,11 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        activityResumed = true;
         if (webView != null) {
             webView.onResume();
+            dispatchedDataInvalidationIds.clear();
+            dispatchPendingDataInvalidations();
             if (webView.getUrl() != null) {
                 webView.evaluateJavascript(
                         "window.dispatchEvent(new Event('ecoletrack:app-resume'));",
@@ -1421,6 +1606,8 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onPause() {
+        activityResumed = false;
+        dispatchedDataInvalidationIds.clear();
         if (webView != null) {
             if (webView.getUrl() != null) {
                 webView.evaluateJavascript(
@@ -1442,6 +1629,9 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        if (activeActivityRef.get() == this) {
+            activeActivityRef = new WeakReference<>(null);
+        }
         if (fcmTokenReceiverRegistered) {
             unregisterReceiver(fcmTokenReceiver);
             fcmTokenReceiverRegistered = false;

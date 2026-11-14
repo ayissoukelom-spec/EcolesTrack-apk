@@ -29,6 +29,10 @@ import { classifyParentNotification } from "../utils/notificationCategory";
 import { getSchoolPeriodLabel, isGradeInSchoolPeriod, SCHOOL_PERIOD_FALLBACK_LABEL } from "../utils/schoolPeriod";
 import { getNewPasswordPolicyError } from "../utils/passwordPolicy";
 import ParentWhatsAppContactButton, { isValidWhatsAppUrl } from "./ParentWhatsAppContactButton";
+import {
+  parseDataInvalidation,
+  shouldRefreshParentDataForInvalidation,
+} from "../utils/dataInvalidation";
 
 interface ParentPortalProps {
   token: string | null;
@@ -122,6 +126,10 @@ export default function ParentPortal({
   const [downloadingJustificationFileKey, setDownloadingJustificationFileKey] = useState<string | null>(null);
   const [justificationFileError, setJustificationFileError] = useState<{ key: string; message: string } | null>(null);
   const hasCompletedProtectedLoadRef = useRef(false);
+  const gradeRefreshRequestsRef = useRef(new Map<string, { inFlight: boolean; pending: boolean }>());
+  const attendanceRefreshRequestsRef = useRef(new Map<string, { inFlight: boolean; pending: boolean }>());
+  const declarationRefreshRequestRef = useRef({ inFlight: false, pending: false });
+  const gradeSessionGenerationRef = useRef(0);
 
   // Keep a local copy of notifications so the badge updates immediately.
   useEffect(() => {
@@ -256,6 +264,8 @@ export default function ParentPortal({
 
   const currentChild = selectedChild || children[0] || null;
   const currentChildId = currentChild?.id;
+  const currentChildIdRef = useRef(currentChildId);
+  currentChildIdRef.current = currentChildId;
   const childAbsenceDeclarations = currentChild
     ? absenceDeclarations.filter((declaration: AbsenceDeclaration) => declaration.childId === currentChild.id)
     : [];
@@ -485,6 +495,13 @@ export default function ParentPortal({
   // Load children list when authenticated
   const parentId = parent?.id;
   const parentActiveSchoolId = parent?.activeSchoolId;
+  useEffect(() => {
+    gradeSessionGenerationRef.current += 1;
+    gradeRefreshRequestsRef.current.clear();
+    attendanceRefreshRequestsRef.current.clear();
+    declarationRefreshRequestRef.current = { inFlight: false, pending: false };
+  }, [token, parentId]);
+
   useEffect(() => {
     if (!token || !parentId) {
       hasCompletedProtectedLoadRef.current = false;
@@ -853,35 +870,57 @@ export default function ParentPortal({
 
   // API Call: Fetch Child Absences
   const fetchChildAbsences = async (childId: string): Promise<boolean> => {
-    try {
-      console.log("[AUTH_DEBUG] fetchChildAbsences starting", { childId, tokenPresent: !!token, tokenLength: token?.length });
-      const response = await performProtectedRequest((authToken) => fetch(withApiBase(`/api/mobile/parent/children/${childId}/absences`), {
-        headers: { "Authorization": `Bearer ${authToken}` }
-      }));
-      if (!response) {
-        return false;
-      }
-      if (response.ok) {
-        hasCompletedProtectedLoadRef.current = true;
-        const data = await parseJsonSafe<Absence[]>(response);
-        const sortedAttendance = Array.isArray(data)
-          ? [...data].sort((a, b) => {
-              const dateDiff = new Date(b.date).getTime() - new Date(a.date).getTime();
-              if (dateDiff !== 0) return dateDiff;
-              const idDiff = Number(b.id) - Number(a.id);
-              if (idDiff !== 0) return idDiff;
-              return (a.eventType || "absence").localeCompare(b.eventType || "absence");
-            })
-          : [];
-        setAbsences(sortedAttendance.filter((record) => record.eventType !== "late"));
-        setLateArrivals(sortedAttendance.filter((record) => record.eventType === "late"));
-        return true;
-      }
-      return false;
-    } catch (e) {
-      console.error("Failed to fetch absences", e);
+    const request = attendanceRefreshRequestsRef.current.get(childId) ?? {
+      inFlight: false,
+      pending: false,
+    };
+    attendanceRefreshRequestsRef.current.set(childId, request);
+    if (request.inFlight) {
+      request.pending = true;
       return false;
     }
+
+    request.inFlight = true;
+    let refreshed = false;
+    try {
+      do {
+        request.pending = false;
+        const requestGeneration = gradeSessionGenerationRef.current;
+        try {
+          console.log("[AUTH_DEBUG] fetchChildAbsences starting", { childId, tokenPresent: !!token, tokenLength: token?.length });
+          const response = await performProtectedRequest((authToken) => fetch(withApiBase(`/api/mobile/parent/children/${childId}/absences`), {
+            headers: { "Authorization": `Bearer ${authToken}` }
+          }));
+          if (!response?.ok) continue;
+
+          const data = await parseJsonSafe<Absence[]>(response);
+          if (requestGeneration !== gradeSessionGenerationRef.current
+            || currentChildIdRef.current !== childId
+            || request.pending) {
+            continue;
+          }
+
+          hasCompletedProtectedLoadRef.current = true;
+          const sortedAttendance = Array.isArray(data)
+            ? [...data].sort((a, b) => {
+                const dateDiff = new Date(b.date).getTime() - new Date(a.date).getTime();
+                if (dateDiff !== 0) return dateDiff;
+                const idDiff = Number(b.id) - Number(a.id);
+                if (idDiff !== 0) return idDiff;
+                return (a.eventType || "absence").localeCompare(b.eventType || "absence");
+              })
+            : [];
+          setAbsences(sortedAttendance.filter((record) => record.eventType !== "late"));
+          setLateArrivals(sortedAttendance.filter((record) => record.eventType === "late"));
+          refreshed = true;
+        } catch (e) {
+          console.error("Failed to fetch absences", e);
+        }
+      } while (request.pending);
+    } finally {
+      request.inFlight = false;
+    }
+    return refreshed;
   };
 
   useEffect(() => {
@@ -893,18 +932,38 @@ export default function ParentPortal({
   }, [token, selectedChildId, childDetailTab, notificationAlertMenu, notificationDispatchId]);
 
   const fetchAbsenceDeclarations = async () => {
+    const request = declarationRefreshRequestRef.current;
+    if (request.inFlight) {
+      request.pending = true;
+      return;
+    }
+
+    request.inFlight = true;
     try {
-      const response = await performProtectedRequest((authToken) => fetch(withApiBase("/api/mobile/parent/absence-declarations"), {
-        headers: { "Authorization": `Bearer ${authToken}` }
-      }));
-      if (response?.ok) {
-        const data = await parseJsonSafe<AbsenceDeclaration[]>(response);
-        setAbsenceDeclarations(Array.isArray(data) ? data : []);
-      }
-    } catch (error) {
-      console.error("Failed to fetch absence declarations", error);
+      do {
+        request.pending = false;
+        const requestGeneration = gradeSessionGenerationRef.current;
+        try {
+          const response = await performProtectedRequest((authToken) => fetch(withApiBase("/api/mobile/parent/absence-declarations"), {
+            headers: { "Authorization": `Bearer ${authToken}` }
+          }));
+          if (!response?.ok) continue;
+
+          const data = await parseJsonSafe<AbsenceDeclaration[]>(response);
+          if (requestGeneration !== gradeSessionGenerationRef.current || request.pending) continue;
+          setAbsenceDeclarations(Array.isArray(data) ? data : []);
+        } catch (error) {
+          console.error("Failed to fetch absence declarations", error);
+        }
+      } while (request.pending);
+    } finally {
+      request.inFlight = false;
     }
   };
+  const fetchChildAbsencesRef = useRef(fetchChildAbsences);
+  fetchChildAbsencesRef.current = fetchChildAbsences;
+  const fetchAbsenceDeclarationsRef = useRef(fetchAbsenceDeclarations);
+  fetchAbsenceDeclarationsRef.current = fetchAbsenceDeclarations;
 
   const submitAbsenceDeclaration = async () => {
     if (!currentChild || !token) return;
@@ -963,81 +1022,155 @@ export default function ParentPortal({
 
   // API Call: Fetch Child Grades
   const fetchChildGrades = async (childId: string) => {
+    const request = gradeRefreshRequestsRef.current.get(childId) ?? {
+      inFlight: false,
+      pending: false,
+    };
+    gradeRefreshRequestsRef.current.set(childId, request);
+    if (request.inFlight) {
+      request.pending = true;
+      return;
+    }
+
+    request.inFlight = true;
     try {
-      const response = await performProtectedRequest((authToken) => fetch(withApiBase(`/api/mobile/parent/children/${childId}/grades`), {
-        headers: { "Authorization": `Bearer ${authToken}` }
-      }));
-      if (!response) {
-        return;
-      }
-      if (response.ok) {
-        hasCompletedProtectedLoadRef.current = true;
-        const data = await parseJsonSafe<ChildGradesResponse | Grade[]>(response);
-        const payload = Array.isArray(data) ? null : data;
-        const gradesData = Array.isArray(data) ? data : (Array.isArray(data?.grades) ? data.grades : []);
-        console.log("[APK DEBUG] Grades received from API:", gradesData.length, "items");
-        const bodyAverage = payload?.termAverage != null ? Number(payload.termAverage) : null;
-        const chosenAverage = bodyAverage;
-        const requestedChild = children.find((child) => child.id === childId)
-          ?? (selectedChild?.id === childId ? selectedChild : null);
-        const cycleMatchesChild = !requestedChild?.cycleCode || requestedChild.cycleCode === payload?.cycleCode;
-        const periodIsConfigured = Boolean(
-          payload?.period &&
-          cycleMatchesChild &&
-          getSchoolPeriodLabel(payload.cycleCode, payload.period.periodType) !== SCHOOL_PERIOD_FALLBACK_LABEL
-        );
-        setTermCycleCode(payload?.cycleCode ?? null);
-        setTermPeriod(periodIsConfigured ? payload?.period ?? null : null);
-        setTermEvaluationCount(periodIsConfigured ? Number(payload?.termEvaluationCount ?? 0) : 0);
-        if (periodIsConfigured && chosenAverage != null) {
-          console.log(`[APK DEBUG] Average received from API: ${chosenAverage}`);
-          setTermAverageApi(chosenAverage);
-        } else {
-          setTermAverageApi(null);
-        }
-
+      do {
+        request.pending = false;
+        const requestGeneration = gradeSessionGenerationRef.current;
         try {
-          const periodGrades = periodIsConfigured
-            ? gradesData.filter((grade) => isGradeInSchoolPeriod(grade, payload?.period))
-            : [];
+          const response = await performProtectedRequest((authToken) => fetch(withApiBase(`/api/mobile/parent/children/${childId}/grades`), {
+            headers: { "Authorization": `Bearer ${authToken}` }
+          }));
+          if (!response?.ok) continue;
 
-          const studentName = formatChildName(currentChild) || 'unknown';
-          const displayedAverage = (gradePeriodFilter === 'school-period' && chosenAverage != null && periodIsConfigured)
-            ? Number(chosenAverage).toFixed(2)
-            : (calculateAverage(periodGrades) ?? '—');
+          const data = await parseJsonSafe<ChildGradesResponse | Grade[]>(response);
+          if (requestGeneration !== gradeSessionGenerationRef.current
+            || currentChildIdRef.current !== childId
+            || request.pending) {
+            continue;
+          }
 
-          console.log('[DEBUG AVERAGE] START');
-          console.log('[DEBUG AVERAGE] childId:', childId);
-          console.log('[DEBUG AVERAGE] student:', studentName);
-          console.log('[DEBUG AVERAGE] serverAverage:', chosenAverage != null ? Number(chosenAverage).toFixed(2) : 'null');
-          console.log('[DEBUG AVERAGE] displayedAverage:', displayedAverage);
+          hasCompletedProtectedLoadRef.current = true;
+          const payload = Array.isArray(data) ? null : data;
+          const gradesData = Array.isArray(data) ? data : (Array.isArray(data?.grades) ? data.grades : []);
+          console.log("[APK DEBUG] Grades received from API:", gradesData.length, "items");
+          const bodyAverage = payload?.termAverage != null ? Number(payload.termAverage) : null;
+          const chosenAverage = bodyAverage;
+          const requestedChild = children.find((child) => child.id === childId)
+            ?? (selectedChild?.id === childId ? selectedChild : null);
+          const cycleMatchesChild = !requestedChild?.cycleCode || requestedChild.cycleCode === payload?.cycleCode;
+          const periodIsConfigured = Boolean(
+            payload?.period &&
+            cycleMatchesChild &&
+            getSchoolPeriodLabel(payload.cycleCode, payload.period.periodType) !== SCHOOL_PERIOD_FALLBACK_LABEL
+          );
+          setTermCycleCode(payload?.cycleCode ?? null);
+          setTermPeriod(periodIsConfigured ? payload?.period ?? null : null);
+          setTermEvaluationCount(periodIsConfigured ? Number(payload?.termEvaluationCount ?? 0) : 0);
+          if (periodIsConfigured && chosenAverage != null) {
+            console.log(`[APK DEBUG] Average received from API: ${chosenAverage}`);
+            setTermAverageApi(chosenAverage);
+          } else {
+            setTermAverageApi(null);
+          }
 
-          periodGrades.forEach((g: any) => {
-            const raw = typeof g.rawScore === 'number' ? g.rawScore : g.grade;
-            const max = g.maxScore ?? 20;
-            const coeff = g.coefficient ?? 1;
-            const normalized = typeof g.grade === 'number' ? Number(g.grade.toFixed(2)) : null;
-            console.log(
-              '[DEBUG AVERAGE] GRADE:',
-              g.subject,
-              'raw:', raw,
-              'max:', max,
-              'coef:', coeff,
-              'normalized:', normalized
-            );
-          });
+          try {
+            const periodGrades = periodIsConfigured
+              ? gradesData.filter((grade) => isGradeInSchoolPeriod(grade, payload?.period))
+              : [];
 
-          console.log('[DEBUG AVERAGE] END');
+            const studentName = formatChildName(currentChild) || 'unknown';
+            const displayedAverage = (gradePeriodFilter === 'school-period' && chosenAverage != null && periodIsConfigured)
+              ? Number(chosenAverage).toFixed(2)
+              : (calculateAverage(periodGrades) ?? '—');
+
+            console.log('[DEBUG AVERAGE] START');
+            console.log('[DEBUG AVERAGE] childId:', childId);
+            console.log('[DEBUG AVERAGE] student:', studentName);
+            console.log('[DEBUG AVERAGE] serverAverage:', chosenAverage != null ? Number(chosenAverage).toFixed(2) : 'null');
+            console.log('[DEBUG AVERAGE] displayedAverage:', displayedAverage);
+
+            periodGrades.forEach((g: any) => {
+              const raw = typeof g.rawScore === 'number' ? g.rawScore : g.grade;
+              const max = g.maxScore ?? 20;
+              const coeff = g.coefficient ?? 1;
+              const normalized = typeof g.grade === 'number' ? Number(g.grade.toFixed(2)) : null;
+              console.log(
+                '[DEBUG AVERAGE] GRADE:',
+                g.subject,
+                'raw:', raw,
+                'max:', max,
+                'coef:', coeff,
+                'normalized:', normalized
+              );
+            });
+
+            console.log('[DEBUG AVERAGE] END');
+          } catch (e) {
+            console.log('Failed to print DEBUG AVERAGE block', String(e));
+          }
+
+          setGrades(gradesData);
         } catch (e) {
-          console.log('Failed to print DEBUG AVERAGE block', String(e));
+          console.error("Failed to fetch grades", e);
         }
-
-        setGrades(gradesData);
-      }
-    } catch (e) {
-      console.error("Failed to fetch grades", e);
+      } while (request.pending);
+    } finally {
+      request.inFlight = false;
     }
   };
+
+  const fetchChildGradesRef = useRef(fetchChildGrades);
+  fetchChildGradesRef.current = fetchChildGrades;
+
+  useEffect(() => {
+    if (!token) return;
+
+    const pendingInvalidations: Array<ReturnType<typeof parseDataInvalidation>> = [];
+    let refreshTimer: number | undefined;
+    const scheduleRefresh = (event?: Event) => {
+      if (event instanceof CustomEvent) {
+        const detail = parseDataInvalidation(event.detail);
+        if (!detail) return;
+        pendingInvalidations.push(detail);
+      } else {
+        pendingInvalidations.push(null);
+      }
+
+      if (refreshTimer != null) window.clearTimeout(refreshTimer);
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = undefined;
+        const batch = pendingInvalidations.splice(0);
+        const refreshesDomain = (domain: "grades" | "attendance" | "absence-declarations") => (
+          batch.some((detail) => (
+            !detail || shouldRefreshParentDataForInvalidation(detail, domain, currentChildIdRef.current)
+          ))
+        );
+        const selectedChild = currentChildIdRef.current;
+        if (!selectedChild) return;
+
+        if (refreshesDomain("grades")) {
+          void fetchChildGradesRef.current(selectedChild);
+        }
+        if (refreshesDomain("attendance")) {
+          void fetchChildAbsencesRef.current(selectedChild);
+        }
+        if (refreshesDomain("absence-declarations") || refreshesDomain("attendance")) {
+          void fetchAbsenceDeclarationsRef.current();
+        }
+      }, 120);
+    };
+
+    window.addEventListener("ecoletrack:data-invalidation", scheduleRefresh);
+    window.addEventListener("ecoletrack:app-resume", scheduleRefresh);
+    window.addEventListener("online", scheduleRefresh);
+    return () => {
+      if (refreshTimer != null) window.clearTimeout(refreshTimer);
+      window.removeEventListener("ecoletrack:data-invalidation", scheduleRefresh);
+      window.removeEventListener("ecoletrack:app-resume", scheduleRefresh);
+      window.removeEventListener("online", scheduleRefresh);
+    };
+  }, [token]);
 
   // Helper API Call: Register FCM token
   const registerMockToken = async () => {

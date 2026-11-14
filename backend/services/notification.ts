@@ -2,11 +2,54 @@ import { store } from "../store";
 import { QueueManager } from "../jobs/queue";
 import { Logger } from "../utils/logger";
 import { NotificationChannel } from "../../src/types";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import type { FcmDataInvalidation } from "./fcm";
 
 const logger = new Logger("NotificationService");
 
 export class NotificationService {
+  public static async dispatchDataInvalidation(
+    recipients: Array<{ parentId: string; entityIds?: string[] }>,
+    invalidation: FcmDataInvalidation,
+  ) {
+    const jobs: string[] = [];
+    const uniqueRecipients = new Map<string, Set<string>>();
+    for (const recipient of recipients) {
+      const entityIds = uniqueRecipients.get(recipient.parentId) ?? new Set<string>();
+      recipient.entityIds?.forEach((entityId) => entityIds.add(entityId));
+      uniqueRecipients.set(recipient.parentId, entityIds);
+    }
+    for (const [parentId, entityIds] of uniqueRecipients) {
+      const preferences = await store.getNotificationPreferences(parentId);
+      if (!preferences.pushEnabled) continue;
+
+      const devices = await store.getDevicesOfParent(parentId);
+      const pushTokens = Array.from(new Set(
+        devices
+          .map((device) => device.pushToken)
+          .filter((token): token is string => Boolean(token)),
+      ));
+
+      for (const token of pushTokens) {
+        const tokenHash = createHash("sha256").update(token).digest("hex");
+        const jobId = QueueManager.addJob("send-data-invalidation", {
+          parentId,
+          token,
+          dataInvalidation: {
+            ...invalidation,
+            ...(entityIds.size ? { entityIds: Array.from(entityIds) } : {}),
+          },
+        }, {
+          dedupeKey: `data-invalidation-${invalidation.domain}-${invalidation.eventId}-${parentId}-${tokenHash}`,
+          maxAttempts: 3,
+        });
+        jobs.push(jobId);
+      }
+    }
+
+    return { success: true, jobs };
+  }
+
   /**
    * Orchestrates multi-channel delivery based on parent consents and quiet hours
    */
@@ -35,6 +78,26 @@ export class NotificationService {
 
     const jobsTriggered: string[] = [];
     const channelsToDeliver: NotificationChannel[] = [];
+    const invalidationDomain = category === "absence"
+      ? "attendance"
+      : category === "grade"
+        ? "grades"
+        : "notifications";
+    const invalidationEntityIds = Array.from(new Set([
+      ...(Array.isArray(metadata?.childIds) ? metadata.childIds : []),
+      ...(metadata?.studentId != null ? [metadata.studentId] : []),
+      ...(metadata?.childId != null ? [metadata.childId] : []),
+    ].filter((value): value is string | number => (
+      typeof value === "string" || typeof value === "number"
+    )).map(String).filter((value) => value.length > 0 && value.length <= 64))).slice(0, 100);
+    const deliveryMetadata: Record<string, unknown> = {
+      ...metadata,
+      dataInvalidation: metadata?.dataInvalidation ?? {
+        domain: invalidationDomain,
+        eventId: randomUUID(),
+        ...(invalidationEntityIds.length ? { entityIds: invalidationEntityIds } : {}),
+      },
+    };
 
     for (const effectiveParentId of effectiveParentIds) {
       // 1. Fetch parent preferences and consent from DB
@@ -59,7 +122,7 @@ export class NotificationService {
       // 2. Check Quiet Hours Window
       if (this.isWithinQuietHours(preferences.quietHoursStart, preferences.quietHoursEnd)) {
         logger.info(`Quiet Hours active for parent ${effectiveParentId}. Scheduling notification with lower priority or buffering.`);
-        metadata.quietHoursApplied = true;
+        deliveryMetadata.quietHoursApplied = true;
       }
 
       // 3. Select Channels and Queue Jobs
@@ -81,8 +144,9 @@ export class NotificationService {
         parentChannelsToDeliver.push("push");
       }
 
-      const target = typeof metadata?.target === "string" && metadata.target.trim().length > 0
-        ? metadata.target
+      const metadataTarget = deliveryMetadata.target;
+      const target = typeof metadataTarget === "string" && metadataTarget.trim().length > 0
+        ? metadataTarget
         : "home";
 
       if (isWhatsappAuthorized) {
@@ -114,7 +178,7 @@ export class NotificationService {
               title,
               message,
               category,
-              metadata,
+              metadata: deliveryMetadata,
               target,
               token
             }, {
@@ -146,7 +210,7 @@ export class NotificationService {
             title,
             message,
             category,
-            metadata,
+            metadata: deliveryMetadata,
             token: undefined
           }, {
             priority,

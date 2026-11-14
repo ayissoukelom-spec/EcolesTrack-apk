@@ -72,6 +72,22 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
             }
         }
 
+        String invalidation = remoteMessage.getData().get("dataInvalidation");
+        if (invalidation != null && !invalidation.trim().isEmpty()) {
+            MainActivity.queueDataInvalidation(this, invalidation);
+        }
+
+        boolean silentDataInvalidation = remoteMessage.getNotification() == null
+                && invalidation != null
+                && !invalidation.trim().isEmpty()
+                && !remoteMessage.getData().containsKey("title")
+                && !remoteMessage.getData().containsKey("body")
+                && !remoteMessage.getData().containsKey("message")
+                && !remoteMessage.getData().containsKey("target");
+        if (silentDataInvalidation) {
+            return;
+        }
+
         target = NotificationIntentPolicy.resolveTarget(target, title);
         Log.i(TAG, "FCM message received; notification content omitted from logs");
         String notificationKey = NotificationIntentPolicy.createKey(

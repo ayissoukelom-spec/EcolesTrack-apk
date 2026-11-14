@@ -703,11 +703,44 @@ export class PostgresStore {
       is_read: boolean;
       created_at: string;
       publicationId: number | null;
+      dedupeKey: string | null;
+      invalidationDomain: string | null;
+      invalidationChildId: string | null;
     }>(`
-      SELECT id, title, body, type, is_read, created_at, publication_id AS "publicationId"
-      FROM notifications
-      WHERE user_id = $1
-      ORDER BY created_at DESC
+      SELECT n.id, n.title, n.body, n.type, n.is_read, n.created_at,
+             n.publication_id AS "publicationId", n.dedupe_key AS "dedupeKey",
+             CASE
+               WHEN n.dedupe_key ~ '^grade-[0-9]+-event-[0-9]+$' THEN 'grades'
+               WHEN n.dedupe_key ~ '^invalidate-attendance-' THEN 'attendance'
+               WHEN n.dedupe_key ~ '^invalidate-absence-declarations-' THEN 'absence-declarations'
+               WHEN n.dedupe_key ~ '^late-arrival-justification-[0-9]+-revision-[0-9]+$' THEN 'attendance'
+             END AS "invalidationDomain",
+             s.id::text AS "invalidationChildId"
+      FROM notifications n
+      LEFT JOIN grades g
+        ON g.id = CASE
+          WHEN n.dedupe_key ~ '^grade-[0-9]+-event-[0-9]+$'
+          THEN split_part(n.dedupe_key, '-', 2)::integer
+          ELSE NULL
+        END
+      LEFT JOIN late_arrival_justifications laj
+        ON laj.id = CASE
+          WHEN n.dedupe_key ~ '^late-arrival-justification-[0-9]+-revision-[0-9]+$'
+          THEN split_part(n.dedupe_key, '-', 4)::integer
+          ELSE NULL
+        END
+      LEFT JOIN late_arrivals la ON la.id = laj.late_arrival_id
+      LEFT JOIN students s ON s.id = COALESCE(
+        g.student_id,
+        la.student_id,
+        CASE
+          WHEN n.dedupe_key ~ '^invalidate-(attendance|absence-declarations)-.*-student-[0-9]+$'
+          THEN substring(n.dedupe_key from '-student-([0-9]+)$')::integer
+          ELSE NULL
+        END
+      )
+      WHERE n.user_id = $1
+      ORDER BY n.created_at DESC
     `, [userId]);
 
     const publicationIds = Array.from(new Set(
@@ -766,6 +799,11 @@ export class PostgresStore {
       createdAt: row.created_at,
       deepLink: undefined,
       attachments: (attachmentsByNotification.get(row.id) ?? []).map(({ filePath: _filePath, ...attachment }) => attachment),
+      dataInvalidationId: row.invalidationDomain
+        ? row.dedupeKey ?? undefined
+        : undefined,
+      dataInvalidationDomain: row.invalidationDomain ?? undefined,
+      dataInvalidationEntityIds: row.invalidationChildId ? [row.invalidationChildId] : undefined,
     }));
   }
 

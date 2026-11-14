@@ -304,8 +304,15 @@ export const sendTuitionProgressReminderPush = async (
         token,
         request.title,
         request.body,
-        'home',
-        { notificationId: request.notificationId },
+        'payment',
+        {
+          notificationId: request.notificationId,
+          dataInvalidation: {
+            domain: 'finance',
+            eventId: request.dedupeKey,
+            entityIds: [String(request.studentId)],
+          },
+        },
       );
       if (typeof messageId !== 'string' || !messageId.trim()) {
         await recordOutcome(dependencies.store, reservation.deliveryId, 'uncertain', {

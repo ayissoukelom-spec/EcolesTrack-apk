@@ -58,7 +58,11 @@ try {
     'Expected all device tokens for all parents to be queued'
   );
   assert.ok(
-    pushJobs.every((job) => job.data.category === 'info' && job.data.target === 'announcement'),
+    pushJobs.every((job) => job.data.category === 'info'
+      && job.data.target === 'announcement'
+      && job.data.metadata.dataInvalidation.domain === 'notifications'
+      && typeof job.data.metadata.dataInvalidation.eventId === 'string'
+      && job.data.metadata.dataInvalidation.eventId !== 'dedupe-test'),
     'Information notifications should queue push jobs for the supplied recipients'
   );
 
@@ -74,9 +78,28 @@ try {
   const evaluationPushJobs = jobs.filter((job) => job.name === 'send-notification-push');
   assert.equal(evaluationPushJobs.length, 2, 'Expected one evaluation push job per registered device');
   assert.ok(
-    evaluationPushJobs.every((job) => job.data.category === 'evaluation' && job.data.target === 'homework'),
+    evaluationPushJobs.every((job) => job.data.category === 'evaluation'
+      && job.data.target === 'homework'
+      && job.data.metadata.dataInvalidation.domain === 'notifications'),
     'Evaluation notifications should preserve their category and homework target'
   );
+
+  jobs.length = 0;
+  await NotificationService.dispatchNotification(
+    'parent-a',
+    'Nouvelle absence',
+    'Une absence a été enregistrée.',
+    'absence',
+    { target: 'absence', studentId: 'child-1' },
+    'absence-test'
+  );
+  const attendancePushJobs = jobs.filter((job) => job.name === 'send-notification-push');
+  assert.equal(attendancePushJobs.length, 2);
+  assert.ok(attendancePushJobs.every((job) => (
+    job.data.metadata.dataInvalidation.domain === 'attendance'
+    && typeof job.data.metadata.dataInvalidation.eventId === 'string'
+    && job.data.metadata.dataInvalidation.entityIds[0] === 'child-1'
+  )), 'Attendance notifications should target the affected child without carrying note values');
 
   jobs.length = 0;
   const noTokenResult = await NotificationService.dispatchNotification(
@@ -89,6 +112,25 @@ try {
   );
   assert.equal(noTokenResult.channels.length, 0, 'A parent without a registered token should not be reported as receiving push');
   assert.equal(jobs.length, 0, 'A parent without a registered token should not receive a push job');
+
+  jobs.length = 0;
+  const invalidationResult = await NotificationService.dispatchDataInvalidation([
+    { parentId: 'parent-a', entityIds: ['child-1'] },
+  ], {
+    domain: 'grades',
+    eventId: 'evaluation-delete-test',
+    entityIds: ['child-1'],
+  });
+  const invalidationJobs = jobs.filter((job) => job.name === 'send-data-invalidation');
+  assert.equal(invalidationJobs.length, 2, 'Expected one silent invalidation job per parent device');
+  assert.equal(invalidationResult.jobs.length, 2);
+  assert.ok(invalidationJobs.every((job) =>
+    job.data.dataInvalidation.domain === 'grades'
+    && job.data.dataInvalidation.eventId === 'evaluation-delete-test'
+    && job.data.dataInvalidation.entityIds[0] === 'child-1'
+    && !('title' in job.data)
+    && !('message' in job.data)
+  ), 'Silent invalidations must contain only event metadata and no visible notification content');
 
   console.log('notification dispatch regression test passed');
 } finally {

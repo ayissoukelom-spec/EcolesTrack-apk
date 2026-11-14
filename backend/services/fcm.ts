@@ -133,6 +133,31 @@ export async function sendPushNotification(
   if (validAttachmentCount > 0) {
     data.attachmentCount = String(validAttachmentCount);
   }
+  const invalidation = metadata.dataInvalidation;
+  if (invalidation && typeof invalidation === "object" && !Array.isArray(invalidation)) {
+    const candidate = invalidation as Record<string, unknown>;
+    if (typeof candidate.domain === "string"
+      && /^[a-z][a-z0-9_-]{0,39}$/.test(candidate.domain)
+      && typeof candidate.eventId === "string"
+      && candidate.eventId.length > 0
+      && candidate.eventId.length <= 200) {
+      const event: Record<string, unknown> = {
+        domain: candidate.domain,
+        eventId: candidate.eventId,
+      };
+      if (Array.isArray(candidate.entityIds)) {
+        const entityIds = candidate.entityIds
+          .filter((id): id is string => typeof id === "string" && id.length > 0 && id.length <= 64);
+        if (entityIds.length <= 100) {
+          event.entityIds = entityIds;
+        }
+      }
+      if (typeof candidate.revision === "string" && candidate.revision.length <= 64) {
+        event.revision = candidate.revision;
+      }
+      data.dataInvalidation = JSON.stringify(event);
+    }
+  }
 
   const message = {
     token,
@@ -172,6 +197,59 @@ export async function sendPushNotification(
     }
 
     logger.error("[FCM] Erreur", undefined, { token: maskedToken });
+    throw error;
+  }
+}
+
+export interface FcmDataInvalidation {
+  domain: string;
+  eventId: string;
+  entityIds?: string[];
+  revision?: string;
+}
+
+export async function sendDataInvalidation(
+  token: string,
+  invalidation: FcmDataInvalidation,
+) {
+  if (!token
+    || !/^[a-z][a-z0-9_-]{0,39}$/.test(invalidation.domain)
+    || !invalidation.eventId
+    || invalidation.eventId.length > 200) {
+    throw new Error("Invalid FCM data invalidation");
+  }
+
+  const event: Record<string, unknown> = {
+    domain: invalidation.domain,
+    eventId: invalidation.eventId,
+  };
+  if (invalidation.entityIds?.length) {
+    const entityIds = invalidation.entityIds
+      .filter((id) => typeof id === "string" && id.length > 0 && id.length <= 64);
+    if (entityIds.length <= 100) {
+      event.entityIds = entityIds;
+    }
+  }
+  if (invalidation.revision && invalidation.revision.length <= 64) {
+    event.revision = invalidation.revision;
+  }
+
+  const maskedToken = `${token.slice(0, 10)}...`;
+  try {
+    return await getMessaging().send({
+      token,
+      data: { dataInvalidation: JSON.stringify(event) },
+      android: { priority: "high" },
+    });
+  } catch (error) {
+    logger.error("FCM data invalidation delivery failed", undefined, {
+      code: (error as any)?.code,
+      errorName: error instanceof Error ? error.name : "UnknownError",
+      token: maskedToken,
+    });
+    if (isInvalidFcmTokenError(error)) {
+      throw new InvalidFcmTokenError(token, error);
+    }
     throw error;
   }
 }

@@ -16,6 +16,8 @@ declare global {
     AndroidNotificationBridge?: {
       onNotificationBridgeReady?: (bridgeSessionId: string) => void;
       onNotificationTargetReceived?: (dispatchId: string, bridgeSessionId: string) => void;
+      onDataInvalidationReceived?: (eventId: string) => void;
+      clearPendingDataInvalidations?: () => void;
     };
   }
 }
@@ -27,6 +29,15 @@ import { MobileVisitTracker } from "./utils/mobileVisit";
 import { clearPersistedParentSession, getDisabledParentMessage } from "./utils/parentSession";
 import { getNotificationNavigationRoute } from "./utils/notificationNavigation";
 import { getConfirmedPushAssociationKey, getPushAssociationKey, PushAssociationQueue, shouldRegisterPushAssociation, withPushAssociationTimeout } from "./utils/pushAssociation";
+import { parseDataInvalidation } from "./utils/dataInvalidation";
+import type { DataInvalidation } from "./utils/dataInvalidation";
+
+declare global {
+  interface Window {
+    onEcoleTrackDataInvalidation?: (event: unknown) => void;
+    __pendingDataInvalidations?: unknown[];
+  }
+}
 
 export default function App() {
   const [token, setToken] = useState<string | null>(() => localStorage.getItem("ecoletrack_token"));
@@ -50,6 +61,28 @@ export default function App() {
   const refreshPromiseRef = useRef<Promise<string | null> | null>(null);
   const logoutHandledRef = useRef(false);
   const mobileVisitTrackerRef = useRef(new MobileVisitTracker());
+  const seenDataInvalidationIdsRef = useRef(new Set<string>());
+  const notificationPollInvalidationIdsRef = useRef(new Set<string>());
+  const invalidationSessionStartedAtRef = useRef(Date.now());
+  const notificationFetchInFlightRef = useRef(false);
+  const notificationFetchPendingRef = useRef(false);
+
+  const publishDataInvalidation = (value: unknown, fromNotificationPoll = false) => {
+    const invalidation = parseDataInvalidation(value);
+    if (!invalidation) return;
+    const eventKey = `${invalidation.domain}:${invalidation.eventId}`;
+
+    if (!seenDataInvalidationIdsRef.current.has(eventKey)) {
+      seenDataInvalidationIdsRef.current.add(eventKey);
+      if (fromNotificationPoll) notificationPollInvalidationIdsRef.current.add(eventKey);
+      window.dispatchEvent(new CustomEvent<DataInvalidation>(
+        "ecoletrack:data-invalidation",
+        { detail: invalidation },
+      ));
+      if (fromNotificationPoll) notificationPollInvalidationIdsRef.current.delete(eventKey);
+    }
+    window.AndroidNotificationBridge?.onDataInvalidationReceived?.(eventKey);
+  };
 
   const decodeJwtPayload = (jwt: string): { exp?: number } | null => {
     try {
@@ -321,6 +354,7 @@ export default function App() {
     const runtime = window as Window & typeof globalThis & {
       setFcmToken?: (token: string) => void;
       setNotificationTarget?: (target: string, dispatchId: string | null) => void;
+      onEcoleTrackDataInvalidation?: (event: unknown) => void;
     };
 
     console.log("[LIFECYCLE] App useEffect install JS bridges", { url: window.location.href, documentHidden: document.hidden });
@@ -340,6 +374,11 @@ export default function App() {
       setNotificationDispatchId(dispatchId);
       setNotificationTargetSignal((prev) => prev + 1);
     };
+    runtime.onEcoleTrackDataInvalidation = publishDataInvalidation;
+
+    const pendingDataInvalidations = window.__pendingDataInvalidations ?? [];
+    delete window.__pendingDataInvalidations;
+    pendingDataInvalidations.forEach(publishDataInvalidation);
 
     const pendingTarget = (window as any).__pendingNotificationTarget;
     if (pendingTarget && typeof pendingTarget === "string" && pendingTarget.trim().length > 0) {
@@ -361,6 +400,7 @@ export default function App() {
     return () => {
       delete runtime.setFcmToken;
       delete runtime.setNotificationTarget;
+      delete runtime.onEcoleTrackDataInvalidation;
     };
   }, []);
 
@@ -578,48 +618,107 @@ export default function App() {
   };
   // Fetch parent in-app notifications
   const fetchNotifications = async (activeToken?: string) => {
-    const response = await performProtectedRequest((authToken) => fetch(withApiBase("/api/mobile/parent/notifications"), {
-      headers: { "Authorization": `Bearer ${authToken}` }
-    }));
-
-    if (!response) {
-      console.log("[AUTH_DEBUG] fetchNotifications skipped because token refresh failed or request failed");
+    if (notificationFetchInFlightRef.current) {
+      notificationFetchPendingRef.current = true;
       return;
     }
 
-    if (response.status === 403) {
-      setNotifications([]);
-      handleLogout();
-      return;
-    }
+    notificationFetchInFlightRef.current = true;
+    const requestSessionGeneration = pushSessionGenerationRef.current;
+    try {
+      const response = await performProtectedRequest((authToken) => fetch(withApiBase("/api/mobile/parent/notifications"), {
+        headers: { "Authorization": `Bearer ${authToken}` }
+      }));
+      if (requestSessionGeneration !== pushSessionGenerationRef.current) return;
 
-    if (response.ok) {
-      const raw = await response.clone().text();
-      console.log('[APK DEBUG] GET response', raw);
-      const data = await parseJsonSafe<AppNotification[]>(response.clone());
-      const mapped = Array.isArray(data) ? data : [];
-      console.log('[APK DEBUG] mapped notifications', mapped);
-      setNotifications(mapped);
+      if (!response) {
+        console.log("[AUTH_DEBUG] fetchNotifications skipped because token refresh failed or request failed");
+        return;
+      }
+
+      if (response.status === 403) {
+        notificationFetchPendingRef.current = false;
+        setNotifications([]);
+        handleLogout();
+        return;
+      }
+
+      if (response.ok) {
+        const raw = await response.clone().text();
+        console.log('[APK DEBUG] GET response', raw);
+        const data = await parseJsonSafe<AppNotification[]>(response.clone());
+        const mapped = Array.isArray(data) ? data : [];
+        console.log('[APK DEBUG] mapped notifications', mapped);
+        const publishNotificationInvalidation = (notification: AppNotification) => {
+          const eventId = notification.dataInvalidationId;
+          const domain = notification.dataInvalidationDomain;
+          if (!eventId || !domain) return;
+          if (Date.parse(notification.createdAt) >= invalidationSessionStartedAtRef.current) {
+            publishDataInvalidation({
+              domain,
+              eventId,
+              entityIds: notification.dataInvalidationEntityIds,
+            }, true);
+          } else {
+            seenDataInvalidationIdsRef.current.add(`${domain}:${eventId}`);
+          }
+        };
+        mapped.forEach(publishNotificationInvalidation);
+        setNotifications(mapped);
+      }
+    } finally {
+      notificationFetchInFlightRef.current = false;
+      if (notificationFetchPendingRef.current && token) {
+        notificationFetchPendingRef.current = false;
+        void fetchNotifications(activeToken);
+      }
     }
   };
 
-
-
-  // Poll for background notifications regularly when logged in
+  // Poll for background notifications regularly when logged in.
   useEffect(() => {
-    if (token) {
+    if (!token) return;
+
+    let refreshTimer: number | undefined;
+    const refreshNotificationsAfterInvalidation = (event: Event) => {
+      const invalidation = event instanceof CustomEvent ? parseDataInvalidation(event.detail) : null;
+      if (!invalidation
+        || notificationPollInvalidationIdsRef.current.has(`${invalidation.domain}:${invalidation.eventId}`)) return;
+      if (refreshTimer != null) window.clearTimeout(refreshTimer);
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = undefined;
+        void fetchNotifications();
+      }, 120);
+    };
+    const refreshNotificationsOnResume = () => {
+      void fetchNotifications();
+    };
+    window.addEventListener("ecoletrack:data-invalidation", refreshNotificationsAfterInvalidation);
+    window.addEventListener("ecoletrack:app-resume", refreshNotificationsOnResume);
+    window.addEventListener("online", refreshNotificationsOnResume);
+    fetchNotifications();
+    const interval = setInterval(() => {
       fetchNotifications();
-      const interval = setInterval(() => {
-        fetchNotifications();
-      }, 3000);
-      return () => clearInterval(interval);
-    }
+    }, 3000);
+    return () => {
+      if (refreshTimer != null) window.clearTimeout(refreshTimer);
+      window.removeEventListener("ecoletrack:data-invalidation", refreshNotificationsAfterInvalidation);
+      window.removeEventListener("ecoletrack:app-resume", refreshNotificationsOnResume);
+      window.removeEventListener("online", refreshNotificationsOnResume);
+      clearInterval(interval);
+    };
   }, [token]);
 
   // Handlers for session authentication
   const handleLoginSuccess = (newToken: string, newParent: Parent, newRefreshToken: string) => {
     setSessionEndedMessage(null);
     logoutHandledRef.current = false;
+    seenDataInvalidationIdsRef.current.clear();
+    notificationPollInvalidationIdsRef.current.clear();
+    invalidationSessionStartedAtRef.current = Date.now();
+    notificationFetchPendingRef.current = false;
+    window.__pendingDataInvalidations = [];
+    window.AndroidNotificationBridge?.clearPendingDataInvalidations?.();
     pushSessionGenerationRef.current += 1;
     activePushAssociationRef.current = getPushAssociationKey(newParent.id, deviceIdRef.current, fcmToken);
     console.log("[AUTH_DEBUG] handleLoginSuccess new session stored", {
@@ -662,6 +761,12 @@ export default function App() {
     pushSessionGenerationRef.current += 1;
     activePushAssociationRef.current = null;
     lastRegisteredPushAssociationRef.current = null;
+    seenDataInvalidationIdsRef.current.clear();
+    notificationPollInvalidationIdsRef.current.clear();
+    invalidationSessionStartedAtRef.current = Date.now();
+    notificationFetchPendingRef.current = false;
+    window.__pendingDataInvalidations = [];
+    window.AndroidNotificationBridge?.clearPendingDataInvalidations?.();
 
     clearPersistedParentSession(localStorage);
     setToken(null);

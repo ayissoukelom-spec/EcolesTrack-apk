@@ -901,6 +901,17 @@ app.put("/api/absences/:absenceId/justify", requireAuth, requireParentRoleOnly, 
       });
     }
 
+    try {
+      await NotificationService.dispatchDataInvalidation([{
+        parentId,
+        entityIds: [String(updatedAbsence.studentId)],
+      }], {
+        domain: "attendance",
+        eventId: `parent-absence-justification-${absenceId}-${crypto.randomUUID()}`,
+      });
+    } catch (error) {
+      logger.error("Parent absence justification invalidation dispatch failed", error);
+    }
     return res.json(updatedAbsence);
   } catch (err: any) {
     if (err instanceof AbsenceJustificationAlreadyRejectedError) {
@@ -935,6 +946,17 @@ app.put("/api/absences/:id/justify", requireAuth, requireParentRoleOnly, async (
       });
     }
 
+    try {
+      await NotificationService.dispatchDataInvalidation([{
+        parentId,
+        entityIds: [String(updatedAbsence.studentId)],
+      }], {
+        domain: "attendance",
+        eventId: `parent-absence-justification-${id}-${crypto.randomUUID()}`,
+      });
+    } catch (error) {
+      logger.error("Parent absence justification invalidation dispatch failed", error);
+    }
     return res.json(updatedAbsence);
   } catch (err: any) {
     if (err instanceof AbsenceJustificationAlreadyRejectedError) {
@@ -1592,16 +1614,38 @@ app.post("/api/internal/grade-notification", verifyInternalAuth, async (req: Req
         ? await store.getParentIdsForChildren(childIds)
         : [String(parentId)];
 
+    const invalidationEventId = typeof dedupeKey === "string"
+      && /^grade-\d+-event-\d+$/.test(dedupeKey)
+      ? dedupeKey
+      : null;
+    const invalidationChildIds = Array.from(new Set([
+      ...childIds,
+      ...(typeof metadata?.studentId === "string" || typeof metadata?.studentId === "number"
+        ? [String(metadata.studentId)]
+        : []),
+    ]));
+    const deliveryMetadata = {
+      ...metadata,
+      childIds,
+      parentIds: resolvedParentIds,
+      ...(invalidationEventId ? {
+        dataInvalidation: {
+          domain: "grades",
+          eventId: invalidationEventId,
+          entityIds: invalidationChildIds,
+          ...(metadata?.eventVersion != null
+            ? { revision: String(metadata.eventVersion) }
+            : {}),
+        },
+      } : {}),
+    };
+
     const result = await NotificationService.dispatchNotification(
       resolvedParentIds,
       title,
       message,
       category,
-      {
-        ...metadata,
-        childIds,
-        parentIds: resolvedParentIds
-      },
+      deliveryMetadata,
       dedupeKey
     );
 
@@ -1616,6 +1660,54 @@ app.post("/api/internal/grade-notification", verifyInternalAuth, async (req: Req
     return res.status(500).json({
       error: "Notification dispatch failed"
     });
+  }
+});
+
+app.post("/api/internal/data-invalidation", verifyInternalAuth, rateLimit(60, 60000), async (req: Request, res: Response) => {
+  const body = req.body as Record<string, unknown> | null;
+  const recipients = Array.isArray(body?.recipients)
+    ? body.recipients.flatMap((value) => {
+      if (!value || typeof value !== "object") return [];
+      const recipient = value as Record<string, unknown>;
+      if (typeof recipient.parentId !== "string" || !/^\d+$/.test(recipient.parentId)) return [];
+      const uniqueEntityIds = Array.isArray(recipient.entityIds)
+        ? Array.from(new Set(recipient.entityIds.filter(
+          (entityId): entityId is string => typeof entityId === "string" && /^\d+$/.test(entityId),
+        )))
+        : [];
+      const entityIds = uniqueEntityIds.length <= 100 ? uniqueEntityIds : [];
+      return [{
+        parentId: recipient.parentId,
+        ...(entityIds.length ? { entityIds } : {}),
+      }];
+    })
+    : [];
+  const eventId = typeof body?.eventId === "string" ? body.eventId : "";
+  const supportedDomains = new Set([
+    "grades",
+    "attendance",
+    "absence-declarations",
+    "finance",
+    "academics",
+    "bulletins",
+    "notifications",
+  ]);
+  if (typeof body?.domain !== "string"
+    || !supportedDomains.has(body.domain)
+    || !/^[A-Za-z0-9:_-]{1,200}$/.test(eventId)
+    || recipients.length === 0) {
+    return res.status(400).json({ error: "Invalid data invalidation request" });
+  }
+
+  try {
+    const result = await NotificationService.dispatchDataInvalidation(recipients, {
+      domain: body.domain,
+      eventId,
+    });
+    return res.json({ success: true, result });
+  } catch (error) {
+    logger.error("Internal data invalidation dispatch failed", error);
+    return res.status(500).json({ error: "Data invalidation dispatch failed" });
   }
 });
 app.post("/api/internal/evaluation-notification", verifyInternalAuth, async (req: Request, res: Response) => {

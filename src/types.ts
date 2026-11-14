@@ -116,6 +116,9 @@ export interface AppNotification {
   createdAt: string;
   deepLink?: string;
   attachments?: NotificationAttachment[];
+  dataInvalidationId?: string;
+  dataInvalidationDomain?: string;
+  dataInvalidationEntityIds?: string[];
 }
 
 export interface NotificationAttachment {

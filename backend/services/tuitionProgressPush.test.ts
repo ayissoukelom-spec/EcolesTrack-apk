@@ -141,6 +141,22 @@ test('refuses disabled push preferences and does not infer a delivery permission
   assert.equal(sent, true);
 });
 
+test('routes tuition progress reminders to the payment menu', async () => {
+  let sentTarget: string | undefined;
+  const { dependencies } = createDependencies({
+    send: async (_token, _title, _body, target) => {
+      sentTarget = target;
+      return 'fcm-message-1';
+    },
+  });
+
+  assert.deepEqual(await sendTuitionProgressReminderPush(request, dependencies), {
+    status: 'fcm_accepted',
+    acceptedDeviceCount: 1,
+  });
+  assert.equal(sentTarget, 'payment');
+});
+
 test('revalidates parent and device associations before FCM and uses a stable device hash for idempotency', async () => {
   let checks = 0;
   const { dependencies, reservations } = createDependencies({

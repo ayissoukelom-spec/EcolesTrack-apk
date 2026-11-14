@@ -1,6 +1,7 @@
 import { Logger } from "../utils/logger";
 import {
   sendPushNotification,
+  sendDataInvalidation,
   InvalidFcmTokenError,
   isPermanentFcmCredentialError,
 } from "../services/fcm";
@@ -289,6 +290,13 @@ export class QueueManager {
 
     try {
       await new Promise(resolve => setTimeout(resolve, 150));
+
+      if (job.name === "send-data-invalidation") {
+        const { token, dataInvalidation } = job.data;
+        if (!token) throw new Error("FCM token missing");
+        await sendDataInvalidation(token, dataInvalidation);
+        return;
+      }
 
       if (job.name.startsWith("send-notification-push")) {
         const {
