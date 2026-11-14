@@ -112,7 +112,12 @@ export async function sendPushNotification(
       : `\n📎 ${validAttachmentCount} pièces jointes`;
   const notificationBody = `${body}${attachmentSummary}`;
   const maskedToken = token ? `${token.slice(0, 10)}...` : "<missing>";
-  logger.info("[NOTIF_TRACE] sendPushNotification start", { token: maskedToken, title, body: notificationBody, target });
+  const suppressContentLogs = metadata.suppressContentLogs === true;
+  const logContent = {
+    title: suppressContentLogs ? "<redacted>" : title,
+    body: suppressContentLogs ? "<redacted>" : notificationBody,
+  };
+  logger.info("[NOTIF_TRACE] sendPushNotification start", { token: maskedToken, ...logContent, target });
 
   const data: Record<string, string> = {
     title,
@@ -148,7 +153,7 @@ export async function sendPushNotification(
   } as const;
 
   try {
-    logger.info("[NOTIF_TRACE] sendPushNotification payload", { token: maskedToken, title, body: notificationBody, target });
+    logger.info("[NOTIF_TRACE] sendPushNotification payload", { token: maskedToken, ...logContent, target });
     const response = await getMessaging().send(message);
 
     logger.info("[NOTIF_TRACE] sendPushNotification response", { messageId: response });

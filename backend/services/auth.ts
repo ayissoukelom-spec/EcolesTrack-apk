@@ -298,7 +298,7 @@ export class AuthService {
    * Verifies HMAC-SHA256 signature for internal server-to-server calls
    * Requires: X-Internal-Signature and X-Internal-Timestamp headers
    * Signature format: HMAC-SHA256(body + timestamp, INTERNAL_SECRET)
-   * Prevents: Unauthorized callers, request forgery, replay attacks
+   * Limits replay to the accepted timestamp window; endpoint idempotency handles retries.
    */
   public static verifyInternalSignature(body: string, signature: string, timestamp: string): boolean {
     const INTERNAL_SECRET = process.env.INTERNAL_SECRET;
@@ -307,18 +307,18 @@ export class AuthService {
       return false;
     }
 
-    if (!signature || !timestamp) {
+    if (!/^[0-9a-f]{64}$/i.test(signature) || !/^\d{13}$/.test(timestamp)) {
       logger.warn("Missing internal signature or timestamp headers");
       return false;
     }
 
-    // Replay protection: reject timestamps older than 5 minutes
-    const requestTime = parseInt(timestamp, 10);
+    // Reject signatures outside the bounded replay window.
+    const requestTime = Number(timestamp);
     const currentTime = Date.now();
     const maxTimestampAge = 5 * 60 * 1000; // 5 minutes
 
-    if (isNaN(requestTime) || Math.abs(currentTime - requestTime) > maxTimestampAge) {
-      logger.warn(`Timestamp replay detected or invalid: requested=${requestTime}, now=${currentTime}, diff=${Math.abs(currentTime - requestTime)}ms`);
+    if (!Number.isSafeInteger(requestTime) || Math.abs(currentTime - requestTime) > maxTimestampAge) {
+      logger.warn("Internal signature timestamp is invalid or outside the accepted window.");
       return false;
     }
 
@@ -328,9 +328,12 @@ export class AuthService {
     hmac.update(messageToSign);
     const expectedSignature = hmac.digest("hex");
 
-    const isValid = signature === expectedSignature;
+    const isValid = crypto.timingSafeEqual(
+      Buffer.from(signature, "hex"),
+      Buffer.from(expectedSignature, "hex"),
+    );
     if (!isValid) {
-      logger.warn(`HMAC signature mismatch: expected=${expectedSignature}, received=${signature}`);
+      logger.warn("Internal HMAC signature mismatch.");
     }
 
     return isValid;

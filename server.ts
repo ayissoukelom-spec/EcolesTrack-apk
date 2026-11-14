@@ -34,11 +34,43 @@ import { helmetHeaders, requestIdMiddleware, sanitizePayload } from "./backend/m
 import { Logger } from "./backend/utils/logger";
 import { AuthService, MobileSessionAuthorizationError } from "./backend/services/auth";
 import { NotificationService } from "./backend/services/notification";
+import {
+  isInvalidFcmTokenError,
+  isPermanentFcmCredentialError,
+  sendPushNotification,
+} from "./backend/services/fcm";
+import {
+  isTuitionProgressPushRequest,
+  sendTuitionProgressReminderPush,
+} from "./backend/services/tuitionProgressPush";
+import {
+  isConfiguredLocalTuitionReminderTestTarget,
+  isLocalTuitionReminderTestEnvironment,
+  isLocalTuitionReminderTestDatabaseIdentity,
+} from "./backend/services/localTuitionReminderTest";
 import { QueueManager } from "./backend/jobs/queue";
 import { LoginSchema, RegisterPushTokenSchema, NotificationPreferencesSchema, TestNotificationSchema, ParentAbsenceDeclarationSchema } from "./backend/validators/schemas";
 import { getNewPasswordPolicyError } from "./src/utils/passwordPolicy";
 
 const logger = new Logger("ExpressServer");
+
+const isVerifiedLocalTuitionReminderTestDatabase = async (): Promise<boolean> => {
+  if (!isLocalTuitionReminderTestEnvironment()) return false;
+  try {
+    const result = await dbQuery<{
+      database_name: string;
+      server_address: string | null;
+    }>("SELECT current_database() AS database_name, inet_server_addr()::text AS server_address");
+    const identity = result.rows[0];
+    return Boolean(identity && isLocalTuitionReminderTestDatabaseIdentity({
+      databaseName: identity.database_name,
+      serverAddress: identity.server_address,
+    }));
+  } catch {
+    logger.error("Local tuition reminder test database identity check failed");
+    return false;
+  }
+};
 
 // Extended Express Request to hold parent session info
 interface AuthenticatedRequest extends Request {
@@ -356,8 +388,8 @@ const requireParentRoleOnly = (req: AuthenticatedRequest, res: Response, next: N
 
 // Internal server-to-server signature verification
 const verifyInternalAuth = (req: Request, res: Response, next: NextFunction) => {
-  const signature = req.headers["x-internal-signature"] as string;
-  const timestamp = req.headers["x-internal-timestamp"] as string;
+  const signature = req.headers["x-internal-signature"];
+  const timestamp = req.headers["x-internal-timestamp"];
 
   // Collect raw body for signature verification
   let body = "";
@@ -367,7 +399,8 @@ const verifyInternalAuth = (req: Request, res: Response, next: NextFunction) => 
     body = String(req.body || "");
   }
 
-  if (!AuthService.verifyInternalSignature(body, signature, timestamp)) {
+  if (typeof signature !== "string" || typeof timestamp !== "string"
+    || !AuthService.verifyInternalSignature(body, signature, timestamp)) {
     logger.warn(`[SECURITY VIOLATION] Invalid internal signature or timestamp. IP: ${req.ip}, URL: ${req.originalUrl}`);
     return res.status(401).json({
       error: "Signature interne invalide ou expirée.",
@@ -1422,6 +1455,110 @@ app.post("/api/internal/absence-notification", verifyInternalAuth, async (req: R
     return res.status(500).json({
       error: "Notification dispatch failed"
     });
+  }
+});
+
+app.post("/api/internal/tuition-progress-push/test-device-check", verifyInternalAuth, rateLimit(30, 60000), async (req: Request, res: Response) => {
+  const body = req.body as Record<string, unknown> | null;
+  const parentId = typeof body?.parentId === 'string' ? body.parentId : '';
+  const schoolId = body?.schoolId;
+  const studentId = body?.studentId;
+  const academicYearId = body?.academicYearId;
+  const cycleId = body?.cycleId;
+  const deviceId = typeof body?.deviceId === 'string' ? body.deviceId : '';
+  const target = {
+    schoolId: Number(schoolId),
+    studentId: Number(studentId),
+    parentUserId: Number(parentId),
+    deviceId,
+  };
+  if (!await isVerifiedLocalTuitionReminderTestDatabase()) {
+    return res.status(404).json({ status: "unavailable" });
+  }
+  if (!/^\d+$/.test(parentId)
+    || ![schoolId, studentId, academicYearId, cycleId].every((id) =>
+      typeof id === 'number' && Number.isSafeInteger(id) && id > 0)
+    || !/^\d{1,32}$/.test(deviceId)
+    || !isConfiguredLocalTuitionReminderTestTarget(target)) {
+    return res.status(400).json({ status: "invalid_test_target" });
+  }
+  try {
+    const authorized = await store.isAuthorizedTuitionProgressPushRecipient({
+      parentId,
+      schoolId: Number(schoolId),
+      academicYearId: Number(academicYearId),
+      cycleId: Number(cycleId),
+      studentId: Number(studentId),
+    });
+    if (!authorized || !await store.isPushChannelEnabled(parentId)) {
+      return res.status(409).json({ status: "test_recipient_unavailable" });
+    }
+    const device = (await store.getDevicesOfParent(parentId))
+      .find((candidate) => candidate.id === deviceId && Boolean(candidate.pushToken?.trim()));
+    if (!device) return res.status(409).json({ status: "test_device_not_associated" });
+    return res.json({
+      status: "ready",
+      device: {
+        id: device.id,
+        platform: device.platform,
+        appVersion: device.appVersion,
+        lastSeenAt: device.lastSeenAt,
+      },
+    });
+  } catch (error) {
+    logger.error("Local tuition reminder test-device check failed", error);
+    return res.status(503).json({ status: "retryable_failure" });
+  }
+});
+
+app.post("/api/internal/tuition-progress-push", verifyInternalAuth, rateLimit(60, 60000), async (req: Request, res: Response) => {
+  if (!isTuitionProgressPushRequest(req.body)) {
+    return res.status(400).json({ status: "permanent_failure", error: "invalid_push_request" });
+  }
+  if (req.body.testDeviceId || req.body.simulationNow) {
+    const target = {
+      schoolId: req.body.schoolId,
+      studentId: req.body.studentId,
+      parentUserId: Number(req.body.parentId),
+      deviceId: req.body.testDeviceId ?? "",
+    };
+    if (!await isVerifiedLocalTuitionReminderTestDatabase()
+      || !isConfiguredLocalTuitionReminderTestTarget(target)) {
+      return res.status(404).json({ status: "permanent_failure", error: "local_test_unavailable" });
+    }
+  }
+  try {
+    const result = await sendTuitionProgressReminderPush(req.body, {
+      store,
+      send: (token, title, body, target, metadata) => sendPushNotification(
+        token,
+        title,
+        body,
+        target,
+        { ...metadata, suppressContentLogs: true },
+      ),
+      classifyFcmError: (error) => {
+        if (isInvalidFcmTokenError(error)) return "invalid_token";
+        if (isPermanentFcmCredentialError(error)) return "permanent";
+        const code = error && typeof error === "object"
+          ? String((error as { code?: unknown; errorInfo?: { code?: unknown } }).code
+            ?? (error as { errorInfo?: { code?: unknown } }).errorInfo?.code
+            ?? "").toLowerCase()
+          : "";
+        if ([
+          "messaging/server-unavailable",
+          "messaging/internal-error",
+          "messaging/quota-exceeded",
+        ].includes(code)) return "retryable";
+        return "unknown";
+      },
+    });
+    return res.json(result);
+  } catch (error) {
+    logger.error("Tuition progress push submission failed", error, {
+      controlId: req.body.controlId,
+    });
+    return res.status(500).json({ status: "uncertain", error: "push_submission_failed" });
   }
 });
 

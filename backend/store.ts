@@ -60,6 +60,12 @@ interface ParentCredentialRow {
   must_reset: boolean | null;
 }
 
+export type TuitionProgressPushDeviceReservation =
+  | { kind: 'send'; deliveryId: string }
+  | { kind: 'fcm_accepted' }
+  | { kind: 'uncertain' }
+  | { kind: 'permanent_failure' };
+
 const INITIAL_DATABASE: DatabaseSchema = {
   parents: [
     {
@@ -956,6 +962,220 @@ export class PostgresStore {
       appVersion: row.app_version,
       lastSeenAt: row.last_seen_at,
     }));
+  }
+
+  public async isAuthorizedTuitionProgressPushRecipient(input: {
+    parentId: string;
+    schoolId: number;
+    academicYearId: number;
+    cycleId: number;
+    studentId: number;
+  }): Promise<boolean> {
+    const userId = Number(input.parentId);
+    if (!Number.isSafeInteger(userId) || userId <= 0) return false;
+    const { rows } = await dbQuery<{ id: number }>(`
+      SELECT s.id
+      FROM students AS s
+      INNER JOIN parents AS p
+        ON p.id = s.parent_id
+       AND p.user_id = $1
+       AND p.school_id = $2
+      INNER JOIN users AS u
+        ON u.id = p.user_id
+       AND u.is_deleted = false
+      INNER JOIN user_schools AS us
+        ON us.user_id = u.id
+       AND us.school_id = $2
+       AND us.role = 'parent'
+       AND us.is_active IS DISTINCT FROM false
+      INNER JOIN schools AS sch
+        ON sch.id = $2
+       AND sch.is_suspended = false
+      INNER JOIN academic_years AS ay
+        ON ay.id = $3
+       AND (ay.school_id = $2 OR ay.school_id IS NULL)
+       AND ay.is_active = true
+      INNER JOIN school_cycles AS sc
+        ON sc.school_id = $2
+       AND sc.cycle_id = $4
+       AND sc.is_active = true
+      INNER JOIN classes AS c
+        ON c.id = s.class_id
+       AND (c.school_id = $2 OR c.school_id IS NULL)
+       AND c.academic_year_id = $3
+      INNER JOIN levels AS l
+        ON l.id = c.level_id
+       AND l.cycle_id = $4
+       AND l.is_active = true
+      INNER JOIN cycles AS cy
+        ON cy.id = $4
+       AND cy.is_active = true
+      WHERE s.id = $5
+        AND s.school_id = $2
+        AND s.is_active = true
+        AND EXISTS (
+          SELECT 1
+          FROM financial_obligations AS fo
+          INNER JOIN accounting_categories AS ac
+            ON ac.id = fo.category_id
+           AND ac.school_id = $2
+           AND ac.code = 'tuition'
+          WHERE fo.school_id = $2
+            AND fo.academic_year_id = $3
+            AND fo.student_id = s.id
+            AND fo.class_id = c.id
+            AND fo.status = 'active'
+        )
+      LIMIT 1
+    `, [userId, input.schoolId, input.academicYearId, input.cycleId, input.studentId]);
+    return rows.length === 1;
+  }
+
+  public async isPushChannelEnabled(parentId: string): Promise<boolean> {
+    const { rows } = await dbQuery<{ push_enabled: boolean }>(`
+      SELECT push_enabled
+      FROM mobile_notification_preferences
+      WHERE parent_id = $1
+      LIMIT 1
+    `, [parentId]);
+    return rows[0]?.push_enabled ?? true;
+  }
+
+  public async isPushDeviceAssociated(parentId: string, token: string): Promise<boolean> {
+    const { rows } = await dbQuery<{ id: number }>(`
+      SELECT id
+      FROM mobile_parent_devices
+      WHERE parent_id = $1 AND push_token = $2
+      LIMIT 1
+    `, [parentId, token]);
+    return rows.length === 1;
+  }
+
+  public async isPushDeviceIdAndTokenAssociated(
+    parentId: string,
+    deviceId: string,
+    token: string,
+  ): Promise<boolean> {
+    const { rows } = await dbQuery<{ id: number }>(`
+      SELECT id
+      FROM mobile_parent_devices
+      WHERE parent_id = $1 AND id = $2 AND push_token = $3
+      LIMIT 1
+    `, [parentId, deviceId, token]);
+    return rows.length === 1;
+  }
+
+  public async reserveTuitionProgressPushDeviceDelivery(input: {
+    parentId: string;
+    dedupeKey: string;
+    payload: Record<string, unknown>;
+  }): Promise<TuitionProgressPushDeviceReservation> {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(`
+        INSERT INTO mobile_notification_events (parent_id, event_type, payload_json, dedupe_key, created_at)
+        VALUES ($1, 'general', $2, $3, NOW())
+        ON CONFLICT (dedupe_key) DO NOTHING
+      `, [input.parentId, JSON.stringify(input.payload), input.dedupeKey]);
+
+      const eventResult = await client.query<{ id: number }>(`
+        SELECT id FROM mobile_notification_events WHERE dedupe_key = $1 FOR UPDATE
+      `, [input.dedupeKey]);
+      const eventId = eventResult.rows[0]?.id;
+      if (!eventId) throw new Error('Unable to reserve the tuition progress push event.');
+
+      const deliveryResult = await client.query<{
+        id: number;
+        status: string;
+        attempts: number;
+      }>(`
+        SELECT id, status, attempts
+        FROM mobile_notification_deliveries
+        WHERE event_id = $1 AND channel = 'push' AND provider = 'fcm'
+        ORDER BY id DESC
+        LIMIT 1
+        FOR UPDATE
+      `, [eventId]);
+      const existing = deliveryResult.rows[0];
+      if (existing?.status === 'fcm_accepted' || existing?.status === 'sent' || existing?.status === 'delivered') {
+        await client.query('COMMIT');
+        return { kind: 'fcm_accepted' };
+      }
+      if (existing?.status === 'sending' || existing?.status === 'uncertain') {
+        await client.query('COMMIT');
+        return { kind: 'uncertain' };
+      }
+      if (existing?.status === 'failed' || existing?.status === 'permanent_failure') {
+        await client.query('COMMIT');
+        return { kind: 'permanent_failure' };
+      }
+
+      if (existing?.status === 'retryable_failure') {
+        const updated = await client.query<{ id: number }>(`
+          UPDATE mobile_notification_deliveries
+          SET status = 'sending',
+              attempts = attempts + 1,
+              error_code = NULL,
+              error_message = NULL
+          WHERE id = $1 AND status = 'retryable_failure'
+          RETURNING id
+        `, [existing.id]);
+        if (updated.rows[0]) {
+          await client.query('COMMIT');
+          return { kind: 'send', deliveryId: String(updated.rows[0].id) };
+        }
+        await client.query('COMMIT');
+        return { kind: 'uncertain' };
+      }
+
+      const inserted = await client.query<{ id: number }>(`
+        INSERT INTO mobile_notification_deliveries
+          (event_id, channel, provider, status, attempts)
+        VALUES ($1, 'push', 'fcm', 'sending', 1)
+        RETURNING id
+      `, [eventId]);
+      const deliveryId = inserted.rows[0]?.id;
+      if (!deliveryId) throw new Error('Unable to reserve the tuition progress push attempt.');
+      await client.query('COMMIT');
+      return { kind: 'send', deliveryId: String(deliveryId) };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  public async updateTuitionProgressPushDeviceDelivery(input: {
+    deliveryId: string;
+    status: 'fcm_accepted' | 'retryable_failure' | 'uncertain' | 'failed';
+    providerMessageId?: string;
+    errorCode?: string;
+    errorMessage?: string;
+  }): Promise<void> {
+    const deliveryId = Number(input.deliveryId);
+    if (!Number.isSafeInteger(deliveryId) || deliveryId <= 0) {
+      throw new Error('A valid tuition progress push delivery ID is required.');
+    }
+    const result = await dbQuery(`
+      UPDATE mobile_notification_deliveries
+      SET status = $2,
+          provider_message_id = $3,
+          error_code = $4,
+          error_message = $5,
+          sent_at = CASE WHEN $2 = 'fcm_accepted' THEN NOW() ELSE sent_at END
+      WHERE id = $1 AND channel = 'push' AND provider = 'fcm' AND status = 'sending'
+    `, [
+      deliveryId,
+      input.status,
+      input.providerMessageId ?? null,
+      input.errorCode ?? null,
+      input.errorMessage?.slice(0, 1000) ?? null,
+    ]);
+    if (result.rowCount !== 1) {
+      throw new Error('The reserved tuition progress push attempt could not be finalized.');
+    }
   }
 
   public async deletePushToken(parentId: string, token?: string, deviceId?: string): Promise<void> {
