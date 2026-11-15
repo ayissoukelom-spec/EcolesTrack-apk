@@ -27,19 +27,64 @@ import ThemeToggle from "./components/ThemeToggle";
 import { Parent, Child, AppNotification } from "./types";
 import { parseJsonSafe, withApiBase } from "./utils/http";
 import { MobileVisitTracker } from "./utils/mobileVisit";
-import { clearPersistedParentSession, getDisabledParentMessage } from "./utils/parentSession";
+import {
+  clearPersistedParentSession,
+  getDisabledParentMessage,
+  getParentAuthErrorCode,
+  isDefinitiveParentSessionError,
+  type ParentLogoutReason,
+} from "./utils/parentSession";
 import {
   readParentRefreshState,
   readParentSessionSecret,
   writeParentRefreshState,
   writeParentSessionSecret,
   type ParentRefreshState,
+  type ParentRefreshStateReadResult,
+  type ParentSessionSecretReadResult,
   type ParentSessionSecretBridge,
 } from "./utils/parentSessionStorage";
 import { getNotificationNavigationRoute } from "./utils/notificationNavigation";
 import { getConfirmedPushAssociationKey, getPushAssociationKey, PushAssociationQueue, shouldRegisterPushAssociation, withPushAssociationTimeout } from "./utils/pushAssociation";
 import { parseDataInvalidation } from "./utils/dataInvalidation";
 import type { DataInvalidation } from "./utils/dataInvalidation";
+
+const MAX_AUTOMATIC_REFRESH_RETRIES = 9;
+
+const logParentSession = (
+  event: string,
+  details: Record<string, string | number | boolean | null> = {},
+) => {
+  console.info("[PARENT_SESSION]", event, details);
+};
+
+const retryDelayFromResponse = async (response: Response): Promise<number | null> => {
+  const retryAfter = response.headers.get("Retry-After");
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+    const retryAt = Date.parse(retryAfter);
+    if (Number.isFinite(retryAt)) return Math.max(0, retryAt - Date.now());
+  }
+
+  if (response.status !== 429) return null;
+  const body = await parseJsonSafe<{ details?: { resetInSeconds?: unknown } }>(response.clone());
+  const resetInSeconds = body?.details?.resetInSeconds;
+  return typeof resetInSeconds === "number" && Number.isFinite(resetInSeconds)
+    ? Math.max(0, resetInSeconds * 1000)
+    : null;
+};
+
+const readStoredParentSession = (
+  storage: Storage,
+  bridge?: ParentSessionSecretBridge,
+): {
+  accessToken: ParentSessionSecretReadResult;
+  refreshState: ParentRefreshStateReadResult;
+} => ({
+  accessToken: readParentSessionSecret("ecoletrack_token", storage, bridge),
+  refreshState: readParentRefreshState(storage, bridge),
+});
 
 declare global {
   interface Window {
@@ -49,11 +94,16 @@ declare global {
 }
 
 export default function App() {
-  const [token, setToken] = useState<string | null>(() => readParentSessionSecret(
-    "ecoletrack_token",
-    localStorage,
-    window.AndroidSessionBridge,
-  ));
+  const [initialStoredSession] = useState(() =>
+    readStoredParentSession(window.localStorage, window.AndroidSessionBridge),
+  );
+  const [accessTokenReadResult, setAccessTokenReadResult] = useState(initialStoredSession.accessToken);
+  const accessTokenReadRef = useRef<ParentSessionSecretReadResult>(initialStoredSession.accessToken);
+  const [token, setToken] = useState<string | null>(
+    initialStoredSession.accessToken.status === "available"
+      ? initialStoredSession.accessToken.value
+      : null,
+  );
   const [parent, setParent] = useState<Parent | null>(() => {
     const saved = localStorage.getItem("ecoletrack_parent");
     return saved ? JSON.parse(saved) : null;
@@ -64,17 +114,23 @@ export default function App() {
     }
     return window.localStorage.getItem("fcm_token");
   });
-  const [initialRefreshState] = useState<ParentRefreshState | null>(() =>
-    readParentRefreshState(window.localStorage, window.AndroidSessionBridge),
-  );
+  const [refreshStateReadResult, setRefreshStateReadResult] = useState(initialStoredSession.refreshState);
+  const refreshStateReadRef = useRef<ParentRefreshStateReadResult>(initialStoredSession.refreshState);
+  const initialRefreshState = initialStoredSession.refreshState.status === "available"
+    ? initialStoredSession.refreshState.state
+    : null;
   const refreshStateRef = useRef<ParentRefreshState | null>(initialRefreshState);
   const [refreshToken, setRefreshToken] = useState<string | null>(
     initialRefreshState?.refreshToken ?? null,
   );
   const [sessionEndedMessage, setSessionEndedMessage] = useState<string | null>(null);
   const refreshPromiseRef = useRef<Promise<string | null> | null>(null);
+  const parentSessionGenerationRef = useRef(0);
   const refreshRetryTimerRef = useRef<number | null>(null);
   const refreshRetryAttemptRef = useRef(0);
+  const storageReadRetryTimerRef = useRef<number | null>(null);
+  const storageReadRetryAttemptRef = useRef(0);
+  const [storageReadRetryTick, setStorageReadRetryTick] = useState(0);
   const logoutHandledRef = useRef(false);
   const mobileVisitTrackerRef = useRef(new MobileVisitTracker());
   const seenDataInvalidationIdsRef = useRef(new Set<string>());
@@ -82,6 +138,110 @@ export default function App() {
   const invalidationSessionStartedAtRef = useRef(Date.now());
   const notificationFetchInFlightRef = useRef(false);
   const notificationFetchPendingRef = useRef(false);
+
+  const sessionStorageMessage = (
+    accessTokenReadResult.status === "temporarily-unavailable"
+    || refreshStateReadResult.status === "temporarily-unavailable"
+  )
+    ? "Le stockage sécurisé est temporairement indisponible. La session est conservée et une nouvelle lecture sera tentée."
+    : (
+      accessTokenReadResult.status === "unrecoverable"
+      || refreshStateReadResult.status === "unrecoverable"
+    )
+      ? "Une donnée de session chiffrée est illisible. Elle n'a pas été supprimée automatiquement."
+      : refreshStateReadResult.status === "missing" && (token || parent)
+        ? "Le jeton de renouvellement est absent. La session locale est conservée jusqu'à confirmation d'une invalidation définitive."
+        : null;
+
+  const applyStoredParentSession = (stored: ReturnType<typeof readStoredParentSession>) => {
+    accessTokenReadRef.current = stored.accessToken;
+    setAccessTokenReadResult(stored.accessToken);
+    if (stored.accessToken.status === "available") {
+      setToken(stored.accessToken.value);
+    } else if (stored.accessToken.status === "missing") {
+      setToken(null);
+    }
+
+    refreshStateReadRef.current = stored.refreshState;
+    setRefreshStateReadResult(stored.refreshState);
+    if (stored.refreshState.status === "available") {
+      refreshStateRef.current = stored.refreshState.state;
+      setRefreshToken(stored.refreshState.state.refreshToken);
+    } else if (stored.refreshState.status === "missing") {
+      refreshStateRef.current = null;
+      setRefreshToken(null);
+    }
+
+    if (
+      stored.accessToken.status !== "temporarily-unavailable"
+      && stored.refreshState.status !== "temporarily-unavailable"
+    ) {
+      storageReadRetryAttemptRef.current = 0;
+    }
+  };
+
+  const retryStoredParentSessionRead = () => {
+    if (
+      logoutHandledRef.current
+      || (
+        accessTokenReadRef.current.status !== "temporarily-unavailable"
+        && refreshStateReadRef.current.status !== "temporarily-unavailable"
+      )
+    ) {
+      return;
+    }
+    const stored = readStoredParentSession(window.localStorage, window.AndroidSessionBridge);
+    logParentSession("secure-storage-read", {
+      access: stored.accessToken.status,
+      refresh: stored.refreshState.status,
+    });
+    applyStoredParentSession(stored);
+  };
+
+  useEffect(() => {
+    if (logoutHandledRef.current) {
+      if (storageReadRetryTimerRef.current != null) {
+        window.clearTimeout(storageReadRetryTimerRef.current);
+        storageReadRetryTimerRef.current = null;
+      }
+      return;
+    }
+
+    const storageUnavailable = (
+      accessTokenReadResult.status === "temporarily-unavailable"
+      || refreshStateReadResult.status === "temporarily-unavailable"
+    );
+    if (!storageUnavailable) {
+      if (storageReadRetryTimerRef.current != null) {
+        window.clearTimeout(storageReadRetryTimerRef.current);
+        storageReadRetryTimerRef.current = null;
+      }
+      storageReadRetryAttemptRef.current = 0;
+      return;
+    }
+
+    const attempt = storageReadRetryAttemptRef.current + 1;
+    const delay = Math.min(1000 * (2 ** Math.min(attempt - 1, 6)), 60_000);
+    logParentSession("secure-storage-read-retry-scheduled", { attempt, delayMs: delay });
+    storageReadRetryTimerRef.current = window.setTimeout(() => {
+      storageReadRetryTimerRef.current = null;
+      storageReadRetryAttemptRef.current = attempt;
+      retryStoredParentSessionRead();
+      if (
+        accessTokenReadRef.current.status === "temporarily-unavailable"
+        || refreshStateReadRef.current.status === "temporarily-unavailable"
+      ) {
+        setStorageReadRetryTick((value) => value + 1);
+      }
+    }, delay);
+
+    return () => {
+      if (storageReadRetryTimerRef.current != null) {
+        window.clearTimeout(storageReadRetryTimerRef.current);
+        storageReadRetryTimerRef.current = null;
+      }
+    };
+  }, [accessTokenReadResult.status, refreshStateReadResult.status, storageReadRetryTick]);
 
   const publishDataInvalidation = (value: unknown, fromNotificationPoll = false) => {
     const invalidation = parseDataInvalidation(value);
@@ -121,13 +281,27 @@ export default function App() {
     return Date.now() + 60_000 >= payload.exp;
   };
 
-  const scheduleRefreshRetry = (retryAfterHeader?: string | null) => {
+  const scheduleRefreshRetry = (
+    retryDelayMs?: number | null,
+    details: { status?: number; code?: string | null; stage?: string } = {},
+  ) => {
     if (refreshRetryTimerRef.current != null) return;
-    refreshRetryAttemptRef.current += 1;
-    const retryAfterSeconds = Number(retryAfterHeader);
-    const delay = Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
-      ? Math.min(retryAfterSeconds * 1000, 5 * 60 * 1000)
-      : Math.min(2000 * (2 ** Math.min(refreshRetryAttemptRef.current - 1, 8)), 5 * 60 * 1000);
+    refreshRetryAttemptRef.current = Math.min(
+      refreshRetryAttemptRef.current + 1,
+      MAX_AUTOMATIC_REFRESH_RETRIES,
+    );
+    const defaultDelay = Math.min(
+      2000 * (2 ** Math.min(refreshRetryAttemptRef.current - 1, 8)),
+      5 * 60 * 1000,
+    );
+    const delay = Math.min(Math.max(retryDelayMs ?? defaultDelay, 1000), 5 * 60 * 1000);
+    logParentSession("refresh-retry-scheduled", {
+      attempt: refreshRetryAttemptRef.current,
+      delayMs: delay,
+      status: details.status ?? null,
+      code: details.code ?? null,
+      stage: details.stage ?? null,
+    });
     refreshRetryTimerRef.current = window.setTimeout(() => {
       refreshRetryTimerRef.current = null;
       if (navigator.onLine && refreshToken) void refreshAccessToken();
@@ -147,27 +321,42 @@ export default function App() {
   const persistRefreshState = (state: ParentRefreshState) => {
     writeParentRefreshState(state, window.localStorage, window.AndroidSessionBridge);
     refreshStateRef.current = state;
+    const result: ParentRefreshStateReadResult = { status: "available", state };
+    refreshStateReadRef.current = result;
+    setRefreshStateReadResult(result);
     setRefreshToken(state.refreshToken);
   };
 
   const refreshAccessToken = async (): Promise<string | null> => {
+    if (logoutHandledRef.current) return null;
     if (refreshPromiseRef.current) {
       return refreshPromiseRef.current;
     }
 
-    if (!refreshToken) {
+    if (refreshRetryTimerRef.current != null) {
       return null;
     }
 
+    if (!refreshToken) {
+      logParentSession("refresh-not-started", {
+        storage: refreshStateReadRef.current.status,
+      });
+      return null;
+    }
+
+    const requestSessionGeneration = parentSessionGenerationRef.current;
     const promise = (async () => {
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), 15000);
       let operationId: string;
+      let stage = "persist-operation";
+      logParentSession("refresh-started", { storage: refreshStateReadRef.current.status });
       try {
         operationId = refreshStateRef.current?.refreshToken === refreshToken
           ? refreshStateRef.current.pendingOperationId ?? createRefreshOperationId()
           : createRefreshOperationId();
         persistRefreshState({ refreshToken, pendingOperationId: operationId });
+        stage = "request";
         const response = await fetch(withApiBase("/api/mobile/parent/refresh-token"), {
           method: "POST",
           headers: {
@@ -176,23 +365,42 @@ export default function App() {
           body: JSON.stringify({ refreshToken, operationId }),
           signal: controller.signal,
         });
+        if (requestSessionGeneration !== parentSessionGenerationRef.current) return null;
 
         if (!response.ok) {
-          if (response.status === 401) {
-            handleLogout(await getDisabledParentMessage(response) ?? undefined);
+          const code = await getParentAuthErrorCode(response);
+          logParentSession("refresh-response", { status: response.status, code });
+          if (response.status === 401 && isDefinitiveParentSessionError(code)) {
+            const disabledMessage = await getDisabledParentMessage(response);
+            handleLogout(
+              disabledMessage ?? (code === "ACCOUNT_DISABLED"
+                ? "Ce compte est désactivé."
+                : "La session mobile a été invalidée."),
+              "definitive",
+              code,
+            );
           } else {
-            scheduleRefreshRetry(response.headers.get("Retry-After"));
+            scheduleRefreshRetry(await retryDelayFromResponse(response), {
+              status: response.status,
+              code,
+              stage: "http-response",
+            });
           }
           return null;
         }
 
+        stage = "parse-response";
         const data = await parseJsonSafe<{ accessToken?: string; refreshToken?: string }>(response);
+        if (requestSessionGeneration !== parentSessionGenerationRef.current) return null;
         if (!data?.accessToken || !data?.refreshToken) {
-          scheduleRefreshRetry();
+          logParentSession("refresh-response-invalid", { status: response.status });
+          scheduleRefreshRetry(null, { status: response.status, stage });
           return null;
         }
 
+        stage = "persist-access-token";
         writeParentSessionSecret("ecoletrack_token", data.accessToken, window.localStorage, window.AndroidSessionBridge);
+        stage = "persist-rotated-refresh-state";
         persistRefreshState({ refreshToken: data.refreshToken, pendingOperationId: null });
         refreshRetryAttemptRef.current = 0;
         if (refreshRetryTimerRef.current != null) {
@@ -200,14 +408,29 @@ export default function App() {
           refreshRetryTimerRef.current = null;
         }
         setToken(data.accessToken);
+        const accessResult: ParentSessionSecretReadResult = {
+          status: "available",
+          value: data.accessToken,
+        };
+        accessTokenReadRef.current = accessResult;
+        setAccessTokenReadResult(accessResult);
+        logParentSession("refresh-succeeded", { status: response.status });
 
         return data.accessToken;
-      } catch {
-        scheduleRefreshRetry();
+      } catch (error) {
+        if (requestSessionGeneration !== parentSessionGenerationRef.current) return null;
+        const timeoutOccurred = error instanceof DOMException && error.name === "AbortError";
+        logParentSession("refresh-failed", {
+          reason: timeoutOccurred ? "timeout" : "network-or-storage",
+          stage,
+        });
+        scheduleRefreshRetry(null, { stage });
         return null;
       } finally {
         window.clearTimeout(timeout);
-        refreshPromiseRef.current = null;
+        if (requestSessionGeneration === parentSessionGenerationRef.current) {
+          refreshPromiseRef.current = null;
+        }
       }
     })();
 
@@ -216,6 +439,7 @@ export default function App() {
   };
 
   const ensureValidAccessToken = async (): Promise<string | null> => {
+    if (logoutHandledRef.current) return null;
     if (!refreshToken) {
       return token && !isTokenExpiringSoon(token) ? token : null;
     }
@@ -234,27 +458,40 @@ export default function App() {
     try {
       let response = await requestFactory(authToken);
       if (response.status === 401) {
+        const code = await getParentAuthErrorCode(response);
         const disabledMessage = await getDisabledParentMessage(response);
         if (disabledMessage) {
-          handleLogout(disabledMessage);
+          handleLogout(disabledMessage, "definitive", code);
           return null;
         }
+        logParentSession("protected-request-401", { status: response.status, code });
         const refreshedToken = await refreshAccessToken();
-        if (refreshedToken) {
-          authToken = refreshedToken;
-          response = await requestFactory(authToken);
-        } else {
-          if (!refreshToken) handleLogout();
-          return null;
-        }
+        if (!refreshedToken) return null;
+
+        authToken = refreshedToken;
+        response = await requestFactory(authToken);
         if (response.status === 401) {
-          handleLogout(await getDisabledParentMessage(response) ?? undefined);
+          const secondCode = await getParentAuthErrorCode(response);
+          const disabledMessageAfterRetry = await getDisabledParentMessage(response);
+          if (isDefinitiveParentSessionError(secondCode)) {
+            handleLogout(
+              disabledMessageAfterRetry ?? "La session mobile a été invalidée.",
+              "definitive",
+              secondCode,
+            );
+          } else {
+            logParentSession("protected-request-401-after-refresh", {
+              status: response.status,
+              code: secondCode,
+            });
+          }
           return null;
         }
       }
       return response;
-    } catch (e) {
-      throw e;
+    } catch {
+      logParentSession("protected-request-failed", { reason: "network" });
+      return null;
     }
   };
 
@@ -277,63 +514,48 @@ export default function App() {
     mobileVisitTrackerRef.current.setAuthenticatedParent(token && parentId ? parentId : null);
     if (!token || !parentId) return;
 
-    void mobileVisitTrackerRef.current.recordAppOpen(parentId, recordMobileVisit).catch((error) => {
-      console.error("[VISIT] Failed to record authenticated app opening", error);
+    void mobileVisitTrackerRef.current.recordAppOpen(parentId, recordMobileVisit).catch(() => {
+      console.error("[VISIT] Failed to record authenticated app opening.");
     });
   }, [token, parent?.id]);
 
   useEffect(() => {
-    console.log("[LIFECYCLE] App mounted", { tokenPresent: !!token, tokenLength: token?.length, parentPresent: !!parent });
     const parentId = token && parent?.id ? String(parent.id) : null;
+    const resumeRefreshRecovery = () => {
+      retryStoredParentSessionRead();
+      void ensureValidAccessToken();
+    };
 
     const handleAppResume = () => {
+      resumeRefreshRecovery();
       if (!parentId) return;
-      void mobileVisitTrackerRef.current.recordForegroundReturn(parentId, recordMobileVisit).catch((error) => {
-        console.error("[VISIT] Failed to record foreground return", error);
+      void mobileVisitTrackerRef.current.recordForegroundReturn(parentId, recordMobileVisit).catch(() => {
+        console.error("[VISIT] Failed to record foreground return.");
       });
     };
     const handleAppBackground = () => {
       if (parentId) mobileVisitTrackerRef.current.markBackgrounded(parentId);
     };
 
-    const logTokenState = (label: string) => {
-      console.log("[LIFECYCLE] " + label, {
-        tokenPresent: !!token,
-        tokenLength: token?.length,
-        parentPresent: !!parent,
-        documentHidden: document.hidden
-      });
-    };
-
     const handleVisibilityChange = () => {
-      logTokenState("visibilitychange");
       if (document.visibilityState === "visible") {
-        void ensureValidAccessToken();
         handleAppResume();
       } else if (parentId) {
         mobileVisitTrackerRef.current.markBackgrounded(parentId);
       }
     };
     const handlePageShow = () => {
-      logTokenState("pageshow");
-      void ensureValidAccessToken();
       handleAppResume();
     };
     const handlePageHide = () => {
-      logTokenState("pagehide");
       if (parentId) mobileVisitTrackerRef.current.markBackgrounded(parentId);
     };
     const handleWindowFocus = () => {
-      logTokenState("window focus");
-      void ensureValidAccessToken();
       handleAppResume();
     };
     const handleNetworkOnline = () => {
-      if (refreshToken && (!token || isTokenExpiringSoon(token))) {
-        void refreshAccessToken();
-      }
+      handleAppResume();
     };
-    const handleWindowBlur = () => logTokenState("window blur");
 
     document.addEventListener("visibilitychange", handleVisibilityChange);
     window.addEventListener("ecoletrack:app-resume", handleAppResume);
@@ -342,7 +564,6 @@ export default function App() {
     window.addEventListener("pagehide", handlePageHide);
     window.addEventListener("focus", handleWindowFocus);
     window.addEventListener("online", handleNetworkOnline);
-    window.addEventListener("blur", handleWindowBlur);
 
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
@@ -352,13 +573,8 @@ export default function App() {
       window.removeEventListener("pagehide", handlePageHide);
       window.removeEventListener("focus", handleWindowFocus);
       window.removeEventListener("online", handleNetworkOnline);
-      window.removeEventListener("blur", handleWindowBlur);
     };
   }, [token, parent, refreshToken]);
-
-  useEffect(() => {
-    console.log("[LIFECYCLE] token state changed", { tokenPresent: !!token, tokenLength: token?.length });
-  }, [token]);
 
   useEffect(() => {
     if (refreshToken && !token) {
@@ -421,18 +637,12 @@ export default function App() {
       onEcoleTrackDataInvalidation?: (event: unknown) => void;
     };
 
-    console.log("[LIFECYCLE] App useEffect install JS bridges", { url: window.location.href, documentHidden: document.hidden });
-
     runtime.setFcmToken = (token: string) => {
-      console.log("[NOTIFICATION_DEBUG] React received FCM token via native bridge", { tokenPresent: Boolean(token) });
       setFcmToken(token);
       window.localStorage.setItem("fcm_token", token);
-      console.log("[NOTIFICATION_DEBUG] React stored fcm_token in localStorage");
     };
 
     runtime.setNotificationTarget = (target: string, dispatchId: string | null) => {
-      console.log("[NOTIFICATION_DEBUG] window.setNotificationTarget created");
-      console.log("[NOTIFICATION_DEBUG] target received by window.setNotificationTarget :", target);
       latestNotificationDispatchIdRef.current = dispatchId;
       setNotificationTarget(target);
       setNotificationDispatchId(dispatchId);
@@ -446,7 +656,6 @@ export default function App() {
 
     const pendingTarget = (window as any).__pendingNotificationTarget;
     if (pendingTarget && typeof pendingTarget === "string" && pendingTarget.trim().length > 0) {
-      console.log("[NOTIFICATION_DEBUG] pending target consumed :", pendingTarget);
       const pendingContext = (window as any).__pendingNotificationContext;
       const pendingDispatchId = typeof pendingContext?.dispatchId === "string"
         ? pendingContext.dispatchId
@@ -475,7 +684,6 @@ export default function App() {
 
     const route = getNotificationNavigationRoute(notificationTarget);
     if (!route) {
-      console.log("[FCM] notification target not recognized, preserving current tab", notificationTarget.trim().toLowerCase());
       return;
     }
 
@@ -517,7 +725,6 @@ export default function App() {
       }
 
       acknowledgedNotificationDispatchIdRef.current = notificationDispatchId;
-      console.log("[NOTIFICATION_DEBUG] route applied; acknowledging dispatch", notificationDispatchId);
       notificationBridge.onNotificationTargetReceived(notificationDispatchId, bridgeSessionId);
     };
 
@@ -535,7 +742,6 @@ export default function App() {
     const pushToken = fcmToken;
     if (!token || !parent?.id || !pushToken) {
       activePushAssociationRef.current = null;
-      console.log("[FCM_DEBUG] registerPushToken skipped because token or pushToken missing", { token: !!token, pushToken: !!pushToken });
       return;
     }
 
@@ -549,8 +755,6 @@ export default function App() {
     activePushAssociationRef.current = associationKey;
     const sessionGeneration = pushSessionGenerationRef.current;
     const registrationAttemptKey = JSON.stringify([sessionGeneration, associationKey]);
-    console.log("[FCM_DEBUG] useEffect triggering registerPushToken", { parentId: parent.id, tokenPresent: !!pushToken });
-
     if (!shouldRegisterPushAssociation(
       associationKey,
       lastRegisteredPushAssociationRef.current,
@@ -560,7 +764,6 @@ export default function App() {
     }
 
     registeringPushAssociationRef.current = registrationAttemptKey;
-    console.log("[FCM_DEBUG] Calling registerPushTokenWithBackoff from App.tsx");
 
     const registration = pushAssociationQueueRef.current.enqueue(async () => {
       if (activePushAssociationRef.current !== associationKey
@@ -584,8 +787,8 @@ export default function App() {
         );
         if (confirmedKey) lastRegisteredPushAssociationRef.current = confirmedKey;
       })
-      .catch((error) => {
-        console.error("[FCM_DEBUG] queued token registration failed", error);
+      .catch(() => {
+        console.error("[FCM] Push-token registration failed.");
       })
       .finally(() => {
         if (registeringPushAssociationRef.current === registrationAttemptKey) {
@@ -610,15 +813,14 @@ export default function App() {
   // Notifications loaded from Express
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
 
-  const registerPushToken = async (pushToken: string): Promise<{ success: boolean; status?: number; retryable: boolean; error?: unknown }> => {
+  const registerPushToken = async (pushToken: string): Promise<{ success: boolean; status?: number; retryable: boolean }> => {
     const deviceId = getDeviceId();
     if (!deviceId) {
       console.error("[FCM] Impossible de générer un deviceId");
-      return { success: false, retryable: false, error: "no-device-id" };
+      return { success: false, retryable: false };
     }
 
     try {
-      console.log("[FCM] URL register:", withApiBase("/api/mobile/parent/devices/register-push-token"));
       const response = await withPushAssociationTimeout((signal) =>
         performProtectedRequest((authToken) => fetch(withApiBase("/api/mobile/parent/devices/register-push-token"), {
           method: "POST",
@@ -633,7 +835,7 @@ export default function App() {
 
       if (!response) {
         // performProtectedRequest returned null (likely auth refresh failed)
-        return { success: false, retryable: false, error: "no-response" };
+        return { success: false, retryable: false };
       }
 
       if (response.status === 403) {
@@ -652,10 +854,10 @@ export default function App() {
 
       // Otherwise success if ok
       return { success: response.ok, status: response.status, retryable: false };
-    } catch (e) {
-      console.error("[FCM_DEBUG] registerPushToken threw", e);
+    } catch {
+      console.error("[FCM] Push-token registration request failed.");
       // network / fetch exception -> retryable
-      return { success: false, retryable: true, error: e };
+      return { success: false, retryable: true };
     }
   };
 
@@ -694,7 +896,6 @@ export default function App() {
       if (requestSessionGeneration !== pushSessionGenerationRef.current) return;
 
       if (!response) {
-        console.log("[AUTH_DEBUG] fetchNotifications skipped because token refresh failed or request failed");
         return;
       }
 
@@ -705,11 +906,8 @@ export default function App() {
       }
 
       if (response.ok) {
-        const raw = await response.clone().text();
-        console.log('[APK DEBUG] GET response', raw);
         const data = await parseJsonSafe<AppNotification[]>(response.clone());
         const mapped = Array.isArray(data) ? data : [];
-        console.log('[APK DEBUG] mapped notifications', mapped);
         const publishNotificationInvalidation = (notification: AppNotification) => {
           const eventId = notification.dataInvalidationId;
           const domain = notification.dataInvalidationDomain;
@@ -772,13 +970,19 @@ export default function App() {
 
   // Handlers for session authentication
   const handleLoginSuccess = (newToken: string, newParent: Parent, newRefreshToken: string) => {
+    parentSessionGenerationRef.current += 1;
+    refreshPromiseRef.current = null;
     if (refreshRetryTimerRef.current != null) {
       window.clearTimeout(refreshRetryTimerRef.current);
       refreshRetryTimerRef.current = null;
     }
+    if (storageReadRetryTimerRef.current != null) {
+      window.clearTimeout(storageReadRetryTimerRef.current);
+      storageReadRetryTimerRef.current = null;
+    }
     refreshRetryAttemptRef.current = 0;
+    storageReadRetryAttemptRef.current = 0;
     setSessionEndedMessage(null);
-    logoutHandledRef.current = false;
     seenDataInvalidationIdsRef.current.clear();
     notificationPollInvalidationIdsRef.current.clear();
     invalidationSessionStartedAtRef.current = Date.now();
@@ -787,16 +991,13 @@ export default function App() {
     window.AndroidNotificationBridge?.clearPendingDataInvalidations?.();
     pushSessionGenerationRef.current += 1;
     activePushAssociationRef.current = getPushAssociationKey(newParent.id, deviceIdRef.current, fcmToken);
-    console.log("[AUTH_DEBUG] handleLoginSuccess new session stored", {
-      hasToken: !!newToken,
-      tokenLength: newToken.length,
-      hasRefreshToken: !!newRefreshToken,
-      notificationTarget: notificationTarget,
-      notificationTargetSignal: notificationTargetSignal
-    });
     persistRefreshState({ refreshToken: newRefreshToken, pendingOperationId: null });
     writeParentSessionSecret("ecoletrack_token", newToken, window.localStorage, window.AndroidSessionBridge);
+    const accessResult: ParentSessionSecretReadResult = { status: "available", value: newToken };
+    accessTokenReadRef.current = accessResult;
+    setAccessTokenReadResult(accessResult);
     localStorage.setItem("ecoletrack_parent", JSON.stringify(newParent));
+    logoutHandledRef.current = false;
     setToken(newToken);
     setParent(newParent);
     if (!notificationTarget || notificationTargetSignal === 0) {
@@ -806,23 +1007,72 @@ export default function App() {
     fetchNotifications(newToken);
   };
 
-  const handleLogout = (message?: string) => {
+  const handleLogout = (
+    message?: string,
+    reason?: ParentLogoutReason,
+    code?: string | null,
+  ) => {
+    if (reason === "manual") setSessionEndedMessage(null);
     if (message) setSessionEndedMessage(message);
     if (logoutHandledRef.current) return;
     logoutHandledRef.current = true;
     const currentToken = token;
+    const currentRefreshToken = refreshStateRef.current?.refreshToken ?? refreshToken;
     const currentFcmToken = fcmToken ?? (typeof window !== "undefined" ? window.localStorage.getItem("fcm_token") : null);
     const currentDeviceId = typeof window !== "undefined" ? window.localStorage.getItem("ecoletrack_device_id") : null;
 
-    console.log("[AUTH_DEBUG] handleLogout called", {
-      tokenPresent: !!currentToken,
-      tokenLength: currentToken?.length,
-      fcmTokenPresent: !!currentFcmToken,
-      deviceId: currentDeviceId,
-      documentHidden: typeof document !== "undefined" ? document.hidden : null,
-      url: typeof window !== "undefined" ? window.location.href : null
-    });
+    try {
+      clearPersistedParentSession(localStorage, window.AndroidSessionBridge);
+    } catch {
+      if (reason === "manual") {
+        let sessionRestored = true;
+        if (currentToken) {
+          try {
+            writeParentSessionSecret("ecoletrack_token", currentToken, window.localStorage, window.AndroidSessionBridge);
+          } catch {
+            sessionRestored = false;
+          }
+        }
+        if (currentRefreshToken) {
+          try {
+            writeParentRefreshState(
+              refreshStateRef.current ?? { refreshToken: currentRefreshToken, pendingOperationId: null },
+              window.localStorage,
+              window.AndroidSessionBridge,
+            );
+          } catch {
+            sessionRestored = false;
+          }
+        }
+        if (parent) {
+          try {
+            localStorage.setItem("ecoletrack_parent", JSON.stringify(parent));
+          } catch {
+            sessionRestored = false;
+          }
+        }
+        logParentSession("secure-storage-clear-failed", {
+          reason,
+          code: code ?? null,
+          sessionRestored,
+        });
+        logoutHandledRef.current = false;
+        setSessionEndedMessage("La déconnexion sécurisée n'a pas abouti. La session reste ouverte; réessayez avant de fermer l'application.");
+        return;
+      }
+      logParentSession("secure-storage-clear-failed", { reason: reason ?? "unspecified", code: code ?? null });
+    }
 
+    parentSessionGenerationRef.current += 1;
+    refreshPromiseRef.current = null;
+    logParentSession("session-logout", {
+      reason: reason ?? "local",
+      code: code ?? null,
+    });
+    if (storageReadRetryTimerRef.current != null) {
+      window.clearTimeout(storageReadRetryTimerRef.current);
+      storageReadRetryTimerRef.current = null;
+    }
     pushSessionGenerationRef.current += 1;
     activePushAssociationRef.current = null;
     lastRegisteredPushAssociationRef.current = null;
@@ -838,7 +1088,6 @@ export default function App() {
       refreshRetryTimerRef.current = null;
     }
     refreshStateRef.current = null;
-    clearPersistedParentSession(localStorage, window.AndroidSessionBridge);
     setToken(null);
     setRefreshToken(null);
     refreshPromiseRef.current = null;
@@ -846,11 +1095,18 @@ export default function App() {
     setNotifications([]);
     setSelectedChild(null);
 
-    if (!currentToken) {
+    if (reason !== "manual" || !currentToken || !currentRefreshToken) {
+      if (reason === "manual" && (!currentToken || !currentRefreshToken)) {
+        logParentSession("manual-logout-session-revocation-skipped", {
+          accessTokenAvailable: Boolean(currentToken),
+          refreshTokenAvailable: Boolean(currentRefreshToken),
+        });
+      }
       return;
     }
 
     const logoutPayload: Record<string, string> = {};
+    logoutPayload.refreshToken = currentRefreshToken;
     if (currentFcmToken) {
       logoutPayload.pushToken = currentFcmToken;
     }
@@ -869,12 +1125,13 @@ export default function App() {
         signal
       }));
       if (!response.ok) {
-        throw new Error(`FCM association logout failed with HTTP ${response.status}`);
+        logParentSession("manual-logout-server-rejected", { status: response.status });
+        return;
       }
     });
 
-    void logoutRequest.catch((error) => {
-      console.warn("[FCM_DEBUG] Logout association status is uncertain; next login will register again", error);
+    void logoutRequest.catch(() => {
+      logParentSession("manual-logout-server-unavailable");
     });
   };
 
@@ -904,6 +1161,7 @@ export default function App() {
           onLoginSuccess={handleLoginSuccess}
           onLogout={handleLogout}
           sessionEndedMessage={sessionEndedMessage}
+          sessionStorageMessage={sessionStorageMessage}
           refreshAccessToken={refreshAccessToken}
           activeTab={activeTab}
           setActiveTab={setActiveTab}
@@ -1014,6 +1272,7 @@ export default function App() {
             onLoginSuccess={handleLoginSuccess}
             onLogout={handleLogout}
             sessionEndedMessage={sessionEndedMessage}
+            sessionStorageMessage={sessionStorageMessage}
             refreshAccessToken={refreshAccessToken}
             activeTab={activeTab}
             setActiveTab={setActiveTab}

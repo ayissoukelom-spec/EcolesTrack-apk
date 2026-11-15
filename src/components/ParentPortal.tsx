@@ -24,7 +24,12 @@ import {
 } from "../utils/attendancePresentation";
 import { AttendanceJustificationButton } from "./AttendanceJustificationButton";
 import { AttendanceEventMarker } from "./AttendanceEventMarker";
-import { getDisabledParentMessage } from "../utils/parentSession";
+import {
+  getDisabledParentMessage,
+  getParentAuthErrorCode,
+  isDefinitiveParentSessionError,
+  type ParentLogoutReason,
+} from "../utils/parentSession";
 import { classifyParentNotification } from "../utils/notificationCategory";
 import { getSchoolPeriodLabel, isGradeInSchoolPeriod, SCHOOL_PERIOD_FALLBACK_LABEL } from "../utils/schoolPeriod";
 import { getNewPasswordPolicyError } from "../utils/passwordPolicy";
@@ -38,8 +43,9 @@ interface ParentPortalProps {
   token: string | null;
   parent: Parent | null;
   onLoginSuccess: (token: string, parent: Parent, refreshToken: string) => void;
-  onLogout: (message?: string) => void;
+  onLogout: (message?: string, reason?: ParentLogoutReason, code?: string | null) => void;
   sessionEndedMessage?: string | null;
+  sessionStorageMessage?: string | null;
   refreshAccessToken: () => Promise<string | null>;
   activeTab: string;
   setActiveTab: (tab: string) => void;
@@ -61,6 +67,7 @@ export default function ParentPortal({
   onLoginSuccess,
   onLogout,
   sessionEndedMessage,
+  sessionStorageMessage,
   refreshAccessToken,
   activeTab,
   setActiveTab,
@@ -71,9 +78,6 @@ export default function ParentPortal({
   notificationAlertMenu,
   notificationDispatchId,
 }: ParentPortalProps) {
-  // APK debug: log incoming props
-  console.log('[APK DEBUG] ParentPortal props', JSON.stringify({ notifications }, null, 2));
-  
   // Login credentials state
   const [identifier, setIdentifier] = useState("");
   const [phoneCountryCode, setPhoneCountryCode] = useState("+228");
@@ -137,7 +141,6 @@ export default function ParentPortal({
       ...notif,
       read: notif.read || readOverrides.has(notif.id)
     }));
-    console.log('[APK DEBUG] localNotifications (before set)', JSON.stringify(mapped, null, 2));
     setLocalNotifications(mapped);
   }, [notifications, readOverrides]);
 
@@ -274,7 +277,7 @@ export default function ParentPortal({
   const schoolPeriodLabel = getSchoolPeriodLabel(termCycleCode, activeSchoolPeriod?.periodType);
   const hasConfiguredSchoolPeriod = schoolPeriodLabel !== SCHOOL_PERIOD_FALLBACK_LABEL;
 
-  const handleSessionExpired = (message?: string) => {
+  const handleSessionExpired = (message?: string, code?: string | null) => {
     setChildren([]);
     setAbsences([]);
     setLateArrivals([]);
@@ -283,7 +286,11 @@ export default function ParentPortal({
     setTermAverageApi(null);
     setChildrenLoadError(null);
     if (message) setErrorMsg(message);
-    onLogout(message);
+    onLogout(
+      message,
+      code === "ACCOUNT_DISABLED" || code === "INVALID_SESSION" ? "definitive" : undefined,
+      code,
+    );
   };
 
   const finishChildPhotoImageLoading = () => {
@@ -421,11 +428,16 @@ export default function ParentPortal({
     try {
       let response = await requestFactory(authToken);
       if (response.status === 401) {
+        const code = await getParentAuthErrorCode(response);
         const disabledMessage = await getDisabledParentMessage(response);
         if (disabledMessage) {
-          handleSessionExpired(disabledMessage);
+          handleSessionExpired(disabledMessage, code);
           return null;
         }
+        console.info("[PARENT_SESSION] Protected request returned 401; attempting renewal.", {
+          status: response.status,
+          code,
+        });
         const refreshedToken = await refreshAccessToken();
         if (!refreshedToken) {
           return null;
@@ -435,7 +447,15 @@ export default function ParentPortal({
         response = await requestFactory(authToken);
       }
       if (response.status === 401) {
-        handleSessionExpired(await getDisabledParentMessage(response) ?? undefined);
+        const code = await getParentAuthErrorCode(response);
+        if (isDefinitiveParentSessionError(code)) {
+          handleSessionExpired(await getDisabledParentMessage(response) ?? undefined, code);
+        } else {
+          console.warn("[PARENT_SESSION] Protected request remained unauthorized after one refresh.", {
+            status: response.status,
+            code,
+          });
+        }
         return null;
       }
       if (response.status === 403) {
@@ -443,7 +463,7 @@ export default function ParentPortal({
       }
       return response;
     } catch (e) {
-      console.error("[AUTH_DEBUG] Protected request failed", e);
+      console.warn("[PARENT_SESSION] Protected request failed; session state was retained.");
       return null;
     }
   };
@@ -660,7 +680,7 @@ export default function ParentPortal({
       setIdentifier("");
       setPassword("");
     } catch (err: any) {
-      console.error("[LOGIN ERROR]", err);
+      console.error("[LOGIN] Authentication request failed.");
       setErrorMsg(err.message || "Erreur de connexion");
     } finally {
       setIsLoading(false);
@@ -730,7 +750,6 @@ export default function ParentPortal({
   const fetchChildren = async () => {
     setChildrenLoadError(null);
     try {
-      console.log("[AUTH_DEBUG] fetchChildren starting", { tokenPresent: !!token, tokenLength: token?.length });
       const response = await performProtectedRequest((authToken) => fetch(withApiBase("/api/mobile/parent/children"), {
         headers: { "Authorization": `Bearer ${authToken}` }
       }));
@@ -762,7 +781,6 @@ export default function ParentPortal({
 
   const handleSimulateChild = async () => {
     try {
-      console.log("[AUTH_DEBUG] handleSimulateChild starting", { tokenPresent: !!token, tokenLength: token?.length });
       const response = await performProtectedRequest((authToken) => fetch(withApiBase("/api/mobile/parent/children/simulate"), {
         method: "POST",
         headers: { "Authorization": `Bearer ${authToken}` }
@@ -884,7 +902,6 @@ export default function ParentPortal({
         request.pending = false;
         const requestGeneration = gradeSessionGenerationRef.current;
         try {
-          console.log("[AUTH_DEBUG] fetchChildAbsences starting", { childId, tokenPresent: !!token, tokenLength: token?.length });
           const response = await performProtectedRequest((authToken) => fetch(withApiBase(`/api/mobile/parent/children/${childId}/absences`), {
             headers: { "Authorization": `Bearer ${authToken}` }
           }));
@@ -1818,7 +1835,7 @@ export default function ParentPortal({
                   </div>
                 </div>
 
-                {(errorMsg || sessionEndedMessage) && (
+                {(errorMsg || sessionEndedMessage || sessionStorageMessage) && (
                   <motion.div
                     initial={{ opacity: 0, y: -5 }}
                     animate={{ opacity: 1, y: 0 }}
@@ -1826,7 +1843,7 @@ export default function ParentPortal({
                   >
                     <div className="flex items-start gap-2">
                       <XCircle className="h-4 w-4 text-rose-600 dark:text-rose-300 mt-0.5" />
-                      <span>{errorMsg || sessionEndedMessage}</span>
+                      <span>{errorMsg || sessionEndedMessage || sessionStorageMessage}</span>
                     </div>
                   </motion.div>
                 )}
@@ -1890,7 +1907,7 @@ export default function ParentPortal({
           </div>
           <ThemeToggle />
           <button 
-            onClick={() => onLogout()}
+            onClick={() => onLogout(undefined, "manual")}
             className="p-1.5 bg-white/20 hover:bg-white/30 text-white rounded-lg transition-colors border border-white/30"
             title="Se déconnecter"
           >
@@ -1898,6 +1915,15 @@ export default function ParentPortal({
           </button>
         </div>
       </div>
+
+      {(sessionEndedMessage || sessionStorageMessage) && (
+        <div
+          className="border-b border-amber-300 bg-amber-50 px-4 py-2 text-center text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-100"
+          role="status"
+        >
+          {sessionEndedMessage || sessionStorageMessage}
+        </div>
+      )}
 
       <div className="flex min-h-12 shrink-0 items-center justify-center border-b theme-border bg-white/70 px-3 py-2 dark:bg-slate-950/60">
         {isLoadingWhatsAppContact ? (

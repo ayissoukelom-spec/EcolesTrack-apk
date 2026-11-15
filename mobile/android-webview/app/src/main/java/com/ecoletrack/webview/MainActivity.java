@@ -56,11 +56,14 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.security.KeyStore;
+import java.security.UnrecoverableKeyException;
 import javax.crypto.Cipher;
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
+import javax.crypto.AEADBadTagException;
 import javax.crypto.spec.GCMParameterSpec;
 import android.security.keystore.KeyGenParameterSpec;
+import android.security.keystore.KeyPermanentlyInvalidatedException;
 import android.security.keystore.KeyProperties;
 import java.lang.ref.WeakReference;
 import org.json.JSONArray;
@@ -90,6 +93,14 @@ public class MainActivity extends AppCompatActivity {
     private static final String PARENT_SESSION_PREFERENCES = "ecoletrack_parent_session_secrets";
     private static final String PARENT_REFRESH_STATE_KEY = "ecoletrack_parent_refresh_state";
     private static final String PARENT_REFRESH_STATE_UNAVAILABLE = "__ECOLETRACK_REFRESH_STATE_UNAVAILABLE__";
+    private static final String PARENT_REFRESH_STATE_TEMPORARILY_UNAVAILABLE =
+            "__ECOLETRACK_REFRESH_STATE_TEMPORARILY_UNAVAILABLE__";
+    private static final String PARENT_REFRESH_STATE_UNRECOVERABLE =
+            "__ECOLETRACK_REFRESH_STATE_UNRECOVERABLE__";
+    private static final String PARENT_SESSION_SECRET_TEMPORARILY_UNAVAILABLE =
+            "__ECOLETRACK_SESSION_SECRET_TEMPORARILY_UNAVAILABLE__";
+    private static final String PARENT_SESSION_SECRET_UNRECOVERABLE =
+            "__ECOLETRACK_SESSION_SECRET_UNRECOVERABLE__";
     private static final int CURRENT_PARENT_SESSION_KEY_VERSION = 1;
     private static final String PARENT_SESSION_KEY_ALIAS_PREFIX = "ecoletrack_parent_session_key_v";
     private static final Object PARENT_SESSION_STORAGE_LOCK = new Object();
@@ -585,6 +596,12 @@ public class MainActivity extends AppCompatActivity {
                 || "ecoletrack_refresh_operation_id".equals(key);
     }
 
+    private static final class UnrecoverableParentSessionException extends Exception {
+        UnrecoverableParentSessionException(String message) {
+            super(message);
+        }
+    }
+
     private SecretKey getParentSessionKey(int version, boolean createIfMissing) throws Exception {
         KeyStore keyStore = KeyStore.getInstance("AndroidKeyStore");
         keyStore.load(null);
@@ -593,7 +610,7 @@ public class MainActivity extends AppCompatActivity {
             return (SecretKey) keyStore.getKey(alias, null);
         }
         if (!createIfMissing) {
-            throw new IllegalStateException("The parent session encryption key is unavailable.");
+            throw new UnrecoverableParentSessionException("The parent session encryption key is unavailable.");
         }
 
         KeyGenerator generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore");
@@ -607,12 +624,34 @@ public class MainActivity extends AppCompatActivity {
         return generator.generateKey();
     }
 
+    private boolean isUnrecoverableSessionReadError(Throwable error) {
+        Throwable current = error;
+        while (current != null) {
+            if (current instanceof AEADBadTagException
+                    || current instanceof IllegalArgumentException
+                    || current instanceof UnrecoverableParentSessionException
+                    || current instanceof KeyPermanentlyInvalidatedException
+                    || current instanceof UnrecoverableKeyException) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
     private final class AndroidSessionBridge {
         @JavascriptInterface
         public String readParentRefreshState() {
             synchronized (PARENT_SESSION_STORAGE_LOCK) {
-                String stored = getSharedPreferences(PARENT_SESSION_PREFERENCES, MODE_PRIVATE)
-                        .getString(PARENT_REFRESH_STATE_KEY, null);
+                String stored;
+                try {
+                    stored = getSharedPreferences(PARENT_SESSION_PREFERENCES, MODE_PRIVATE)
+                            .getString(PARENT_REFRESH_STATE_KEY, null);
+                } catch (Exception error) {
+                    Log.w(TAG, "Android refresh-state storage is temporarily unavailable ("
+                            + error.getClass().getSimpleName() + ").");
+                    return PARENT_REFRESH_STATE_TEMPORARILY_UNAVAILABLE;
+                }
                 if (stored == null) return null;
                 try {
                     String[] versionedParts = stored.split(":", 3);
@@ -632,8 +671,13 @@ public class MainActivity extends AppCompatActivity {
                     }
                     return value;
                 } catch (Exception error) {
-                    Log.w(TAG, "Unable to decrypt the stored parent refresh state.", error);
-                    return PARENT_REFRESH_STATE_UNAVAILABLE;
+                    boolean unrecoverable = isUnrecoverableSessionReadError(error);
+                    Log.w(TAG, "Android refresh-state read failed ("
+                            + (unrecoverable ? "unrecoverable" : "temporarily unavailable")
+                            + ", " + error.getClass().getSimpleName() + ").");
+                    return unrecoverable
+                            ? PARENT_REFRESH_STATE_UNRECOVERABLE
+                            : PARENT_REFRESH_STATE_TEMPORARILY_UNAVAILABLE;
                 }
             }
         }
@@ -673,7 +717,7 @@ public class MainActivity extends AppCompatActivity {
                             .remove("ecoletrack_refresh_operation_id")
                             .commit();
                 } catch (Exception error) {
-                    Log.e(TAG, "Unable to store the parent refresh state securely.", error);
+                    Log.e(TAG, "Unable to store the parent refresh state securely.");
                     return false;
                 }
             }
@@ -695,8 +739,15 @@ public class MainActivity extends AppCompatActivity {
         public String readSessionSecret(String key) {
             if (!isAllowedParentSessionSecret(key)) return null;
             synchronized (PARENT_SESSION_STORAGE_LOCK) {
-                String stored = getSharedPreferences(PARENT_SESSION_PREFERENCES, MODE_PRIVATE)
-                        .getString(key, null);
+                String stored;
+                try {
+                    stored = getSharedPreferences(PARENT_SESSION_PREFERENCES, MODE_PRIVATE)
+                            .getString(key, null);
+                } catch (Exception error) {
+                    Log.w(TAG, "Android session-secret storage is temporarily unavailable ("
+                            + error.getClass().getSimpleName() + ").");
+                    return PARENT_SESSION_SECRET_TEMPORARILY_UNAVAILABLE;
+                }
                 if (stored == null) return null;
                 try {
                     String[] versionedParts = stored.split(":", 3);
@@ -716,8 +767,13 @@ public class MainActivity extends AppCompatActivity {
                     }
                     return value;
                 } catch (Exception error) {
-                    Log.w(TAG, "Unable to decrypt a stored parent session secret.", error);
-                    return null;
+                    boolean unrecoverable = isUnrecoverableSessionReadError(error);
+                    Log.w(TAG, "Android session-secret read failed ("
+                            + (unrecoverable ? "unrecoverable" : "temporarily unavailable")
+                            + ", " + error.getClass().getSimpleName() + ").");
+                    return unrecoverable
+                            ? PARENT_SESSION_SECRET_UNRECOVERABLE
+                            : PARENT_SESSION_SECRET_TEMPORARILY_UNAVAILABLE;
                 }
             }
         }
@@ -740,7 +796,7 @@ public class MainActivity extends AppCompatActivity {
                             .putString(key, stored)
                             .commit();
                 } catch (Exception error) {
-                    Log.e(TAG, "Unable to store a parent session secret securely.", error);
+                    Log.e(TAG, "Unable to store a parent session secret securely.");
                     return false;
                 }
             }

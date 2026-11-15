@@ -297,6 +297,7 @@ app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
   res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
+  res.header("Access-Control-Expose-Headers", "Retry-After");
   if (req.method === "OPTIONS") {
     return res.sendStatus(200);
   }
@@ -339,10 +340,12 @@ function rateLimit(limit: number, windowMs: number) {
 
     clientLimit.count++;
     if (clientLimit.count > limit) {
+      const resetInSeconds = Math.max(1, Math.ceil((clientLimit.resetTime - now) / 1000));
+      res.setHeader("Retry-After", String(resetInSeconds));
       return res.status(429).json({
         error: "Trop de requêtes. Veuillez patienter avant de réessayer.",
         code: "TOO_MANY_REQUESTS",
-        details: { resetInSeconds: Math.ceil((clientLimit.resetTime - now) / 1000) }
+        details: { resetInSeconds }
       });
     }
     next();
@@ -360,6 +363,7 @@ const rateLimitMobileParentVisits = (req: AuthenticatedRequest, res: Response, n
 
   const result = mobileVisitRateLimiter.consume(parentId);
   if (!result.allowed) {
+    res.setHeader("Retry-After", String(result.resetInSeconds));
     return res.status(429).json({
       error: "Trop de requêtes. Veuillez patienter avant de réessayer.",
       code: "TOO_MANY_REQUESTS",
@@ -683,11 +687,14 @@ app.post("/api/mobile/parent/logout", requireAuth, requireParentRoleOnly, async 
   const parentId = req.parent!.id;
   const { refreshToken, deviceId, pushToken } = req.body ?? {};
 
-  if (refreshToken) {
-    await AuthService.revokeSession(parentId, refreshToken);
-  } else {
-    await AuthService.revokeAllSessions(parentId);
+  if (typeof refreshToken !== "string" || !refreshToken.trim()) {
+    return res.status(400).json({
+      error: "Un jeton de session est requis pour la déconnexion de cet appareil.",
+      code: "REFRESH_TOKEN_REQUIRED"
+    });
   }
+
+  await AuthService.revokeSession(parentId, refreshToken);
 
   if (pushToken || deviceId) {
     await store.deletePushToken(parentId, typeof pushToken === 'string' ? pushToken : undefined, typeof deviceId === 'string' ? deviceId : undefined);

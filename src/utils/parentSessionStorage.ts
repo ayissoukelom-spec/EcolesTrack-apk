@@ -12,12 +12,28 @@ export interface ParentRefreshState {
   pendingOperationId: string | null;
 }
 
+export type ParentSessionSecretReadResult =
+  | { status: "available"; value: string }
+  | { status: "missing" }
+  | { status: "temporarily-unavailable" }
+  | { status: "unrecoverable" };
+
+export type ParentRefreshStateReadResult =
+  | { status: "available"; state: ParentRefreshState }
+  | { status: "missing" }
+  | { status: "temporarily-unavailable" }
+  | { status: "unrecoverable" };
+
 const SESSION_SECRET_KEYS = new Set([
   "ecoletrack_token",
   "ecoletrack_refresh_token",
   "ecoletrack_refresh_operation_id",
 ]);
+const REFRESH_STATE_TEMPORARILY_UNAVAILABLE = "__ECOLETRACK_REFRESH_STATE_TEMPORARILY_UNAVAILABLE__";
 const REFRESH_STATE_UNAVAILABLE = "__ECOLETRACK_REFRESH_STATE_UNAVAILABLE__";
+const REFRESH_STATE_UNRECOVERABLE = "__ECOLETRACK_REFRESH_STATE_UNRECOVERABLE__";
+const SESSION_SECRET_TEMPORARILY_UNAVAILABLE = "__ECOLETRACK_SESSION_SECRET_TEMPORARILY_UNAVAILABLE__";
+const SESSION_SECRET_UNRECOVERABLE = "__ECOLETRACK_SESSION_SECRET_UNRECOVERABLE__";
 
 const supportsAtomicRefreshState = (
   bridge?: ParentSessionSecretBridge,
@@ -56,85 +72,134 @@ export const readParentSessionSecret = (
   key: string,
   storage: Pick<Storage, "getItem" | "removeItem">,
   bridge?: ParentSessionSecretBridge,
-): string | null => {
+): ParentSessionSecretReadResult => {
   if (!SESSION_SECRET_KEYS.has(key)) throw new Error("Unsupported parent session secret.");
 
-  const secureValue = bridge?.readSessionSecret(key);
-  if (secureValue) return secureValue;
-
-  const legacyValue = storage.getItem(key);
-  if (!legacyValue) return null;
   if (bridge) {
-    if (!bridge.writeSessionSecret(key, legacyValue)) {
-      console.warn("Unable to migrate the stored parent session to secure storage.");
-      return legacyValue;
+    let secureValue: string | null;
+    try {
+      secureValue = bridge.readSessionSecret(key);
+    } catch {
+      console.warn("The Android secure session storage is temporarily unavailable.");
+      return { status: "temporarily-unavailable" };
     }
-    storage.removeItem(key);
+    if (secureValue === SESSION_SECRET_TEMPORARILY_UNAVAILABLE) {
+      console.warn("The Android secure session storage is temporarily unavailable.");
+      return { status: "temporarily-unavailable" };
+    }
+    if (secureValue === SESSION_SECRET_UNRECOVERABLE) {
+      console.error("The encrypted Android session secret cannot be recovered.");
+      return { status: "unrecoverable" };
+    }
+    if (secureValue) return { status: "available", value: secureValue };
   }
-  return legacyValue;
+
+  let legacyValue: string | null;
+  try {
+    legacyValue = storage.getItem(key);
+  } catch {
+    console.warn("The legacy parent session storage is temporarily unavailable.");
+    return { status: "temporarily-unavailable" };
+  }
+  if (!legacyValue) return { status: "missing" };
+  if (bridge) {
+    try {
+      if (!bridge.writeSessionSecret(key, legacyValue)) {
+        console.warn("Unable to migrate the stored parent session to secure storage.");
+        return { status: "temporarily-unavailable" };
+      }
+      storage.removeItem(key);
+    } catch {
+      console.warn("Unable to migrate the stored parent session to secure storage.");
+      return { status: "temporarily-unavailable" };
+    }
+  }
+  return { status: "available", value: legacyValue };
 };
 
 export const readParentRefreshState = (
   storage: Pick<Storage, "getItem" | "removeItem">,
   bridge?: ParentSessionSecretBridge,
-): ParentRefreshState | null => {
+): ParentRefreshStateReadResult => {
   if (supportsAtomicRefreshState(bridge)) {
     let serialized: string | null;
     try {
       serialized = bridge.readParentRefreshState();
-    } catch (error) {
-      console.error("Unable to read the parent refresh state from secure storage.", error);
-      return null;
+    } catch {
+      console.warn("The Android refresh state is temporarily unavailable.");
+      return { status: "temporarily-unavailable" };
     }
 
-    if (serialized === REFRESH_STATE_UNAVAILABLE) {
-      console.error("The encrypted parent refresh state is temporarily unavailable.");
-      return null;
+    if (
+      serialized === REFRESH_STATE_TEMPORARILY_UNAVAILABLE
+      || serialized === REFRESH_STATE_UNAVAILABLE
+    ) {
+      console.warn("The Android refresh state is temporarily unavailable.");
+      return { status: "temporarily-unavailable" };
+    }
+    if (serialized === REFRESH_STATE_UNRECOVERABLE) {
+      console.error("The encrypted Android refresh state cannot be recovered.");
+      return { status: "unrecoverable" };
     }
     if (serialized) {
       const state = parseParentRefreshState(serialized);
-      if (state) return state;
-      console.error("The stored parent refresh state is invalid.");
-      return null;
+      if (state) return { status: "available", state };
+      console.error("The encrypted Android refresh state is invalid.");
+      return { status: "unrecoverable" };
     }
   }
 
-  const refreshToken = readParentSessionSecret(
+  const refreshTokenResult = readParentSessionSecret(
     "ecoletrack_refresh_token",
     storage,
     bridge,
   );
-  if (!refreshToken) return null;
+  if (refreshTokenResult.status !== "available") {
+    return refreshTokenResult.status === "missing"
+      ? { status: "missing" }
+      : { status: refreshTokenResult.status };
+  }
+
+  const operationIdResult = readParentSessionSecret(
+    "ecoletrack_refresh_operation_id",
+    storage,
+    bridge,
+  );
+  if (
+    operationIdResult.status === "temporarily-unavailable"
+    || operationIdResult.status === "unrecoverable"
+  ) {
+    return { status: operationIdResult.status };
+  }
 
   const state: ParentRefreshState = {
-    refreshToken,
-    pendingOperationId: readParentSessionSecret(
-      "ecoletrack_refresh_operation_id",
-      storage,
-      bridge,
-    ),
+    refreshToken: refreshTokenResult.value,
+    pendingOperationId: operationIdResult.status === "available"
+      ? operationIdResult.value
+      : null,
   };
 
   if (supportsAtomicRefreshState(bridge)) {
     try {
-      if (bridge.writeParentRefreshState(JSON.stringify(state))) {
-        for (const key of ["ecoletrack_refresh_token", "ecoletrack_refresh_operation_id"]) {
-          try {
-            removeParentSessionSecret(key, storage, bridge);
-          } catch (error) {
-            console.warn("The legacy parent refresh secret remains after secure migration.", error);
-            storage.removeItem(key);
-          }
-        }
-      } else {
+      if (!bridge.writeParentRefreshState(JSON.stringify(state))) {
         console.warn("Unable to migrate the parent refresh state to atomic secure storage.");
+        return { status: "temporarily-unavailable" };
       }
-    } catch (error) {
-      console.warn("Unable to migrate the parent refresh state to atomic secure storage.", error);
+      for (const key of ["ecoletrack_refresh_token", "ecoletrack_refresh_operation_id"]) {
+        try {
+          removeParentSessionSecret(key, storage, bridge);
+        } catch {
+          storage.removeItem(key);
+          console.warn("A legacy parent refresh secret remains in secure storage.");
+        }
+      }
+    } catch {
+      console.warn("Unable to migrate the parent refresh state to atomic secure storage.");
+      return { status: "temporarily-unavailable" };
     }
   }
 
-  return state;
+  return { status: "available", state };
 };
 
 export const writeParentRefreshState = (
@@ -149,8 +214,8 @@ export const writeParentRefreshState = (
     for (const key of ["ecoletrack_refresh_token", "ecoletrack_refresh_operation_id"]) {
       try {
         removeParentSessionSecret(key, storage, bridge);
-      } catch (error) {
-        console.warn("The legacy parent refresh secret remains after atomic state update.", error);
+      } catch {
+        console.warn("The legacy parent refresh secret remains after atomic state update.");
         storage.removeItem(key);
       }
     }
@@ -169,10 +234,10 @@ export const removeParentRefreshState = (
   for (const key of ["ecoletrack_refresh_token", "ecoletrack_refresh_operation_id"]) {
     try {
       removeParentSessionSecret(key, storage, bridge);
-    } catch (error) {
+    } catch {
       removalFailed = true;
       storage.removeItem(key);
-      console.error("Unable to clear a legacy parent refresh secret from secure storage.", error);
+      console.error("Unable to clear a legacy parent refresh secret from secure storage.");
     }
   }
   if (removalFailed) {
@@ -183,18 +248,17 @@ export const removeParentRefreshState = (
 export const writeParentSessionSecret = (
   key: string,
   value: string,
-  storage: Pick<Storage, "setItem" | "removeItem">,
+  storage: Pick<Storage, "removeItem">,
   bridge?: ParentSessionSecretBridge,
 ): void => {
   if (!SESSION_SECRET_KEYS.has(key)) throw new Error("Unsupported parent session secret.");
-  if (bridge) {
-    if (!bridge.writeSessionSecret(key, value)) {
-      throw new Error("Unable to persist the parent session in secure storage.");
-    }
-    storage.removeItem(key);
-    return;
+  if (!bridge) {
+    throw new Error("Android secure session storage is unavailable.");
   }
-  storage.setItem(key, value);
+  if (!bridge.writeSessionSecret(key, value)) {
+    throw new Error("Unable to persist the parent session in secure storage.");
+  }
+  storage.removeItem(key);
 };
 
 export const removeParentSessionSecret = (
