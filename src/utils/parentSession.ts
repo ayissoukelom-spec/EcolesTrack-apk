@@ -1,12 +1,32 @@
+import {
+  removeParentRefreshState,
+  removeParentSessionSecret,
+  type ParentSessionSecretBridge,
+} from "./parentSessionStorage";
+
 export interface ParentSessionStorage {
   removeItem(key: string): void;
 }
 
 export const DISABLED_PARENT_MESSAGE = "Ce compte est désactivé. Contactez votre administrateur.";
 
-export const clearPersistedParentSession = (storage: ParentSessionStorage): void => {
-  storage.removeItem("ecoletrack_token");
-  storage.removeItem("ecoletrack_refresh_token");
+export const clearPersistedParentSession = (
+  storage: ParentSessionStorage,
+  bridge?: ParentSessionSecretBridge,
+): void => {
+  try {
+    removeParentRefreshState(storage, bridge);
+  } catch (error) {
+    console.error("Unable to clear the parent refresh state from secure storage.", error);
+    storage.removeItem("ecoletrack_refresh_token");
+    storage.removeItem("ecoletrack_refresh_operation_id");
+  }
+  try {
+    removeParentSessionSecret("ecoletrack_token", storage, bridge);
+  } catch (error) {
+    console.error("Unable to clear a parent session secret from secure storage.", error);
+    storage.removeItem("ecoletrack_token");
+  }
   storage.removeItem("ecoletrack_parent");
 };
 

@@ -19,6 +19,7 @@ declare global {
       onDataInvalidationReceived?: (eventId: string) => void;
       clearPendingDataInvalidations?: () => void;
     };
+    AndroidSessionBridge?: ParentSessionSecretBridge;
   }
 }
 import ParentPortal from "./components/ParentPortal";
@@ -27,6 +28,14 @@ import { Parent, Child, AppNotification } from "./types";
 import { parseJsonSafe, withApiBase } from "./utils/http";
 import { MobileVisitTracker } from "./utils/mobileVisit";
 import { clearPersistedParentSession, getDisabledParentMessage } from "./utils/parentSession";
+import {
+  readParentRefreshState,
+  readParentSessionSecret,
+  writeParentRefreshState,
+  writeParentSessionSecret,
+  type ParentRefreshState,
+  type ParentSessionSecretBridge,
+} from "./utils/parentSessionStorage";
 import { getNotificationNavigationRoute } from "./utils/notificationNavigation";
 import { getConfirmedPushAssociationKey, getPushAssociationKey, PushAssociationQueue, shouldRegisterPushAssociation, withPushAssociationTimeout } from "./utils/pushAssociation";
 import { parseDataInvalidation } from "./utils/dataInvalidation";
@@ -40,7 +49,11 @@ declare global {
 }
 
 export default function App() {
-  const [token, setToken] = useState<string | null>(() => localStorage.getItem("ecoletrack_token"));
+  const [token, setToken] = useState<string | null>(() => readParentSessionSecret(
+    "ecoletrack_token",
+    localStorage,
+    window.AndroidSessionBridge,
+  ));
   const [parent, setParent] = useState<Parent | null>(() => {
     const saved = localStorage.getItem("ecoletrack_parent");
     return saved ? JSON.parse(saved) : null;
@@ -51,14 +64,17 @@ export default function App() {
     }
     return window.localStorage.getItem("fcm_token");
   });
-  const [refreshToken, setRefreshToken] = useState<string | null>(() => {
-    if (typeof window === "undefined") {
-      return null;
-    }
-    return window.localStorage.getItem("ecoletrack_refresh_token");
-  });
+  const [initialRefreshState] = useState<ParentRefreshState | null>(() =>
+    readParentRefreshState(window.localStorage, window.AndroidSessionBridge),
+  );
+  const refreshStateRef = useRef<ParentRefreshState | null>(initialRefreshState);
+  const [refreshToken, setRefreshToken] = useState<string | null>(
+    initialRefreshState?.refreshToken ?? null,
+  );
   const [sessionEndedMessage, setSessionEndedMessage] = useState<string | null>(null);
   const refreshPromiseRef = useRef<Promise<string | null> | null>(null);
+  const refreshRetryTimerRef = useRef<number | null>(null);
+  const refreshRetryAttemptRef = useRef(0);
   const logoutHandledRef = useRef(false);
   const mobileVisitTrackerRef = useRef(new MobileVisitTracker());
   const seenDataInvalidationIdsRef = useRef(new Set<string>());
@@ -105,6 +121,35 @@ export default function App() {
     return Date.now() + 60_000 >= payload.exp;
   };
 
+  const scheduleRefreshRetry = (retryAfterHeader?: string | null) => {
+    if (refreshRetryTimerRef.current != null) return;
+    refreshRetryAttemptRef.current += 1;
+    const retryAfterSeconds = Number(retryAfterHeader);
+    const delay = Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+      ? Math.min(retryAfterSeconds * 1000, 5 * 60 * 1000)
+      : Math.min(2000 * (2 ** Math.min(refreshRetryAttemptRef.current - 1, 8)), 5 * 60 * 1000);
+    refreshRetryTimerRef.current = window.setTimeout(() => {
+      refreshRetryTimerRef.current = null;
+      if (navigator.onLine && refreshToken) void refreshAccessToken();
+    }, delay);
+  };
+
+  const createRefreshOperationId = (): string => {
+    if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  };
+
+  const persistRefreshState = (state: ParentRefreshState) => {
+    writeParentRefreshState(state, window.localStorage, window.AndroidSessionBridge);
+    refreshStateRef.current = state;
+    setRefreshToken(state.refreshToken);
+  };
+
   const refreshAccessToken = async (): Promise<string | null> => {
     if (refreshPromiseRef.current) {
       return refreshPromiseRef.current;
@@ -115,36 +160,53 @@ export default function App() {
     }
 
     const promise = (async () => {
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 15000);
+      let operationId: string;
       try {
+        operationId = refreshStateRef.current?.refreshToken === refreshToken
+          ? refreshStateRef.current.pendingOperationId ?? createRefreshOperationId()
+          : createRefreshOperationId();
+        persistRefreshState({ refreshToken, pendingOperationId: operationId });
         const response = await fetch(withApiBase("/api/mobile/parent/refresh-token"), {
           method: "POST",
           headers: {
             "Content-Type": "application/json"
           },
-          body: JSON.stringify({ refreshToken })
+          body: JSON.stringify({ refreshToken, operationId }),
+          signal: controller.signal,
         });
 
         if (!response.ok) {
           if (response.status === 401) {
             handleLogout(await getDisabledParentMessage(response) ?? undefined);
+          } else {
+            scheduleRefreshRetry(response.headers.get("Retry-After"));
           }
           return null;
         }
 
         const data = await parseJsonSafe<{ accessToken?: string; refreshToken?: string }>(response);
         if (!data?.accessToken || !data?.refreshToken) {
+          scheduleRefreshRetry();
           return null;
         }
 
-        window.localStorage.setItem("ecoletrack_token", data.accessToken);
-        window.localStorage.setItem("ecoletrack_refresh_token", data.refreshToken);
+        writeParentSessionSecret("ecoletrack_token", data.accessToken, window.localStorage, window.AndroidSessionBridge);
+        persistRefreshState({ refreshToken: data.refreshToken, pendingOperationId: null });
+        refreshRetryAttemptRef.current = 0;
+        if (refreshRetryTimerRef.current != null) {
+          window.clearTimeout(refreshRetryTimerRef.current);
+          refreshRetryTimerRef.current = null;
+        }
         setToken(data.accessToken);
-        setRefreshToken(data.refreshToken);
 
         return data.accessToken;
       } catch {
+        scheduleRefreshRetry();
         return null;
       } finally {
+        window.clearTimeout(timeout);
         refreshPromiseRef.current = null;
       }
     })();
@@ -155,7 +217,7 @@ export default function App() {
 
   const ensureValidAccessToken = async (): Promise<string | null> => {
     if (!refreshToken) {
-      return token;
+      return token && !isTokenExpiringSoon(token) ? token : null;
     }
 
     if (!token || isTokenExpiringSoon(token)) {
@@ -166,13 +228,8 @@ export default function App() {
   };
 
   const performProtectedRequest = async (requestFactory: (authToken: string) => Promise<Response>) => {
-    let authToken = token;
-    if (!authToken) {
-      authToken = await refreshAccessToken();
-      if (!authToken) {
-        return null;
-      }
-    }
+    let authToken = await ensureValidAccessToken();
+    if (!authToken) return null;
 
     try {
       let response = await requestFactory(authToken);
@@ -187,7 +244,7 @@ export default function App() {
           authToken = refreshedToken;
           response = await requestFactory(authToken);
         } else {
-          handleLogout();
+          if (!refreshToken) handleLogout();
           return null;
         }
         if (response.status === 401) {
@@ -271,6 +328,11 @@ export default function App() {
       void ensureValidAccessToken();
       handleAppResume();
     };
+    const handleNetworkOnline = () => {
+      if (refreshToken && (!token || isTokenExpiringSoon(token))) {
+        void refreshAccessToken();
+      }
+    };
     const handleWindowBlur = () => logTokenState("window blur");
 
     document.addEventListener("visibilitychange", handleVisibilityChange);
@@ -279,6 +341,7 @@ export default function App() {
     window.addEventListener("pageshow", handlePageShow);
     window.addEventListener("pagehide", handlePageHide);
     window.addEventListener("focus", handleWindowFocus);
+    window.addEventListener("online", handleNetworkOnline);
     window.addEventListener("blur", handleWindowBlur);
 
     return () => {
@@ -288,9 +351,10 @@ export default function App() {
       window.removeEventListener("pageshow", handlePageShow);
       window.removeEventListener("pagehide", handlePageHide);
       window.removeEventListener("focus", handleWindowFocus);
+      window.removeEventListener("online", handleNetworkOnline);
       window.removeEventListener("blur", handleWindowBlur);
     };
-  }, [token, parent]);
+  }, [token, parent, refreshToken]);
 
   useEffect(() => {
     console.log("[LIFECYCLE] token state changed", { tokenPresent: !!token, tokenLength: token?.length });
@@ -572,9 +636,7 @@ export default function App() {
         return { success: false, retryable: false, error: "no-response" };
       }
 
-      // Preserve existing behavior: logout on 403
       if (response.status === 403) {
-        try { handleLogout(); } catch (e) { /* ignore */ }
         return { success: false, status: 403, retryable: false };
       }
 
@@ -639,7 +701,6 @@ export default function App() {
       if (response.status === 403) {
         notificationFetchPendingRef.current = false;
         setNotifications([]);
-        handleLogout();
         return;
       }
 
@@ -711,6 +772,11 @@ export default function App() {
 
   // Handlers for session authentication
   const handleLoginSuccess = (newToken: string, newParent: Parent, newRefreshToken: string) => {
+    if (refreshRetryTimerRef.current != null) {
+      window.clearTimeout(refreshRetryTimerRef.current);
+      refreshRetryTimerRef.current = null;
+    }
+    refreshRetryAttemptRef.current = 0;
     setSessionEndedMessage(null);
     logoutHandledRef.current = false;
     seenDataInvalidationIdsRef.current.clear();
@@ -728,11 +794,10 @@ export default function App() {
       notificationTarget: notificationTarget,
       notificationTargetSignal: notificationTargetSignal
     });
-    localStorage.setItem("ecoletrack_token", newToken);
-    localStorage.setItem("ecoletrack_refresh_token", newRefreshToken);
+    persistRefreshState({ refreshToken: newRefreshToken, pendingOperationId: null });
+    writeParentSessionSecret("ecoletrack_token", newToken, window.localStorage, window.AndroidSessionBridge);
     localStorage.setItem("ecoletrack_parent", JSON.stringify(newParent));
     setToken(newToken);
-    setRefreshToken(newRefreshToken);
     setParent(newParent);
     if (!notificationTarget || notificationTargetSignal === 0) {
       setActiveTab("children");
@@ -768,7 +833,12 @@ export default function App() {
     window.__pendingDataInvalidations = [];
     window.AndroidNotificationBridge?.clearPendingDataInvalidations?.();
 
-    clearPersistedParentSession(localStorage);
+    if (refreshRetryTimerRef.current != null) {
+      window.clearTimeout(refreshRetryTimerRef.current);
+      refreshRetryTimerRef.current = null;
+    }
+    refreshStateRef.current = null;
+    clearPersistedParentSession(localStorage, window.AndroidSessionBridge);
     setToken(null);
     setRefreshToken(null);
     refreshPromiseRef.current = null;

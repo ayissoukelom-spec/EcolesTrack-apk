@@ -414,7 +414,6 @@ export default function ParentPortal({
     if (!authToken) {
       authToken = await refreshAccessToken();
       if (!authToken) {
-        handleSessionExpired();
         return null;
       }
     }
@@ -429,7 +428,6 @@ export default function ParentPortal({
         }
         const refreshedToken = await refreshAccessToken();
         if (!refreshedToken) {
-          handleSessionExpired();
           return null;
         }
 
@@ -441,8 +439,7 @@ export default function ParentPortal({
         return null;
       }
       if (response.status === 403) {
-        handleSessionExpired();
-        return null;
+        return response;
       }
       return response;
     } catch (e) {

@@ -4,12 +4,31 @@ export interface MobileSessionClaims {
   parentId: string;
   role: string;
   authRevocationEventId?: unknown;
+  sessionId?: number;
+  sessionFamilyId?: string;
+  refreshGeneration?: number;
+  absoluteExpiresAt?: number;
+  exp?: number;
+}
+
+export interface MobileSessionAuthorizationRecord {
+  id: number;
+  parentId: string | null;
+  role: string | null;
+  isActive: boolean | null;
+  revokedAt: Date | string | null;
+  expiresAt: Date | string | null;
+  familyId: string | null;
+  generation: number | null;
+  absoluteExpiresAt: Date | string | null;
+  familyRevokedAt: Date | string | null;
 }
 
 export interface MobileAccountAuthorizationState {
   role: string;
   isDeleted: boolean;
   latestRevocationEventId: number;
+  session?: MobileSessionAuthorizationRecord | null;
 }
 
 export type MobileSessionRejection = "invalid_session" | "account_disabled" | "session_revoked";
@@ -38,12 +57,64 @@ export const getMobileSessionRejection = (
       || claims.authRevocationEventId < state.latestRevocationEventId)) {
     return "session_revoked";
   }
+
+  if (claims.sessionId !== undefined) {
+    const session = state.session;
+    if (
+      !Number.isSafeInteger(claims.sessionId)
+      || claims.sessionId <= 0
+      || !session
+      || session.id !== claims.sessionId
+      || session.parentId !== claims.parentId
+      || session.role !== claims.role
+      || !session.isActive
+      || session.revokedAt != null
+      || session.familyRevokedAt != null
+    ) {
+      return "session_revoked";
+    }
+
+    const now = Date.now();
+    const expiresAt = session.expiresAt == null
+      ? Number.NaN
+      : new Date(session.expiresAt).getTime();
+    const absoluteExpiresAt = session.absoluteExpiresAt == null
+      ? null
+      : new Date(session.absoluteExpiresAt).getTime();
+    if (
+      !Number.isFinite(expiresAt)
+      || expiresAt <= now
+      || (absoluteExpiresAt !== null && (!Number.isFinite(absoluteExpiresAt) || absoluteExpiresAt <= now))
+      || (claims.exp !== undefined && claims.exp <= now)
+      || (
+        session.familyId !== null
+        && (
+          claims.sessionFamilyId !== session.familyId
+          || claims.refreshGeneration !== session.generation
+          || claims.absoluteExpiresAt !== absoluteExpiresAt
+        )
+      )
+      || (
+        session.familyId === null
+        && (
+          claims.sessionFamilyId !== undefined
+          || claims.refreshGeneration !== undefined
+          || claims.absoluteExpiresAt !== undefined
+        )
+      )
+    ) {
+      return "session_revoked";
+    }
+  }
   return null;
 };
 
 export const createMobileRequireAuth = (
   verifyToken: (token: string) => MobileSessionClaims | null,
-  getAccountState: (parentId: string) => Promise<MobileAccountAuthorizationState | null>,
+  getAccountState: (
+    parentId: string,
+    claims: MobileSessionClaims,
+  ) => Promise<MobileAccountAuthorizationState | null>,
   logStatusError: (error: unknown) => void,
 ) => async (req: AuthenticatedMobileRequest, res: Response, next: NextFunction) => {
   const authHeader = req.headers.authorization;
@@ -68,7 +139,7 @@ export const createMobileRequireAuth = (
   }
 
   try {
-    const state = await getAccountState(decoded.parentId);
+    const state = await getAccountState(decoded.parentId, decoded);
     const rejection = getMobileSessionRejection(decoded, state);
     if (rejection) {
       const accountDisabled = rejection === "account_disabled";

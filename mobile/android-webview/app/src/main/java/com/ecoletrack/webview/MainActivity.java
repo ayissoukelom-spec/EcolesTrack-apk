@@ -55,6 +55,13 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.security.KeyStore;
+import javax.crypto.Cipher;
+import javax.crypto.KeyGenerator;
+import javax.crypto.SecretKey;
+import javax.crypto.spec.GCMParameterSpec;
+import android.security.keystore.KeyGenParameterSpec;
+import android.security.keystore.KeyProperties;
 import java.lang.ref.WeakReference;
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -80,6 +87,12 @@ public class MainActivity extends AppCompatActivity {
     private static final String STATE_PENDING_ATTACHMENT_COUNT = "pending_attachment_count";
     private static final String STATE_PENDING_DISPATCH_ID = "pending_dispatch_id";
     private static final String DATA_INVALIDATION_PREFERENCES = "ecoletrack_data_invalidations";
+    private static final String PARENT_SESSION_PREFERENCES = "ecoletrack_parent_session_secrets";
+    private static final String PARENT_REFRESH_STATE_KEY = "ecoletrack_parent_refresh_state";
+    private static final String PARENT_REFRESH_STATE_UNAVAILABLE = "__ECOLETRACK_REFRESH_STATE_UNAVAILABLE__";
+    private static final int CURRENT_PARENT_SESSION_KEY_VERSION = 1;
+    private static final String PARENT_SESSION_KEY_ALIAS_PREFIX = "ecoletrack_parent_session_key_v";
+    private static final Object PARENT_SESSION_STORAGE_LOCK = new Object();
     private static final String DATA_INVALIDATION_QUEUE_KEY = "pending_events";
     private static final int MAX_PENDING_DATA_INVALIDATIONS = 50;
     private static final Object DATA_INVALIDATION_LOCK = new Object();
@@ -566,6 +579,185 @@ public class MainActivity extends AppCompatActivity {
                         + " dispatchId=" + dispatchId));
     }
 
+    private boolean isAllowedParentSessionSecret(String key) {
+        return "ecoletrack_token".equals(key)
+                || "ecoletrack_refresh_token".equals(key)
+                || "ecoletrack_refresh_operation_id".equals(key);
+    }
+
+    private SecretKey getParentSessionKey(int version, boolean createIfMissing) throws Exception {
+        KeyStore keyStore = KeyStore.getInstance("AndroidKeyStore");
+        keyStore.load(null);
+        String alias = PARENT_SESSION_KEY_ALIAS_PREFIX + version;
+        if (keyStore.containsAlias(alias)) {
+            return (SecretKey) keyStore.getKey(alias, null);
+        }
+        if (!createIfMissing) {
+            throw new IllegalStateException("The parent session encryption key is unavailable.");
+        }
+
+        KeyGenerator generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore");
+        generator.init(new KeyGenParameterSpec.Builder(
+                alias,
+                KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT)
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setRandomizedEncryptionRequired(true)
+                .build());
+        return generator.generateKey();
+    }
+
+    private final class AndroidSessionBridge {
+        @JavascriptInterface
+        public String readParentRefreshState() {
+            synchronized (PARENT_SESSION_STORAGE_LOCK) {
+                String stored = getSharedPreferences(PARENT_SESSION_PREFERENCES, MODE_PRIVATE)
+                        .getString(PARENT_REFRESH_STATE_KEY, null);
+                if (stored == null) return null;
+                try {
+                    String[] versionedParts = stored.split(":", 3);
+                    if (versionedParts.length != 3) throw new IllegalArgumentException("Invalid encrypted refresh state.");
+                    int keyVersion = Integer.parseInt(versionedParts[0]);
+                    if (keyVersion < 1 || keyVersion > CURRENT_PARENT_SESSION_KEY_VERSION) {
+                        throw new IllegalArgumentException("Unsupported parent session key version.");
+                    }
+                    byte[] iv = Base64.decode(versionedParts[1], Base64.NO_WRAP);
+                    byte[] ciphertext = Base64.decode(versionedParts[2], Base64.NO_WRAP);
+                    Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+                    cipher.init(Cipher.DECRYPT_MODE, getParentSessionKey(keyVersion, false), new GCMParameterSpec(128, iv));
+                    String value = new String(cipher.doFinal(ciphertext), java.nio.charset.StandardCharsets.UTF_8);
+                    if (keyVersion != CURRENT_PARENT_SESSION_KEY_VERSION
+                            && !writeParentRefreshState(value)) {
+                        Log.w(TAG, "Parent refresh-state key rotation is pending secure storage availability.");
+                    }
+                    return value;
+                } catch (Exception error) {
+                    Log.w(TAG, "Unable to decrypt the stored parent refresh state.", error);
+                    return PARENT_REFRESH_STATE_UNAVAILABLE;
+                }
+            }
+        }
+
+        @JavascriptInterface
+        public boolean writeParentRefreshState(String value) {
+            if (value == null) return false;
+            try {
+                JSONObject state = new JSONObject(value);
+                Object refreshToken = state.opt("refreshToken");
+                Object pendingOperationId = state.opt("pendingOperationId");
+                if (!(refreshToken instanceof String)
+                        || ((String) refreshToken).isEmpty()
+                        || !state.has("pendingOperationId")
+                        || (pendingOperationId != JSONObject.NULL
+                        && (!(pendingOperationId instanceof String) || ((String) pendingOperationId).isEmpty()))) {
+                    return false;
+                }
+            } catch (JSONException error) {
+                return false;
+            }
+
+            synchronized (PARENT_SESSION_STORAGE_LOCK) {
+                try {
+                    Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+                    cipher.init(Cipher.ENCRYPT_MODE, getParentSessionKey(CURRENT_PARENT_SESSION_KEY_VERSION, true));
+                    byte[] ciphertext = cipher.doFinal(value.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    String stored = CURRENT_PARENT_SESSION_KEY_VERSION
+                            + ":"
+                            + Base64.encodeToString(cipher.getIV(), Base64.NO_WRAP)
+                            + ":"
+                            + Base64.encodeToString(ciphertext, Base64.NO_WRAP);
+                    return getSharedPreferences(PARENT_SESSION_PREFERENCES, MODE_PRIVATE)
+                            .edit()
+                            .putString(PARENT_REFRESH_STATE_KEY, stored)
+                            .remove("ecoletrack_refresh_token")
+                            .remove("ecoletrack_refresh_operation_id")
+                            .commit();
+                } catch (Exception error) {
+                    Log.e(TAG, "Unable to store the parent refresh state securely.", error);
+                    return false;
+                }
+            }
+        }
+
+        @JavascriptInterface
+        public boolean deleteParentRefreshState() {
+            synchronized (PARENT_SESSION_STORAGE_LOCK) {
+                return getSharedPreferences(PARENT_SESSION_PREFERENCES, MODE_PRIVATE)
+                        .edit()
+                        .remove(PARENT_REFRESH_STATE_KEY)
+                        .remove("ecoletrack_refresh_token")
+                        .remove("ecoletrack_refresh_operation_id")
+                        .commit();
+            }
+        }
+
+        @JavascriptInterface
+        public String readSessionSecret(String key) {
+            if (!isAllowedParentSessionSecret(key)) return null;
+            synchronized (PARENT_SESSION_STORAGE_LOCK) {
+                String stored = getSharedPreferences(PARENT_SESSION_PREFERENCES, MODE_PRIVATE)
+                        .getString(key, null);
+                if (stored == null) return null;
+                try {
+                    String[] versionedParts = stored.split(":", 3);
+                    if (versionedParts.length != 3) throw new IllegalArgumentException("Invalid encrypted session value.");
+                    int keyVersion = Integer.parseInt(versionedParts[0]);
+                    if (keyVersion < 1 || keyVersion > CURRENT_PARENT_SESSION_KEY_VERSION) {
+                        throw new IllegalArgumentException("Unsupported parent session key version.");
+                    }
+                    byte[] iv = Base64.decode(versionedParts[1], Base64.NO_WRAP);
+                    byte[] ciphertext = Base64.decode(versionedParts[2], Base64.NO_WRAP);
+                    Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+                    cipher.init(Cipher.DECRYPT_MODE, getParentSessionKey(keyVersion, false), new GCMParameterSpec(128, iv));
+                    String value = new String(cipher.doFinal(ciphertext), java.nio.charset.StandardCharsets.UTF_8);
+                    if (keyVersion != CURRENT_PARENT_SESSION_KEY_VERSION
+                            && !writeSessionSecret(key, value)) {
+                        Log.w(TAG, "Parent session key rotation is pending secure storage availability.");
+                    }
+                    return value;
+                } catch (Exception error) {
+                    Log.w(TAG, "Unable to decrypt a stored parent session secret.", error);
+                    return null;
+                }
+            }
+        }
+
+        @JavascriptInterface
+        public boolean writeSessionSecret(String key, String value) {
+            if (!isAllowedParentSessionSecret(key) || value == null) return false;
+            synchronized (PARENT_SESSION_STORAGE_LOCK) {
+                try {
+                    Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+                    cipher.init(Cipher.ENCRYPT_MODE, getParentSessionKey(CURRENT_PARENT_SESSION_KEY_VERSION, true));
+                    byte[] ciphertext = cipher.doFinal(value.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    String stored = CURRENT_PARENT_SESSION_KEY_VERSION
+                            + ":"
+                            + Base64.encodeToString(cipher.getIV(), Base64.NO_WRAP)
+                            + ":"
+                            + Base64.encodeToString(ciphertext, Base64.NO_WRAP);
+                    return getSharedPreferences(PARENT_SESSION_PREFERENCES, MODE_PRIVATE)
+                            .edit()
+                            .putString(key, stored)
+                            .commit();
+                } catch (Exception error) {
+                    Log.e(TAG, "Unable to store a parent session secret securely.", error);
+                    return false;
+                }
+            }
+        }
+
+        @JavascriptInterface
+        public boolean deleteSessionSecret(String key) {
+            if (!isAllowedParentSessionSecret(key)) return false;
+            synchronized (PARENT_SESSION_STORAGE_LOCK) {
+                return getSharedPreferences(PARENT_SESSION_PREFERENCES, MODE_PRIVATE)
+                        .edit()
+                        .remove(key)
+                        .commit();
+            }
+        }
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -650,6 +842,7 @@ public class MainActivity extends AppCompatActivity {
             }
         }, "AndroidBridge");
 
+        webView.addJavascriptInterface(new AndroidSessionBridge(), "AndroidSessionBridge");
         webView.addJavascriptInterface(new AndroidCameraBridge(), CAMERA_BRIDGE_NAME);
         webView.addJavascriptInterface(new AndroidNotificationBridge(), "AndroidNotificationBridge");
 

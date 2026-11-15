@@ -31,7 +31,11 @@ import { getExpectedPeriodTypeForCycle } from "./src/utils/schoolPeriod";
 import { calculateCurrentTermAverage } from "./src/utils/termAverage";
 import { helmetHeaders, requestIdMiddleware, sanitizePayload } from "./backend/middlewares/security";
 import { Logger } from "./backend/utils/logger";
-import { AuthService, MobileSessionAuthorizationError } from "./backend/services/auth";
+import {
+  AuthService,
+  MobileSessionAuthorizationError,
+  MobileSessionTemporaryError,
+} from "./backend/services/auth";
 import { NotificationService } from "./backend/services/notification";
 import {
   isInvalidFcmTokenError,
@@ -368,7 +372,7 @@ const rateLimitMobileParentVisits = (req: AuthenticatedRequest, res: Response, n
 // Authentication check
 const requireAuth = createMobileRequireAuth(
   verifyToken,
-  (parentId) => AuthService.getAccountAuthorizationState(parentId),
+  (parentId, claims) => AuthService.getAccountAuthorizationState(parentId, claims),
   (error) => logger.error("Impossible de vérifier le statut du compte mobile.", error),
 );
 
@@ -492,12 +496,20 @@ app.post("/api/mobile/parent/login", rateLimit(15, 60000), async (req, res) => {
   try {
     session = await AuthService.createSession(user.id, user.role);
   } catch (error) {
-    if (!(error instanceof MobileSessionAuthorizationError)) throw error;
-    return res.status(401).json({
-      error: error.reason === "account_disabled"
-        ? MOBILE_PARENT_ACCOUNT_DISABLED_MESSAGE
-        : "Ce compte est désactivé ou sa session a été révoquée.",
-      code: error.reason === "account_disabled" ? "ACCOUNT_DISABLED" : "INVALID_SESSION"
+    if (error instanceof MobileSessionAuthorizationError) {
+      return res.status(401).json({
+        error: error.reason === "account_disabled"
+          ? MOBILE_PARENT_ACCOUNT_DISABLED_MESSAGE
+          : "Ce compte est désactivé ou sa session a été révoquée.",
+        code: error.reason === "account_disabled" ? "ACCOUNT_DISABLED" : "INVALID_SESSION"
+      });
+    }
+    logger.error("Impossible de créer une session mobile Parent.", error);
+    return res.status(503).json({
+      error: error instanceof MobileSessionTemporaryError
+        ? "Le service de session est temporairement indisponible. Réessayez."
+        : "Impossible de créer la session. Réessayez.",
+      code: "SESSION_CREATION_UNAVAILABLE"
     });
   }
 
@@ -621,7 +633,7 @@ app.post("/api/mobile/parent/change-password", rateLimit(15, 60000), async (req,
 
 // 1b. POST /api/mobile/parent/refresh-token (Refresh Token Rotation - RTR)
 app.post("/api/mobile/parent/refresh-token", rateLimit(15, 60000), async (req, res) => {
-  const { refreshToken } = req.body;
+  const { refreshToken, operationId } = req.body ?? {};
   if (!refreshToken) {
     return res.status(400).json({
       error: "Refresh token manquant.",
@@ -631,12 +643,21 @@ app.post("/api/mobile/parent/refresh-token", rateLimit(15, 60000), async (req, r
 
   let newSession: Awaited<ReturnType<typeof AuthService.rotateSession>>;
   try {
-    newSession = await AuthService.rotateSession(refreshToken);
+    newSession = await AuthService.rotateSession(
+      typeof refreshToken === "string" ? refreshToken : "",
+      typeof operationId === "string" ? operationId : undefined,
+    );
   } catch (error) {
     if (error instanceof MobileSessionAuthorizationError && error.reason === "account_disabled") {
       return res.status(401).json({
         error: MOBILE_PARENT_ACCOUNT_DISABLED_MESSAGE,
         code: "ACCOUNT_DISABLED"
+      });
+    }
+    if (error instanceof MobileSessionAuthorizationError) {
+      return res.status(401).json({
+        error: "Session invalide ou révoquée. Veuillez vous reconnecter.",
+        code: "INVALID_SESSION"
       });
     }
     logger.error("Échec de vérification du statut de session mobile.", error);
@@ -1805,6 +1826,15 @@ async function startServer() {
   } else {
     await initializeMobileTables();
   }
+
+  const purgeExpiredRotationRecoveryData = () => {
+    void AuthService.purgeExpiredRotationRecoveryData().catch((error) => {
+      logger.error("Impossible de supprimer les données expirées de récupération de session.", error);
+    });
+  };
+  purgeExpiredRotationRecoveryData();
+  const recoveryCleanupTimer = setInterval(purgeExpiredRotationRecoveryData, 15 * 60 * 1000);
+  recoveryCleanupTimer.unref();
 
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({

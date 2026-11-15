@@ -101,6 +101,8 @@ export async function verifyMobileTables() {
         ('financial_obligations'),
         ('accounting_categories'),
         ('academic_years'),
+        ('school_terms'),
+        ('cycle_period_templates'),
         ('audit_events'),
         ('user_login_events'),
         ('teacher_control_audit_events'),
@@ -222,6 +224,19 @@ export async function verifyMobileTables() {
         ('financial_obligations', 'category_id'),
         ('accounting_categories', 'id'),
         ('academic_years', 'id'),
+        ('school_terms', 'id'),
+        ('school_terms', 'name'),
+        ('school_terms', 'school_id'),
+        ('school_terms', 'academic_year_id'),
+        ('school_terms', 'is_active'),
+        ('school_terms', 'cycle_id'),
+        ('school_terms', 'period_type'),
+        ('school_terms', 'start_date'),
+        ('school_terms', 'end_date'),
+        ('school_terms', 'order_index'),
+        ('school_terms', 'template_id'),
+        ('cycle_period_templates', 'id'),
+        ('cycle_period_templates', 'period_type'),
         ('audit_events', 'id'),
         ('audit_events', 'action'),
         ('audit_events', 'resource_type'),
@@ -291,13 +306,48 @@ export async function verifyMobileTables() {
         ('mobile_parent_sessions', 'expires_at'),
         ('mobile_parent_sessions', 'is_active'),
         ('mobile_parent_sessions', 'revoked_at'),
-        ('mobile_parent_sessions', 'last_used_at')
+        ('mobile_parent_sessions', 'last_used_at'),
+        ('mobile_parent_sessions', 'session_family_id'),
+        ('mobile_parent_sessions', 'session_started_at'),
+        ('mobile_parent_sessions', 'absolute_expires_at'),
+        ('mobile_parent_sessions', 'refresh_generation'),
+        ('mobile_parent_sessions', 'family_revoked_at'),
+        ('mobile_parent_sessions', 'rotation_request_id'),
+        ('mobile_parent_sessions', 'rotated_to_session_id'),
+        ('mobile_parent_sessions', 'rotation_successor_ciphertext'),
+        ('mobile_parent_sessions', 'rotation_recovery_expires_at')
     ),
     required_indexes(table_name, index_name, is_unique) AS (
       VALUES
         ('mobile_parent_devices', 'mobile_parent_devices_device_idx', true),
         ('mobile_parent_devices', 'mobile_parent_devices_parent_platform_push_token_idx', false),
-        ('mobile_parent_sessions', 'mobile_parent_sessions_parent_idx', false)
+        ('mobile_parent_sessions', 'mobile_parent_sessions_parent_idx', false),
+        ('mobile_parent_sessions', 'mobile_parent_sessions_active_family_uidx', true),
+        ('mobile_parent_sessions', 'mobile_parent_sessions_generation_uidx', true),
+        ('mobile_parent_sessions', 'mobile_parent_sessions_rotation_request_uidx', true),
+        ('mobile_parent_sessions', 'mobile_parent_sessions_successor_uidx', true),
+        ('mobile_parent_sessions', 'mobile_parent_sessions_recovery_cleanup_idx', false)
+    ),
+    required_table_privileges(table_name, privilege_name) AS (
+      VALUES
+        ('users', 'SELECT'),
+        ('users', 'UPDATE'),
+        ('audit_events', 'SELECT'),
+        ('mobile_parent_sessions', 'SELECT'),
+        ('mobile_parent_sessions', 'INSERT'),
+        ('mobile_parent_sessions', 'UPDATE'),
+        ('school_terms', 'SELECT'),
+        ('cycle_period_templates', 'SELECT')
+    ),
+    required_session_constraints(constraint_name, constraint_type) AS (
+      VALUES
+        ('mobile_parent_sessions_family_shape_check', 'c'),
+        ('mobile_parent_sessions_absolute_duration_check', 'c'),
+        ('mobile_parent_sessions_active_state_check', 'c'),
+        ('mobile_parent_sessions_family_revocation_check', 'c'),
+        ('mobile_parent_sessions_rotation_recovery_check', 'c'),
+        ('mobile_parent_sessions_rotation_link_check', 'c'),
+        ('mobile_parent_sessions_rotated_session_fk', 'f')
     ),
     required_unique_keys(table_name, key_columns) AS (
       VALUES
@@ -411,7 +461,16 @@ export async function verifyMobileTables() {
         ('mobile_parent_sessions', 'expires_at', 'timestamp with time zone', 'NO'),
         ('mobile_parent_sessions', 'is_active', 'boolean', 'NO'),
         ('mobile_parent_sessions', 'revoked_at', 'timestamp with time zone', 'YES'),
-        ('mobile_parent_sessions', 'last_used_at', 'timestamp with time zone', 'YES')
+        ('mobile_parent_sessions', 'last_used_at', 'timestamp with time zone', 'YES'),
+        ('mobile_parent_sessions', 'session_family_id', 'uuid', 'YES'),
+        ('mobile_parent_sessions', 'session_started_at', 'timestamp with time zone', 'YES'),
+        ('mobile_parent_sessions', 'absolute_expires_at', 'timestamp with time zone', 'YES'),
+        ('mobile_parent_sessions', 'refresh_generation', 'integer', 'YES'),
+        ('mobile_parent_sessions', 'family_revoked_at', 'timestamp with time zone', 'YES'),
+        ('mobile_parent_sessions', 'rotation_request_id', 'uuid', 'YES'),
+        ('mobile_parent_sessions', 'rotated_to_session_id', 'integer', 'YES'),
+        ('mobile_parent_sessions', 'rotation_successor_ciphertext', 'bytea', 'YES'),
+        ('mobile_parent_sessions', 'rotation_recovery_expires_at', 'timestamp with time zone', 'YES')
     ),
     required_defaults(table_name, column_name, expected_default) AS (
       VALUES
@@ -524,6 +583,65 @@ export async function verifyMobileTables() {
 
       UNION ALL
 
+      SELECT 'constraint public.' || expected.constraint_name
+      FROM required_session_constraints expected
+      LEFT JOIN pg_constraint actual
+        ON actual.conname = expected.constraint_name
+       AND actual.contype = expected.constraint_type
+       AND actual.conrelid = to_regclass('public.mobile_parent_sessions')
+       AND actual.convalidated
+      WHERE actual.oid IS NULL
+
+      UNION ALL
+
+      SELECT 'mobile parent session CHECK definitions'
+      WHERE EXISTS (
+        SELECT 1
+        FROM pg_constraint family_shape
+        JOIN pg_constraint family_revocation
+          ON family_revocation.conrelid = family_shape.conrelid
+        JOIN pg_constraint recovery_shape
+          ON recovery_shape.conrelid = family_shape.conrelid
+        JOIN pg_constraint absolute_duration
+          ON absolute_duration.conrelid = family_shape.conrelid
+        JOIN pg_constraint active_state
+          ON active_state.conrelid = family_shape.conrelid
+        JOIN pg_constraint rotation_link
+          ON rotation_link.conrelid = family_shape.conrelid
+        WHERE family_shape.conrelid = to_regclass('public.mobile_parent_sessions')
+          AND family_shape.conname = 'mobile_parent_sessions_family_shape_check'
+          AND family_revocation.conname = 'mobile_parent_sessions_family_revocation_check'
+          AND recovery_shape.conname = 'mobile_parent_sessions_rotation_recovery_check'
+          AND absolute_duration.conname = 'mobile_parent_sessions_absolute_duration_check'
+          AND active_state.conname = 'mobile_parent_sessions_active_state_check'
+          AND rotation_link.conname = 'mobile_parent_sessions_rotation_link_check'
+          AND (
+            pg_get_constraintdef(family_shape.oid) NOT ILIKE '%session_started_at%'
+            OR pg_get_constraintdef(family_shape.oid) NOT ILIKE '%absolute_expires_at%'
+            OR pg_get_constraintdef(family_shape.oid) NOT ILIKE '%refresh_generation%'
+            OR pg_get_constraintdef(family_shape.oid) NOT ILIKE '%expires_at%'
+            OR pg_get_constraintdef(family_revocation.oid) NOT ILIKE '%family_revoked_at%'
+            OR pg_get_constraintdef(family_revocation.oid) NOT ILIKE '%is_active%'
+            OR pg_get_constraintdef(family_revocation.oid) NOT ILIKE '%rotation_successor_ciphertext%'
+            OR pg_get_constraintdef(recovery_shape.oid) NOT ILIKE '%rotation_request_id%'
+            OR pg_get_constraintdef(recovery_shape.oid) NOT ILIKE '%rotated_to_session_id%'
+            OR pg_get_constraintdef(recovery_shape.oid) NOT ILIKE '%rotation_recovery_expires_at%'
+            OR pg_get_constraintdef(recovery_shape.oid) NOT ILIKE '%absolute_expires_at%'
+            OR pg_get_constraintdef(recovery_shape.oid) NOT ILIKE '%revoked_at%'
+            OR pg_get_constraintdef(recovery_shape.oid) NOT ILIKE '%24%'
+            OR pg_get_constraintdef(absolute_duration.oid) NOT ILIKE '%session_started_at%'
+            OR pg_get_constraintdef(absolute_duration.oid) NOT ILIKE '%absolute_expires_at%'
+            OR pg_get_constraintdef(absolute_duration.oid) NOT ILIKE '%5184000%'
+            OR pg_get_constraintdef(active_state.oid) NOT ILIKE '%is_active%'
+            OR pg_get_constraintdef(active_state.oid) NOT ILIKE '%revoked_at%'
+            OR pg_get_constraintdef(rotation_link.oid) NOT ILIKE '%rotated_to_session_id%'
+            OR pg_get_constraintdef(rotation_link.oid) NOT ILIKE '%is_active%'
+            OR pg_get_constraintdef(rotation_link.oid) NOT ILIKE '%revoked_at%'
+          )
+      )
+
+      UNION ALL
+
       SELECT 'function public.reject_audit_history_mutation()' AS item
       WHERE NOT EXISTS (
         SELECT 1
@@ -604,6 +722,17 @@ export async function verifyMobileTables() {
         WHERE (elevated_role.rolsuper OR elevated_role.rolcreatedb OR elevated_role.rolcreaterole)
           AND pg_has_role(current_user, elevated_role.oid, 'MEMBER')
       )
+
+      UNION ALL
+
+      SELECT 'runtime role lacks ' || expected.privilege_name || ' on public.' || expected.table_name
+      FROM required_table_privileges expected
+      WHERE to_regclass('public.' || expected.table_name) IS NULL
+         OR NOT has_table_privilege(
+           current_user,
+           to_regclass('public.' || expected.table_name),
+           expected.privilege_name
+         )
 
       UNION ALL
 
@@ -691,6 +820,157 @@ export async function verifyMobileTables() {
           AND index_definition.indisvalid
           AND index_definition.indisready
           AND index_definition.indisunique = expected.is_unique
+      )
+
+      UNION ALL
+
+      SELECT 'active family uniqueness index public.mobile_parent_sessions_active_family_uidx'
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM pg_index index_definition
+        JOIN pg_class index_object ON index_object.oid = index_definition.indexrelid
+        JOIN pg_class indexed_table ON indexed_table.oid = index_definition.indrelid
+        JOIN pg_namespace table_schema ON table_schema.oid = indexed_table.relnamespace
+        WHERE table_schema.nspname = 'public'
+          AND indexed_table.relname = 'mobile_parent_sessions'
+          AND index_object.relname = 'mobile_parent_sessions_active_family_uidx'
+          AND index_definition.indisunique
+          AND index_definition.indisvalid
+          AND index_definition.indisready
+          AND index_definition.indpred IS NOT NULL
+          AND ARRAY(
+            SELECT attribute.attname::text
+            FROM unnest(index_definition.indkey) WITH ORDINALITY AS key_column(attnum, ordinal)
+            JOIN pg_attribute attribute
+              ON attribute.attrelid = index_definition.indrelid
+             AND attribute.attnum = key_column.attnum
+            WHERE key_column.ordinal <= index_definition.indnkeyatts
+            ORDER BY key_column.ordinal
+          ) = ARRAY['session_family_id']::text[]
+          AND pg_get_expr(index_definition.indpred, index_definition.indrelid)
+              ILIKE '%session_family_id IS NOT NULL%'
+          AND pg_get_expr(index_definition.indpred, index_definition.indrelid)
+              ILIKE '%is_active%'
+          AND pg_get_expr(index_definition.indpred, index_definition.indrelid)
+              ILIKE '%family_revoked_at IS NULL%'
+      )
+
+      UNION ALL
+
+      SELECT 'successor uniqueness index public.mobile_parent_sessions_successor_uidx'
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM pg_index index_definition
+        JOIN pg_class index_object ON index_object.oid = index_definition.indexrelid
+        JOIN pg_class indexed_table ON indexed_table.oid = index_definition.indrelid
+        JOIN pg_namespace table_schema ON table_schema.oid = indexed_table.relnamespace
+        WHERE table_schema.nspname = 'public'
+          AND indexed_table.relname = 'mobile_parent_sessions'
+          AND index_object.relname = 'mobile_parent_sessions_successor_uidx'
+          AND index_definition.indisunique
+          AND index_definition.indisvalid
+          AND index_definition.indisready
+          AND index_definition.indpred IS NOT NULL
+          AND ARRAY(
+            SELECT attribute.attname::text
+            FROM unnest(index_definition.indkey) WITH ORDINALITY AS key_column(attnum, ordinal)
+            JOIN pg_attribute attribute
+              ON attribute.attrelid = index_definition.indrelid
+             AND attribute.attnum = key_column.attnum
+            WHERE key_column.ordinal <= index_definition.indnkeyatts
+            ORDER BY key_column.ordinal
+          ) = ARRAY['rotated_to_session_id']::text[]
+          AND pg_get_expr(index_definition.indpred, index_definition.indrelid)
+              ILIKE '%rotated_to_session_id IS NOT NULL%'
+      )
+
+      UNION ALL
+
+      SELECT 'generation uniqueness index public.mobile_parent_sessions_generation_uidx'
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM pg_index index_definition
+        JOIN pg_class index_object ON index_object.oid = index_definition.indexrelid
+        JOIN pg_class indexed_table ON indexed_table.oid = index_definition.indrelid
+        JOIN pg_namespace table_schema ON table_schema.oid = indexed_table.relnamespace
+        WHERE table_schema.nspname = 'public'
+          AND indexed_table.relname = 'mobile_parent_sessions'
+          AND index_object.relname = 'mobile_parent_sessions_generation_uidx'
+          AND index_definition.indisunique
+          AND index_definition.indisvalid
+          AND index_definition.indisready
+          AND index_definition.indpred IS NOT NULL
+          AND ARRAY(
+            SELECT attribute.attname::text
+            FROM unnest(index_definition.indkey) WITH ORDINALITY AS key_column(attnum, ordinal)
+            JOIN pg_attribute attribute
+              ON attribute.attrelid = index_definition.indrelid
+             AND attribute.attnum = key_column.attnum
+            WHERE key_column.ordinal <= index_definition.indnkeyatts
+            ORDER BY key_column.ordinal
+          ) = ARRAY['session_family_id', 'refresh_generation']::text[]
+          AND pg_get_expr(index_definition.indpred, index_definition.indrelid)
+              ILIKE '%session_family_id IS NOT NULL%'
+          AND pg_get_expr(index_definition.indpred, index_definition.indrelid)
+              ILIKE '%refresh_generation IS NOT NULL%'
+      )
+
+      UNION ALL
+
+      SELECT 'operation uniqueness index public.mobile_parent_sessions_rotation_request_uidx'
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM pg_index index_definition
+        JOIN pg_class index_object ON index_object.oid = index_definition.indexrelid
+        JOIN pg_class indexed_table ON indexed_table.oid = index_definition.indrelid
+        JOIN pg_namespace table_schema ON table_schema.oid = indexed_table.relnamespace
+        WHERE table_schema.nspname = 'public'
+          AND indexed_table.relname = 'mobile_parent_sessions'
+          AND index_object.relname = 'mobile_parent_sessions_rotation_request_uidx'
+          AND index_definition.indisunique
+          AND index_definition.indisvalid
+          AND index_definition.indisready
+          AND index_definition.indpred IS NOT NULL
+          AND ARRAY(
+            SELECT attribute.attname::text
+            FROM unnest(index_definition.indkey) WITH ORDINALITY AS key_column(attnum, ordinal)
+            JOIN pg_attribute attribute
+              ON attribute.attrelid = index_definition.indrelid
+             AND attribute.attnum = key_column.attnum
+            WHERE key_column.ordinal <= index_definition.indnkeyatts
+            ORDER BY key_column.ordinal
+          ) = ARRAY['rotation_request_id']::text[]
+          AND pg_get_expr(index_definition.indpred, index_definition.indrelid)
+              ILIKE '%rotation_request_id IS NOT NULL%'
+      )
+
+      UNION ALL
+
+      SELECT 'recovery cleanup index public.mobile_parent_sessions_recovery_cleanup_idx'
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM pg_index index_definition
+        JOIN pg_class index_object ON index_object.oid = index_definition.indexrelid
+        JOIN pg_class indexed_table ON indexed_table.oid = index_definition.indrelid
+        JOIN pg_namespace table_schema ON table_schema.oid = indexed_table.relnamespace
+        WHERE table_schema.nspname = 'public'
+          AND indexed_table.relname = 'mobile_parent_sessions'
+          AND index_object.relname = 'mobile_parent_sessions_recovery_cleanup_idx'
+          AND NOT index_definition.indisunique
+          AND index_definition.indisvalid
+          AND index_definition.indisready
+          AND index_definition.indpred IS NOT NULL
+          AND ARRAY(
+            SELECT attribute.attname::text
+            FROM unnest(index_definition.indkey) WITH ORDINALITY AS key_column(attnum, ordinal)
+            JOIN pg_attribute attribute
+              ON attribute.attrelid = index_definition.indrelid
+             AND attribute.attnum = key_column.attnum
+            WHERE key_column.ordinal <= index_definition.indnkeyatts
+            ORDER BY key_column.ordinal
+          ) = ARRAY['rotation_recovery_expires_at']::text[]
+          AND pg_get_expr(index_definition.indpred, index_definition.indrelid)
+              ILIKE '%rotation_successor_ciphertext IS NOT NULL%'
       )
 
       UNION ALL
