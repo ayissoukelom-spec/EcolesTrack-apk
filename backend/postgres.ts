@@ -210,7 +210,13 @@ export async function verifyMobileTables() {
         ('late_arrival_justifications', 'id'),
         ('late_arrival_justifications', 'late_arrival_id'),
         ('late_arrival_justification_files', 'id'),
-        ('late_arrival_justification_files', 'late_arrival_id'),
+        ('late_arrival_justification_files', 'justification_id'),
+        ('late_arrival_justification_files', 'file_name'),
+        ('late_arrival_justification_files', 'file_path'),
+        ('late_arrival_justification_files', 'mime_type'),
+        ('late_arrival_justification_files', 'file_size'),
+        ('late_arrival_justification_files', 'uploaded_by'),
+        ('late_arrival_justification_files', 'uploaded_at'),
         ('financial_obligations', 'student_id'),
         ('financial_obligations', 'academic_year_id'),
         ('financial_obligations', 'category_id'),
@@ -231,6 +237,7 @@ export async function verifyMobileTables() {
         ('teacher_control_audit_events', 'school_name_snapshot'),
         ('teacher_control_audit_events', 'actor_user_id'),
         ('teacher_control_audit_events', 'actor_role'),
+        ('teacher_control_audit_events', 'actor_email_snapshot'),
         ('teacher_control_audit_events', 'actor_name_snapshot'),
         ('teacher_control_audit_events', 'action'),
         ('teacher_control_audit_events', 'resource_type'),
@@ -342,6 +349,7 @@ export async function verifyMobileTables() {
         ('teacher_control_audit_events', 'school_name_snapshot', 'text', 'NO'),
         ('teacher_control_audit_events', 'actor_user_id', 'integer', 'YES'),
         ('teacher_control_audit_events', 'actor_role', 'text', 'NO'),
+        ('teacher_control_audit_events', 'actor_email_snapshot', 'text', 'YES'),
         ('teacher_control_audit_events', 'actor_name_snapshot', 'text', 'NO'),
         ('teacher_control_audit_events', 'action', 'text', 'NO'),
         ('teacher_control_audit_events', 'resource_type', 'text', 'NO'),
@@ -350,6 +358,14 @@ export async function verifyMobileTables() {
         ('teacher_control_audit_events', 'after_values', 'jsonb', 'YES'),
         ('teacher_control_audit_events', 'reason', 'text', 'YES'),
         ('teacher_control_audit_events', 'created_at', 'timestamp with time zone', 'NO'),
+        ('late_arrival_justification_files', 'id', 'integer', 'NO'),
+        ('late_arrival_justification_files', 'justification_id', 'integer', 'NO'),
+        ('late_arrival_justification_files', 'file_name', 'text', 'NO'),
+        ('late_arrival_justification_files', 'file_path', 'text', 'NO'),
+        ('late_arrival_justification_files', 'mime_type', 'text', 'NO'),
+        ('late_arrival_justification_files', 'file_size', 'integer', 'NO'),
+        ('late_arrival_justification_files', 'uploaded_by', 'integer', 'YES'),
+        ('late_arrival_justification_files', 'uploaded_at', 'timestamp without time zone', 'NO'),
         ('mobile_parent_devices', 'id', 'integer', 'NO'),
         ('mobile_parent_devices', 'parent_id', 'text', 'NO'),
         ('mobile_parent_devices', 'device_id', 'text', 'YES'),
@@ -403,6 +419,7 @@ export async function verifyMobileTables() {
         ('user_login_events', 'login_at', 'now()'),
         ('user_login_events', 'occurred_at', 'now()'),
         ('teacher_control_audit_events', 'created_at', 'now()'),
+        ('late_arrival_justification_files', 'uploaded_at', 'now()'),
         ('mobile_parent_devices', 'last_seen_at', 'now()'),
         ('mobile_notification_preferences', 'push_enabled', 'true'),
         ('mobile_notification_preferences', 'whatsapp_enabled', 'false'),
@@ -426,22 +443,62 @@ export async function verifyMobileTables() {
         ('grade_history', 'grade_history_append_only_row', 27),
         ('grade_history', 'grade_history_append_only_truncate', 34)
     ),
+    catalog_tables AS (
+      SELECT relation.relname AS table_name
+      FROM pg_catalog.pg_class relation
+      JOIN pg_catalog.pg_namespace relation_schema
+        ON relation_schema.oid = relation.relnamespace
+      WHERE relation_schema.nspname = 'public'
+        AND relation.relkind IN ('r', 'p')
+    ),
+    catalog_columns AS (
+      SELECT
+        relation.relname AS table_name,
+        attribute.attname AS column_name,
+        CASE column_type.typname
+          WHEN 'bool' THEN 'boolean'
+          WHEN 'int2' THEN 'smallint'
+          WHEN 'int4' THEN 'integer'
+          WHEN 'int8' THEN 'bigint'
+          WHEN 'timestamp' THEN 'timestamp without time zone'
+          WHEN 'timestamptz' THEN 'timestamp with time zone'
+          ELSE pg_catalog.format_type(attribute.atttypid, NULL)
+        END AS data_type,
+        CASE WHEN attribute.attnotnull THEN 'NO' ELSE 'YES' END AS is_nullable,
+        CASE attribute.attidentity
+          WHEN 'a' THEN 'ALWAYS'
+          WHEN 'd' THEN 'BY DEFAULT'
+          ELSE NULL
+        END AS identity_generation,
+        pg_catalog.pg_get_expr(column_default.adbin, column_default.adrelid) AS column_default
+      FROM pg_catalog.pg_attribute attribute
+      JOIN pg_catalog.pg_class relation
+        ON relation.oid = attribute.attrelid
+      JOIN pg_catalog.pg_namespace relation_schema
+        ON relation_schema.oid = relation.relnamespace
+      JOIN pg_catalog.pg_type column_type
+        ON column_type.oid = attribute.atttypid
+      LEFT JOIN pg_catalog.pg_attrdef column_default
+        ON column_default.adrelid = relation.oid
+       AND column_default.adnum = attribute.attnum
+      WHERE relation_schema.nspname = 'public'
+        AND relation.relkind IN ('r', 'p')
+        AND attribute.attnum > 0
+        AND NOT attribute.attisdropped
+    ),
     missing AS (
       SELECT 'table public.' || expected.table_name AS item
       FROM required_tables expected
-      LEFT JOIN information_schema.tables actual
-        ON actual.table_schema = 'public'
-       AND actual.table_name = expected.table_name
-       AND actual.table_type = 'BASE TABLE'
+      LEFT JOIN catalog_tables actual
+        ON actual.table_name = expected.table_name
       WHERE actual.table_name IS NULL
 
       UNION ALL
 
       SELECT 'column public.' || expected.table_name || '.' || expected.column_name
       FROM required_columns expected
-      LEFT JOIN information_schema.columns actual
-        ON actual.table_schema = 'public'
-       AND actual.table_name = expected.table_name
+      LEFT JOIN catalog_columns actual
+        ON actual.table_name = expected.table_name
        AND actual.column_name = expected.column_name
       WHERE actual.column_name IS NULL
 
@@ -449,9 +506,8 @@ export async function verifyMobileTables() {
 
       SELECT 'column type/nullability public.' || expected.table_name || '.' || expected.column_name
       FROM required_column_shapes expected
-      LEFT JOIN information_schema.columns actual
-        ON actual.table_schema = 'public'
-       AND actual.table_name = expected.table_name
+      LEFT JOIN catalog_columns actual
+        ON actual.table_name = expected.table_name
        AND actual.column_name = expected.column_name
       WHERE actual.column_name IS NULL
          OR actual.data_type IS DISTINCT FROM expected.data_type
@@ -461,9 +517,8 @@ export async function verifyMobileTables() {
 
       SELECT 'column default public.' || expected.table_name || '.' || expected.column_name
       FROM required_defaults expected
-      LEFT JOIN information_schema.columns actual
-        ON actual.table_schema = 'public'
-       AND actual.table_name = expected.table_name
+      LEFT JOIN catalog_columns actual
+        ON actual.table_name = expected.table_name
        AND actual.column_name = expected.column_name
       WHERE replace(actual.column_default, '::text', '') IS DISTINCT FROM expected.expected_default
 
@@ -669,11 +724,9 @@ export async function verifyMobileTables() {
 
       SELECT 'identity column public.' || expected.table_name || '.' || expected.column_name
       FROM required_identity_columns expected
-      LEFT JOIN information_schema.columns actual
-        ON actual.table_schema = 'public'
-       AND actual.table_name = expected.table_name
+      LEFT JOIN catalog_columns actual
+        ON actual.table_name = expected.table_name
        AND actual.column_name = expected.column_name
-       AND actual.is_identity = 'YES'
        AND actual.identity_generation = expected.generation
       WHERE actual.column_name IS NULL
 
