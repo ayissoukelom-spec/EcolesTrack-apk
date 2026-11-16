@@ -32,6 +32,19 @@ export interface MobileAccountAuthorizationState {
 }
 
 export type MobileSessionRejection = "invalid_session" | "account_disabled" | "session_revoked";
+export type MobileSessionRejectionReason =
+  | "invalid_claims"
+  | "account_disabled"
+  | "revocation_boundary"
+  | "session_not_found"
+  | "session_identity_mismatch"
+  | "session_inactive"
+  | "session_revoked"
+  | "session_expired"
+  | "absolute_session_expired"
+  | "session_family_mismatch"
+  | "session_generation_mismatch"
+  | "absolute_expiry_claim_mismatch";
 
 export interface AuthenticatedMobileRequest extends Request {
   parent?: {
@@ -41,12 +54,12 @@ export interface AuthenticatedMobileRequest extends Request {
   };
 }
 
-export const getMobileSessionRejection = (
+export const getMobileAccountRejectionReason = (
   claims: MobileSessionClaims,
-  state: MobileAccountAuthorizationState | null,
-): MobileSessionRejection | null => {
+  state: Pick<MobileAccountAuthorizationState, "role" | "isDeleted" | "latestRevocationEventId"> | null,
+): MobileSessionRejectionReason | null => {
   if (!claims.parentId || claims.role !== "parent" || !state || state.role !== claims.role) {
-    return "invalid_session";
+    return "invalid_claims";
   }
   if (state.isDeleted) {
     return "account_disabled";
@@ -55,22 +68,30 @@ export const getMobileSessionRejection = (
     && (typeof claims.authRevocationEventId !== "number"
       || !Number.isSafeInteger(claims.authRevocationEventId)
       || claims.authRevocationEventId < state.latestRevocationEventId)) {
-    return "session_revoked";
+    return "revocation_boundary";
   }
+  return null;
+};
 
+export const getMobileSessionRejectionReason = (
+  claims: MobileSessionClaims,
+  state: MobileAccountAuthorizationState | null,
+): MobileSessionRejectionReason | null => {
+  const accountRejection = getMobileAccountRejectionReason(claims, state);
+  if (accountRejection) return accountRejection;
   if (claims.sessionId !== undefined) {
-    const session = state.session;
+    if (!Number.isSafeInteger(claims.sessionId) || claims.sessionId <= 0) {
+      return "session_identity_mismatch";
+    }
+    const session = state?.session;
+    if (!session) return "session_not_found";
     if (
-      !Number.isSafeInteger(claims.sessionId)
-      || claims.sessionId <= 0
-      || !session
-      || session.id !== claims.sessionId
+      session.id !== claims.sessionId
       || session.parentId !== claims.parentId
       || session.role !== claims.role
-      || !session.isActive
-      || session.revokedAt != null
-      || session.familyRevokedAt != null
-    ) {
+    ) return "session_identity_mismatch";
+    if (!session.isActive) return "session_inactive";
+    if (session.revokedAt != null || session.familyRevokedAt != null) {
       return "session_revoked";
     }
 
@@ -81,32 +102,38 @@ export const getMobileSessionRejection = (
     const absoluteExpiresAt = session.absoluteExpiresAt == null
       ? null
       : new Date(session.absoluteExpiresAt).getTime();
-    if (
-      !Number.isFinite(expiresAt)
-      || expiresAt <= now
-      || (absoluteExpiresAt !== null && (!Number.isFinite(absoluteExpiresAt) || absoluteExpiresAt <= now))
-      || (claims.exp !== undefined && claims.exp <= now)
-      || (
-        session.familyId !== null
-        && (
-          claims.sessionFamilyId !== session.familyId
-          || claims.refreshGeneration !== session.generation
-          || claims.absoluteExpiresAt !== absoluteExpiresAt
-        )
-      )
-      || (
-        session.familyId === null
-        && (
-          claims.sessionFamilyId !== undefined
-          || claims.refreshGeneration !== undefined
-          || claims.absoluteExpiresAt !== undefined
-        )
-      )
+    if (!Number.isFinite(expiresAt) || expiresAt <= now
+      || (claims.exp !== undefined && (!Number.isSafeInteger(claims.exp) || claims.exp <= now))) {
+      return "session_expired";
+    }
+    if (absoluteExpiresAt !== null
+      && (!Number.isFinite(absoluteExpiresAt) || absoluteExpiresAt <= now)) {
+      return "absolute_session_expired";
+    }
+    if (session.familyId !== null) {
+      if (claims.sessionFamilyId !== session.familyId) return "session_family_mismatch";
+      if (claims.refreshGeneration !== session.generation) return "session_generation_mismatch";
+      if (claims.absoluteExpiresAt !== absoluteExpiresAt) return "absolute_expiry_claim_mismatch";
+    } else if (
+      claims.sessionFamilyId !== undefined
+      || claims.refreshGeneration !== undefined
+      || claims.absoluteExpiresAt !== undefined
     ) {
-      return "session_revoked";
+      return "session_family_mismatch";
     }
   }
   return null;
+};
+
+export const getMobileSessionRejection = (
+  claims: MobileSessionClaims,
+  state: MobileAccountAuthorizationState | null,
+): MobileSessionRejection | null => {
+  const reason = getMobileSessionRejectionReason(claims, state);
+  if (reason == null) return null;
+  if (reason === "invalid_claims") return "invalid_session";
+  if (reason === "account_disabled") return "account_disabled";
+  return "session_revoked";
 };
 
 export const createMobileRequireAuth = (

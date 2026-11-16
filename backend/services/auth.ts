@@ -3,6 +3,7 @@ import type { PoolClient } from "pg";
 import { Logger } from "../utils/logger";
 import { dbQuery, pool } from "../postgres";
 import {
+  getMobileAccountRejectionReason,
   getMobileSessionRejection,
   type MobileAccountAuthorizationState,
   type MobileSessionClaims,
@@ -632,12 +633,21 @@ export class AuthService {
         await this.revokeParentRows(client, payload.parentId, new Date(now));
         return { kind: "disabled" };
       }
-      const rejection = getMobileSessionRejection(payload, {
+
+      const accountRejection = getMobileAccountRejectionReason(payload, {
         role: account.role,
         isDeleted: account.is_deleted,
         latestRevocationEventId,
       });
-      if (rejection) return { kind: "invalid" };
+      if (accountRejection) {
+        logger.warn("Mobile refresh rotation rejected by account revocation boundaries.", {
+          reason: accountRejection,
+          parentId: payload.parentId,
+          sessionId: payload.sessionId ?? null,
+          authRevocationEventId: payload.authRevocationEventId ?? null,
+        });
+        return { kind: "invalid" };
+      }
 
       await client.query(`
         UPDATE mobile_parent_sessions
@@ -689,6 +699,34 @@ export class AuthService {
           );
           if (recovered) return { kind: "recovered", tokens: recovered };
         }
+        return { kind: "invalid" };
+      }
+
+      const sessionState: MobileAccountAuthorizationState["session"] = {
+        id: session.id,
+        parentId: session.parent_id,
+        role: session.role,
+        isActive: session.is_active,
+        revokedAt: session.revoked_at,
+        expiresAt: session.expires_at,
+        familyId: session.session_family_id,
+        generation: parseGeneration(session.refresh_generation),
+        absoluteExpiresAt: session.absolute_expires_at,
+        familyRevokedAt: session.family_revoked_at,
+      };
+      const rejection = getMobileSessionRejection(payload, {
+        role: account.role,
+        isDeleted: account.is_deleted,
+        latestRevocationEventId,
+        session: sessionState,
+      });
+      if (rejection) {
+        logger.warn("Mobile refresh rotation rejected after session validation.", {
+          reason: rejection,
+          parentId: payload.parentId,
+          sessionId: payload.sessionId ?? session.id,
+          authRevocationEventId: payload.authRevocationEventId ?? null,
+        });
         return { kind: "invalid" };
       }
 
