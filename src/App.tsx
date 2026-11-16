@@ -425,7 +425,7 @@ export default function App() {
         credentialVersion: requestCredentialVersion,
       });
       try {
-        const currentSession = sessionRef.current;
+        let currentSession = sessionRef.current;
         if (
           currentSession.sessionGeneration !== requestSessionGeneration
           || currentSession.credentialVersion !== requestCredentialVersion
@@ -453,7 +453,7 @@ export default function App() {
           body: JSON.stringify({ refreshToken: refreshTokenAtStart, operationId: operationIdForRequest }),
           signal: controller.signal,
         });
-        let currentSession = sessionRef.current;
+        currentSession = sessionRef.current;
         if (requestSessionGeneration !== currentSession.sessionGeneration) return null;
 
         if (!response.ok) {
