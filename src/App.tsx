@@ -29,9 +29,12 @@ import { parseJsonSafe, withApiBase } from "./utils/http";
 import { MobileVisitTracker } from "./utils/mobileVisit";
 import {
   clearPersistedParentSession,
+  createParentSessionCorrelationId,
   getDisabledParentMessage,
   getParentAuthErrorCode,
   isDefinitiveParentSessionError,
+  performParentProtectedRequest,
+  type ParentSessionSnapshot,
   type ParentLogoutReason,
 } from "./utils/parentSession";
 import {
@@ -119,13 +122,23 @@ export default function App() {
   const initialRefreshState = initialStoredSession.refreshState.status === "available"
     ? initialStoredSession.refreshState.state
     : null;
-  const refreshStateRef = useRef<ParentRefreshState | null>(initialRefreshState);
   const [refreshToken, setRefreshToken] = useState<string | null>(
     initialRefreshState?.refreshToken ?? null,
   );
+  const sessionRef = useRef<ParentSessionSnapshot & {
+    refreshToken: string | null;
+    pendingOperationId: string | null;
+  }>({
+    accessToken: initialStoredSession.accessToken.status === "available"
+      ? initialStoredSession.accessToken.value
+      : null,
+    refreshToken: initialRefreshState?.refreshToken ?? null,
+    pendingOperationId: initialRefreshState?.pendingOperationId ?? null,
+    sessionGeneration: 0,
+    credentialVersion: 0,
+  });
   const [sessionEndedMessage, setSessionEndedMessage] = useState<string | null>(null);
   const refreshPromiseRef = useRef<Promise<string | null> | null>(null);
-  const parentSessionGenerationRef = useRef(0);
   const refreshRetryTimerRef = useRef<number | null>(null);
   const refreshRetryAttemptRef = useRef(0);
   const storageReadRetryTimerRef = useRef<number | null>(null);
@@ -154,6 +167,46 @@ export default function App() {
         : null;
 
   const applyStoredParentSession = (stored: ReturnType<typeof readStoredParentSession>) => {
+    const currentSession = sessionRef.current;
+    const accessToken = stored.accessToken.status === "available"
+      ? stored.accessToken.value
+      : stored.accessToken.status === "missing"
+        ? null
+        : currentSession.accessToken;
+    const storedRefreshState = stored.refreshState.status === "available"
+      ? stored.refreshState.state
+      : stored.refreshState.status === "missing"
+        ? null
+        : null;
+    const refreshTokenValue = storedRefreshState?.refreshToken
+      ?? (stored.refreshState.status === "missing" ? null : currentSession.refreshToken);
+    const pendingOperationId = storedRefreshState
+      ? storedRefreshState.pendingOperationId
+      : stored.refreshState.status === "missing"
+        ? null
+        : currentSession.pendingOperationId;
+    const sessionChanged = (
+      accessToken !== currentSession.accessToken
+      || refreshTokenValue !== currentSession.refreshToken
+      || pendingOperationId !== currentSession.pendingOperationId
+    );
+    sessionRef.current = {
+      ...currentSession,
+      accessToken,
+      refreshToken: refreshTokenValue,
+      pendingOperationId,
+      sessionGeneration: currentSession.sessionGeneration + (sessionChanged ? 1 : 0),
+      credentialVersion: currentSession.credentialVersion + (sessionChanged ? 1 : 0),
+    };
+    if (sessionChanged) {
+      refreshPromiseRef.current = null;
+      if (refreshRetryTimerRef.current != null) {
+        window.clearTimeout(refreshRetryTimerRef.current);
+        refreshRetryTimerRef.current = null;
+      }
+      refreshRetryAttemptRef.current = 0;
+    }
+
     accessTokenReadRef.current = stored.accessToken;
     setAccessTokenReadResult(stored.accessToken);
     if (stored.accessToken.status === "available") {
@@ -165,10 +218,8 @@ export default function App() {
     refreshStateReadRef.current = stored.refreshState;
     setRefreshStateReadResult(stored.refreshState);
     if (stored.refreshState.status === "available") {
-      refreshStateRef.current = stored.refreshState.state;
       setRefreshToken(stored.refreshState.state.refreshToken);
     } else if (stored.refreshState.status === "missing") {
-      refreshStateRef.current = null;
       setRefreshToken(null);
     }
 
@@ -301,35 +352,47 @@ export default function App() {
       status: details.status ?? null,
       code: details.code ?? null,
       stage: details.stage ?? null,
+      correlationId: sessionRef.current.pendingOperationId,
+      sessionGeneration: sessionRef.current.sessionGeneration,
+      credentialVersion: sessionRef.current.credentialVersion,
     });
     refreshRetryTimerRef.current = window.setTimeout(() => {
       refreshRetryTimerRef.current = null;
-      if (navigator.onLine && refreshToken) void refreshAccessToken();
+      if (navigator.onLine && sessionRef.current.refreshToken) void refreshAccessToken();
     }, delay);
-  };
-
-  const createRefreshOperationId = (): string => {
-    if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
-    const bytes = new Uint8Array(16);
-    crypto.getRandomValues(bytes);
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
   };
 
   const persistRefreshState = (state: ParentRefreshState) => {
     writeParentRefreshState(state, window.localStorage, window.AndroidSessionBridge);
-    refreshStateRef.current = state;
+    const currentSession = sessionRef.current;
+    sessionRef.current = {
+      ...currentSession,
+      refreshToken: state.refreshToken,
+      pendingOperationId: state.pendingOperationId,
+      credentialVersion: currentSession.credentialVersion
+        + (currentSession.refreshToken !== state.refreshToken ? 1 : 0),
+    };
     const result: ParentRefreshStateReadResult = { status: "available", state };
     refreshStateReadRef.current = result;
     setRefreshStateReadResult(result);
     setRefreshToken(state.refreshToken);
   };
 
-  const refreshAccessToken = async (): Promise<string | null> => {
+  const getCurrentSessionSnapshot = (): ParentSessionSnapshot => ({
+    accessToken: sessionRef.current.accessToken,
+    sessionGeneration: sessionRef.current.sessionGeneration,
+    credentialVersion: sessionRef.current.credentialVersion,
+  });
+
+  const refreshAccessToken = async (requestCorrelationId?: string): Promise<string | null> => {
     if (logoutHandledRef.current) return null;
     if (refreshPromiseRef.current) {
+      logParentSession("refresh-joined-in-flight", {
+        requestCorrelationId: requestCorrelationId ?? null,
+        correlationId: sessionRef.current.pendingOperationId,
+        sessionGeneration: sessionRef.current.sessionGeneration,
+        credentialVersion: sessionRef.current.credentialVersion,
+      });
       return refreshPromiseRef.current;
     }
 
@@ -337,50 +400,110 @@ export default function App() {
       return null;
     }
 
-    if (!refreshToken) {
+    const sessionAtStart = sessionRef.current;
+    const refreshTokenAtStart = sessionAtStart.refreshToken;
+    if (!refreshTokenAtStart) {
       logParentSession("refresh-not-started", {
         storage: refreshStateReadRef.current.status,
+        sessionGeneration: sessionAtStart.sessionGeneration,
+        credentialVersion: sessionAtStart.credentialVersion,
       });
       return null;
     }
 
-    const requestSessionGeneration = parentSessionGenerationRef.current;
-    const promise = (async () => {
+    const requestSessionGeneration = sessionAtStart.sessionGeneration;
+    const requestCredentialVersion = sessionAtStart.credentialVersion;
+    const refreshPromise = Promise.resolve().then(async () => {
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), 15000);
-      let operationId: string;
+      let operationId: string | null = null;
       let stage = "persist-operation";
-      logParentSession("refresh-started", { storage: refreshStateReadRef.current.status });
+      logParentSession("refresh-started", {
+        storage: refreshStateReadRef.current.status,
+        requestCorrelationId: requestCorrelationId ?? null,
+        sessionGeneration: requestSessionGeneration,
+        credentialVersion: requestCredentialVersion,
+      });
       try {
-        operationId = refreshStateRef.current?.refreshToken === refreshToken
-          ? refreshStateRef.current.pendingOperationId ?? createRefreshOperationId()
-          : createRefreshOperationId();
-        persistRefreshState({ refreshToken, pendingOperationId: operationId });
+        const currentSession = sessionRef.current;
+        if (
+          currentSession.sessionGeneration !== requestSessionGeneration
+          || currentSession.credentialVersion !== requestCredentialVersion
+          || currentSession.refreshToken !== refreshTokenAtStart
+        ) {
+          return currentSession.sessionGeneration === requestSessionGeneration
+            ? currentSession.accessToken
+            : null;
+        }
+        const operationIdForRequest = currentSession.pendingOperationId ?? createParentSessionCorrelationId();
+        operationId = operationIdForRequest;
+        persistRefreshState({ refreshToken: refreshTokenAtStart, pendingOperationId: operationIdForRequest });
+        logParentSession("refresh-operation", {
+          correlationId: operationIdForRequest,
+          requestCorrelationId: requestCorrelationId ?? null,
+          sessionGeneration: requestSessionGeneration,
+          credentialVersion: requestCredentialVersion,
+        });
         stage = "request";
         const response = await fetch(withApiBase("/api/mobile/parent/refresh-token"), {
           method: "POST",
           headers: {
             "Content-Type": "application/json"
           },
-          body: JSON.stringify({ refreshToken, operationId }),
+          body: JSON.stringify({ refreshToken: refreshTokenAtStart, operationId: operationIdForRequest }),
           signal: controller.signal,
         });
-        if (requestSessionGeneration !== parentSessionGenerationRef.current) return null;
+        let currentSession = sessionRef.current;
+        if (requestSessionGeneration !== currentSession.sessionGeneration) return null;
 
         if (!response.ok) {
           const code = await getParentAuthErrorCode(response);
-          logParentSession("refresh-response", { status: response.status, code });
+          currentSession = sessionRef.current;
+          logParentSession("refresh-response", {
+            status: response.status,
+            code,
+            correlationId: operationId,
+            requestCorrelationId: requestCorrelationId ?? null,
+            sessionGeneration: requestSessionGeneration,
+            credentialVersion: currentSession.credentialVersion,
+          });
           if (response.status === 401 && isDefinitiveParentSessionError(code)) {
             const disabledMessage = await getDisabledParentMessage(response);
-            handleLogout(
-              disabledMessage ?? (code === "ACCOUNT_DISABLED"
-                ? "Ce compte est désactivé."
-                : "La session mobile a été invalidée."),
-              "definitive",
-              code,
+            currentSession = sessionRef.current;
+            if (currentSession.sessionGeneration !== requestSessionGeneration) return null;
+            const rejectionIsCurrent = (
+              currentSession.credentialVersion === requestCredentialVersion
+              && currentSession.refreshToken === refreshTokenAtStart
             );
+            if (code === "ACCOUNT_DISABLED" || rejectionIsCurrent) {
+              handleLogout(
+                disabledMessage ?? (code === "ACCOUNT_DISABLED"
+                  ? "Ce compte est désactivé."
+                  : "La session mobile a été invalidée."),
+                "definitive",
+                code,
+              );
+            } else {
+              logParentSession("refresh-response-stale", {
+                correlationId: operationId,
+                requestCorrelationId: requestCorrelationId ?? null,
+                sessionGeneration: requestSessionGeneration,
+                credentialVersion: currentSession.credentialVersion,
+                code,
+              });
+              return currentSession.accessToken;
+            }
           } else {
-            scheduleRefreshRetry(await retryDelayFromResponse(response), {
+            const retryDelay = await retryDelayFromResponse(response);
+            currentSession = sessionRef.current;
+            if (currentSession.sessionGeneration !== requestSessionGeneration) return null;
+            if (
+              currentSession.credentialVersion !== requestCredentialVersion
+              || currentSession.refreshToken !== refreshTokenAtStart
+            ) {
+              return currentSession.accessToken;
+            }
+            scheduleRefreshRetry(retryDelay, {
               status: response.status,
               code,
               stage: "http-response",
@@ -391,106 +514,136 @@ export default function App() {
 
         stage = "parse-response";
         const data = await parseJsonSafe<{ accessToken?: string; refreshToken?: string }>(response);
-        if (requestSessionGeneration !== parentSessionGenerationRef.current) return null;
+        currentSession = sessionRef.current;
+        if (requestSessionGeneration !== currentSession.sessionGeneration) return null;
+        if (
+          currentSession.credentialVersion !== requestCredentialVersion
+          || currentSession.refreshToken !== refreshTokenAtStart
+        ) {
+          logParentSession("refresh-success-stale", {
+            correlationId: operationId,
+            requestCorrelationId: requestCorrelationId ?? null,
+            sessionGeneration: requestSessionGeneration,
+            credentialVersion: currentSession.credentialVersion,
+          });
+          return currentSession.accessToken;
+        }
         if (!data?.accessToken || !data?.refreshToken) {
-          logParentSession("refresh-response-invalid", { status: response.status });
+          logParentSession("refresh-response-invalid", {
+            status: response.status,
+            correlationId: operationId,
+            requestCorrelationId: requestCorrelationId ?? null,
+            sessionGeneration: requestSessionGeneration,
+            credentialVersion: requestCredentialVersion,
+          });
           scheduleRefreshRetry(null, { status: response.status, stage });
           return null;
         }
 
-        stage = "persist-access-token";
-        writeParentSessionSecret("ecoletrack_token", data.accessToken, window.localStorage, window.AndroidSessionBridge);
         stage = "persist-rotated-refresh-state";
         persistRefreshState({ refreshToken: data.refreshToken, pendingOperationId: null });
+        sessionRef.current = { ...sessionRef.current, accessToken: data.accessToken };
+        setToken(data.accessToken);
+        stage = "persist-access-token";
+        writeParentSessionSecret("ecoletrack_token", data.accessToken, window.localStorage, window.AndroidSessionBridge);
         refreshRetryAttemptRef.current = 0;
         if (refreshRetryTimerRef.current != null) {
           window.clearTimeout(refreshRetryTimerRef.current);
           refreshRetryTimerRef.current = null;
         }
-        setToken(data.accessToken);
         const accessResult: ParentSessionSecretReadResult = {
           status: "available",
           value: data.accessToken,
         };
         accessTokenReadRef.current = accessResult;
         setAccessTokenReadResult(accessResult);
-        logParentSession("refresh-succeeded", { status: response.status });
+        logParentSession("refresh-succeeded", {
+          status: response.status,
+          correlationId: operationId,
+          requestCorrelationId: requestCorrelationId ?? null,
+          sessionGeneration: requestSessionGeneration,
+          credentialVersion: sessionRef.current.credentialVersion,
+        });
 
         return data.accessToken;
       } catch (error) {
-        if (requestSessionGeneration !== parentSessionGenerationRef.current) return null;
+        const currentSession = sessionRef.current;
+        if (requestSessionGeneration !== currentSession.sessionGeneration) return null;
+        if (
+          currentSession.credentialVersion !== requestCredentialVersion
+          || currentSession.refreshToken !== refreshTokenAtStart
+        ) {
+          logParentSession("refresh-failed-after-session-advance", {
+            correlationId: operationId ?? null,
+            requestCorrelationId: requestCorrelationId ?? null,
+            sessionGeneration: requestSessionGeneration,
+            credentialVersion: currentSession.credentialVersion,
+            stage,
+          });
+          return currentSession.accessToken;
+        }
         const timeoutOccurred = error instanceof DOMException && error.name === "AbortError";
         logParentSession("refresh-failed", {
           reason: timeoutOccurred ? "timeout" : "network-or-storage",
           stage,
+          correlationId: operationId ?? null,
+          requestCorrelationId: requestCorrelationId ?? null,
+          sessionGeneration: requestSessionGeneration,
+          credentialVersion: requestCredentialVersion,
         });
         scheduleRefreshRetry(null, { stage });
         return null;
       } finally {
         window.clearTimeout(timeout);
-        if (requestSessionGeneration === parentSessionGenerationRef.current) {
+        if (requestSessionGeneration === sessionRef.current.sessionGeneration) {
           refreshPromiseRef.current = null;
         }
       }
-    })();
+    });
 
-    refreshPromiseRef.current = promise;
-    return promise;
+    refreshPromiseRef.current = refreshPromise;
+    return refreshPromise;
   };
 
-  const ensureValidAccessToken = async (): Promise<string | null> => {
+  const ensureValidAccessToken = async (requestCorrelationId?: string): Promise<string | null> => {
     if (logoutHandledRef.current) return null;
-    if (!refreshToken) {
-      return token && !isTokenExpiringSoon(token) ? token : null;
+    const currentSession = sessionRef.current;
+    if (!currentSession.refreshToken) {
+      return currentSession.accessToken && !isTokenExpiringSoon(currentSession.accessToken)
+        ? currentSession.accessToken
+        : null;
     }
 
-    if (!token || isTokenExpiringSoon(token)) {
-      return await refreshAccessToken();
+    if (!currentSession.accessToken || isTokenExpiringSoon(currentSession.accessToken)) {
+      return await refreshAccessToken(requestCorrelationId);
     }
 
-    return token;
+    return currentSession.accessToken;
   };
 
   const performProtectedRequest = async (requestFactory: (authToken: string) => Promise<Response>) => {
-    let authToken = await ensureValidAccessToken();
+    const correlationId = createParentSessionCorrelationId();
+    const initialSnapshot = getCurrentSessionSnapshot();
+    let authToken = await ensureValidAccessToken(correlationId);
     if (!authToken) return null;
 
     try {
-      let response = await requestFactory(authToken);
-      if (response.status === 401) {
-        const code = await getParentAuthErrorCode(response);
-        const disabledMessage = await getDisabledParentMessage(response);
-        if (disabledMessage) {
-          handleLogout(disabledMessage, "definitive", code);
-          return null;
-        }
-        logParentSession("protected-request-401", { status: response.status, code });
-        const refreshedToken = await refreshAccessToken();
-        if (!refreshedToken) return null;
-
-        authToken = refreshedToken;
-        response = await requestFactory(authToken);
-        if (response.status === 401) {
-          const secondCode = await getParentAuthErrorCode(response);
-          const disabledMessageAfterRetry = await getDisabledParentMessage(response);
-          if (isDefinitiveParentSessionError(secondCode)) {
-            handleLogout(
-              disabledMessageAfterRetry ?? "La session mobile a été invalidée.",
-              "definitive",
-              secondCode,
-            );
-          } else {
-            logParentSession("protected-request-401-after-refresh", {
-              status: response.status,
-              code: secondCode,
-            });
-          }
-          return null;
-        }
-      }
-      return response;
+      return await performParentProtectedRequest({
+        correlationId,
+        initialSnapshot,
+        initialToken: authToken,
+        requestFactory,
+        getCurrentSnapshot: getCurrentSessionSnapshot,
+        refreshAccessToken,
+        onSessionExpired: (message, code) => handleLogout(message, "definitive", code),
+        log: logParentSession,
+      });
     } catch {
-      logParentSession("protected-request-failed", { reason: "network" });
+      logParentSession("protected-request-failed", {
+        reason: "network",
+        sessionGeneration: initialSnapshot.sessionGeneration,
+        credentialVersion: initialSnapshot.credentialVersion,
+      });
       return null;
     }
   };
@@ -970,7 +1123,15 @@ export default function App() {
 
   // Handlers for session authentication
   const handleLoginSuccess = (newToken: string, newParent: Parent, newRefreshToken: string) => {
-    parentSessionGenerationRef.current += 1;
+    const currentSession = sessionRef.current;
+    sessionRef.current = {
+      ...currentSession,
+      accessToken: newToken,
+      refreshToken: newRefreshToken,
+      pendingOperationId: null,
+      sessionGeneration: currentSession.sessionGeneration + 1,
+      credentialVersion: currentSession.credentialVersion + 1,
+    };
     refreshPromiseRef.current = null;
     if (refreshRetryTimerRef.current != null) {
       window.clearTimeout(refreshRetryTimerRef.current);
@@ -1016,8 +1177,9 @@ export default function App() {
     if (message) setSessionEndedMessage(message);
     if (logoutHandledRef.current) return;
     logoutHandledRef.current = true;
-    const currentToken = token;
-    const currentRefreshToken = refreshStateRef.current?.refreshToken ?? refreshToken;
+    const currentSession = sessionRef.current;
+    const currentToken = currentSession.accessToken;
+    const currentRefreshToken = currentSession.refreshToken;
     const currentFcmToken = fcmToken ?? (typeof window !== "undefined" ? window.localStorage.getItem("fcm_token") : null);
     const currentDeviceId = typeof window !== "undefined" ? window.localStorage.getItem("ecoletrack_device_id") : null;
 
@@ -1036,7 +1198,10 @@ export default function App() {
         if (currentRefreshToken) {
           try {
             writeParentRefreshState(
-              refreshStateRef.current ?? { refreshToken: currentRefreshToken, pendingOperationId: null },
+              {
+                refreshToken: currentRefreshToken,
+                pendingOperationId: currentSession.pendingOperationId,
+              },
               window.localStorage,
               window.AndroidSessionBridge,
             );
@@ -1063,11 +1228,19 @@ export default function App() {
       logParentSession("secure-storage-clear-failed", { reason: reason ?? "unspecified", code: code ?? null });
     }
 
-    parentSessionGenerationRef.current += 1;
+    sessionRef.current = {
+      accessToken: null,
+      refreshToken: null,
+      pendingOperationId: null,
+      sessionGeneration: currentSession.sessionGeneration + 1,
+      credentialVersion: currentSession.credentialVersion + 1,
+    };
     refreshPromiseRef.current = null;
     logParentSession("session-logout", {
       reason: reason ?? "local",
       code: code ?? null,
+      sessionGeneration: currentSession.sessionGeneration,
+      credentialVersion: currentSession.credentialVersion,
     });
     if (storageReadRetryTimerRef.current != null) {
       window.clearTimeout(storageReadRetryTimerRef.current);
@@ -1087,7 +1260,6 @@ export default function App() {
       window.clearTimeout(refreshRetryTimerRef.current);
       refreshRetryTimerRef.current = null;
     }
-    refreshStateRef.current = null;
     setToken(null);
     setRefreshToken(null);
     refreshPromiseRef.current = null;
@@ -1163,6 +1335,7 @@ export default function App() {
           sessionEndedMessage={sessionEndedMessage}
           sessionStorageMessage={sessionStorageMessage}
           refreshAccessToken={refreshAccessToken}
+          getCurrentSessionSnapshot={getCurrentSessionSnapshot}
           activeTab={activeTab}
           setActiveTab={setActiveTab}
           selectedChild={selectedChild}
@@ -1274,6 +1447,7 @@ export default function App() {
             sessionEndedMessage={sessionEndedMessage}
             sessionStorageMessage={sessionStorageMessage}
             refreshAccessToken={refreshAccessToken}
+            getCurrentSessionSnapshot={getCurrentSessionSnapshot}
             activeTab={activeTab}
             setActiveTab={setActiveTab}
             selectedChild={selectedChild}

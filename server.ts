@@ -638,6 +638,10 @@ app.post("/api/mobile/parent/change-password", rateLimit(15, 60000), async (req,
 // 1b. POST /api/mobile/parent/refresh-token (Refresh Token Rotation - RTR)
 app.post("/api/mobile/parent/refresh-token", rateLimit(15, 60000), async (req, res) => {
   const { refreshToken, operationId } = req.body ?? {};
+  const correlationId = typeof operationId === "string"
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(operationId)
+    ? operationId
+    : null;
   if (!refreshToken) {
     return res.status(400).json({
       error: "Refresh token manquant.",
@@ -653,12 +657,14 @@ app.post("/api/mobile/parent/refresh-token", rateLimit(15, 60000), async (req, r
     );
   } catch (error) {
     if (error instanceof MobileSessionAuthorizationError && error.reason === "account_disabled") {
+      logger.warn("Mobile refresh rejected.", { reason: error.reason, correlationId });
       return res.status(401).json({
         error: MOBILE_PARENT_ACCOUNT_DISABLED_MESSAGE,
         code: "ACCOUNT_DISABLED"
       });
     }
     if (error instanceof MobileSessionAuthorizationError) {
+      logger.warn("Mobile refresh rejected.", { reason: error.reason, correlationId });
       return res.status(401).json({
         error: "Session invalide ou révoquée. Veuillez vous reconnecter.",
         code: "INVALID_SESSION"
@@ -671,14 +677,17 @@ app.post("/api/mobile/parent/refresh-token", rateLimit(15, 60000), async (req, r
     });
   }
   if (!newSession) {
-    logger.warn("Échec de rotation du Jeton de Rafraîchissement. Token expiré, compromis ou invalide.");
+    logger.warn("Échec de rotation du Jeton de Rafraîchissement. Token expiré, compromis ou invalide.", {
+      reason: "rotation_rejected",
+      correlationId,
+    });
     return res.status(401).json({
       error: "Session invalide ou expirée. Veuillez vous reconnecter.",
       code: "INVALID_SESSION"
     });
   }
 
-  logger.info("Rotation du jeton de session effectuée avec succès.");
+  logger.info("Rotation du jeton de session effectuée avec succès.", { correlationId });
   return res.json(newSession);
 });
 
@@ -822,6 +831,37 @@ const toMobileAbsenceDeclaration = (row: any) => row && ({
   rejectionReason: row.rejectionReason ?? undefined,
 });
 
+app.get("/api/mobile/parent/server-date", async (_req: Request, res: Response) => {
+  res.setHeader("Cache-Control", "private, no-store, no-cache, must-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  const baseUrl = webBackendUrl();
+  if (!baseUrl) {
+    return res.status(502).json({ error: "Impossible de vérifier la date du serveur." });
+  }
+  try {
+    const response = await fetch(`${baseUrl}/api/server-date`, {
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    });
+    const body = await response.json().catch(() => null);
+    const date = body?.date;
+    const parsedDate = typeof date === "string" ? new Date(`${date}T00:00:00.000Z`) : null;
+    if (!response.ok
+      || typeof date !== "string"
+      || !/^\d{4}-\d{2}-\d{2}$/.test(date)
+      || !parsedDate
+      || Number.isNaN(parsedDate.getTime())
+      || parsedDate.toISOString().slice(0, 10) !== date) {
+      return res.status(502).json({ error: "Impossible de vérifier la date du serveur." });
+    }
+    return res.json({ date });
+  } catch (error: any) {
+    console.error("Failed to retrieve the Web server calendar date:", error?.message || error);
+    return res.status(502).json({ error: "Impossible de vérifier la date du serveur." });
+  }
+});
+
 app.get("/api/mobile/parent/absence-declarations", requireAuth, requireParentRoleOnly, async (req: AuthenticatedRequest, res) => {
   try {
     const result = await relayAbsenceDeclaration(
@@ -833,7 +873,10 @@ app.get("/api/mobile/parent/absence-declarations", requireAuth, requireParentRol
     return res.json(Array.isArray(result.body) ? result.body.map(toMobileAbsenceDeclaration) : []);
   } catch (error: any) {
     const status = error instanceof AbsenceDeclarationRelayError ? error.status : 502;
-    return res.status(status).json({ error: error?.message || "Impossible de charger les déclarations." });
+    return res.status(status).json({
+      error: error?.message || "Impossible de charger les déclarations.",
+      ...(error instanceof AbsenceDeclarationRelayError && error.code ? { code: error.code } : {}),
+    });
   }
 });
 
@@ -859,7 +902,10 @@ app.post("/api/mobile/parent/absence-declarations", requireAuth, requireParentRo
     return res.status(result.status).json(toMobileAbsenceDeclaration(result.body));
   } catch (error: any) {
     const status = error instanceof AbsenceDeclarationRelayError ? error.status : 502;
-    return res.status(status).json({ error: error?.message || "Impossible de transmettre la déclaration." });
+    return res.status(status).json({
+      error: error?.message || "Impossible de transmettre la déclaration.",
+      ...(error instanceof AbsenceDeclarationRelayError && error.code ? { code: error.code } : {}),
+    });
   }
 });
 
@@ -886,7 +932,10 @@ app.put("/api/mobile/parent/absence-declarations/:id", requireAuth, requireParen
     return res.json(toMobileAbsenceDeclaration(result.body));
   } catch (error: any) {
     const status = error instanceof AbsenceDeclarationRelayError ? error.status : 502;
-    return res.status(status).json({ error: error?.message || "Impossible de modifier la déclaration." });
+    return res.status(status).json({
+      error: error?.message || "Impossible de modifier la déclaration.",
+      ...(error instanceof AbsenceDeclarationRelayError && error.code ? { code: error.code } : {}),
+    });
   }
 });
 
@@ -902,7 +951,10 @@ app.put("/api/mobile/parent/absence-declarations/:id/cancel", requireAuth, requi
     return res.json(toMobileAbsenceDeclaration(result.body));
   } catch (error: any) {
     const status = error instanceof AbsenceDeclarationRelayError ? error.status : 502;
-    return res.status(status).json({ error: error?.message || "Impossible d’annuler la déclaration." });
+    return res.status(status).json({
+      error: error?.message || "Impossible d’annuler la déclaration.",
+      ...(error instanceof AbsenceDeclarationRelayError && error.code ? { code: error.code } : {}),
+    });
   }
 });
 

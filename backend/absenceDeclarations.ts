@@ -4,11 +4,13 @@ export type AbsenceDeclarationAction = 'list' | 'create' | 'update' | 'cancel';
 
 export class AbsenceDeclarationRelayError extends Error {
   readonly status: number;
+  readonly code?: string;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, code?: string) {
     super(message);
     this.name = 'AbsenceDeclarationRelayError';
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -47,7 +49,11 @@ export async function relayAbsenceDeclaration(
 
   const body = await response.json().catch(() => ({ error: 'Réponse invalide du serveur Web.' }));
   if (!response.ok) {
-    throw new AbsenceDeclarationRelayError(body?.error || 'La déclaration n’a pas pu être transmise.', response.status);
+    throw new AbsenceDeclarationRelayError(
+      body?.error || 'La déclaration n’a pas pu être transmise.',
+      response.status,
+      typeof body?.code === 'string' ? body.code : undefined,
+    );
   }
   return { status: response.status, body };
 }

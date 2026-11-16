@@ -25,9 +25,9 @@ import {
 import { AttendanceJustificationButton } from "./AttendanceJustificationButton";
 import { AttendanceEventMarker } from "./AttendanceEventMarker";
 import {
-  getDisabledParentMessage,
-  getParentAuthErrorCode,
-  isDefinitiveParentSessionError,
+  createParentSessionCorrelationId,
+  performParentProtectedRequest,
+  type ParentSessionSnapshot,
   type ParentLogoutReason,
 } from "../utils/parentSession";
 import { classifyParentNotification } from "../utils/notificationCategory";
@@ -46,7 +46,8 @@ interface ParentPortalProps {
   onLogout: (message?: string, reason?: ParentLogoutReason, code?: string | null) => void;
   sessionEndedMessage?: string | null;
   sessionStorageMessage?: string | null;
-  refreshAccessToken: () => Promise<string | null>;
+  refreshAccessToken: (requestCorrelationId?: string) => Promise<string | null>;
+  getCurrentSessionSnapshot: () => ParentSessionSnapshot;
   activeTab: string;
   setActiveTab: (tab: string) => void;
   selectedChild: Child | null;
@@ -60,6 +61,8 @@ interface ParentPortalProps {
 const formatChildName = (child: Pick<Child, "firstName" | "lastName"> | null | undefined): string => (
   child ? `${child.lastName} ${child.firstName}`.trim() : ""
 );
+const ABSENCE_DATE_IN_PAST_MESSAGE = "Vous ne pouvez pas déclarer une absence pour une date passée. Veuillez sélectionner la date du jour ou une date ultérieure.";
+const SERVER_DATE_UNAVAILABLE_MESSAGE = "Impossible de vérifier la date du serveur. Veuillez réessayer avant d’envoyer la déclaration.";
 
 export default function ParentPortal({
   token,
@@ -69,6 +72,7 @@ export default function ParentPortal({
   sessionEndedMessage,
   sessionStorageMessage,
   refreshAccessToken,
+  getCurrentSessionSnapshot,
   activeTab,
   setActiveTab,
   selectedChild,
@@ -110,11 +114,14 @@ export default function ParentPortal({
   const [absenceDeclarations, setAbsenceDeclarations] = useState<AbsenceDeclaration[]>([]);
   const [showAbsenceDeclarationForm, setShowAbsenceDeclarationForm] = useState(false);
   const [editingAbsenceDeclarationId, setEditingAbsenceDeclarationId] = useState<string | null>(null);
-  const [absenceDeclarationDate, setAbsenceDeclarationDate] = useState(new Date().toISOString().slice(0, 10));
+  const [absenceDeclarationDate, setAbsenceDeclarationDate] = useState("");
   const [absenceDeclarationStartTime, setAbsenceDeclarationStartTime] = useState("08:00");
   const [absenceDeclarationEndTime, setAbsenceDeclarationEndTime] = useState("09:30");
   const [absenceDeclarationReason, setAbsenceDeclarationReason] = useState("");
   const [absenceDeclarationError, setAbsenceDeclarationError] = useState<string | null>(null);
+  const [absenceServerDate, setAbsenceServerDate] = useState<string | null>(null);
+  const [isRefreshingAbsenceServerDate, setIsRefreshingAbsenceServerDate] = useState(false);
+  const absenceServerDateRequestRef = useRef(0);
   const [grades, setGrades] = useState<Grade[]>([]);
   const [termAverageApi, setTermAverageApi] = useState<number | null>(null);
   const [termPeriod, setTermPeriod] = useState<ChildGradesResponse["period"]>(null);
@@ -272,7 +279,12 @@ export default function ParentPortal({
   const childAbsenceDeclarations = currentChild
     ? absenceDeclarations.filter((declaration: AbsenceDeclaration) => declaration.childId === currentChild.id)
     : [];
-  const declarationToday = new Date().toISOString().slice(0, 10);
+  const editingAbsenceDeclarationOriginalDate = editingAbsenceDeclarationId == null
+    ? null
+    : absenceDeclarations.find((declaration) => declaration.id === editingAbsenceDeclarationId)?.date ?? null;
+  const declarationToday = absenceServerDate ?? "";
+  const absenceDeclarationDateNeedsVerification = editingAbsenceDeclarationId == null
+    || absenceDeclarationDate !== editingAbsenceDeclarationOriginalDate;
   const activeSchoolPeriod = !currentChild?.cycleCode || currentChild.cycleCode === termCycleCode ? termPeriod : null;
   const schoolPeriodLabel = getSchoolPeriodLabel(termCycleCode, activeSchoolPeriod?.periodType);
   const hasConfiguredSchoolPeriod = schoolPeriodLabel !== SCHOOL_PERIOD_FALLBACK_LABEL;
@@ -417,52 +429,28 @@ export default function ParentPortal({
   };
 
   const performProtectedRequest = async (requestFactory: (authToken: string) => Promise<Response>) => {
-    let authToken = token;
+    const correlationId = createParentSessionCorrelationId();
+    const initialSnapshot = getCurrentSessionSnapshot();
+    let authToken = initialSnapshot.accessToken;
     if (!authToken) {
-      authToken = await refreshAccessToken();
+      authToken = await refreshAccessToken(correlationId);
       if (!authToken) {
         return null;
       }
     }
 
     try {
-      let response = await requestFactory(authToken);
-      if (response.status === 401) {
-        const code = await getParentAuthErrorCode(response);
-        const disabledMessage = await getDisabledParentMessage(response);
-        if (disabledMessage) {
-          handleSessionExpired(disabledMessage, code);
-          return null;
-        }
-        console.info("[PARENT_SESSION] Protected request returned 401; attempting renewal.", {
-          status: response.status,
-          code,
-        });
-        const refreshedToken = await refreshAccessToken();
-        if (!refreshedToken) {
-          return null;
-        }
-
-        authToken = refreshedToken;
-        response = await requestFactory(authToken);
-      }
-      if (response.status === 401) {
-        const code = await getParentAuthErrorCode(response);
-        if (isDefinitiveParentSessionError(code)) {
-          handleSessionExpired(await getDisabledParentMessage(response) ?? undefined, code);
-        } else {
-          console.warn("[PARENT_SESSION] Protected request remained unauthorized after one refresh.", {
-            status: response.status,
-            code,
-          });
-        }
-        return null;
-      }
-      if (response.status === 403) {
-        return response;
-      }
-      return response;
-    } catch (e) {
+      return await performParentProtectedRequest({
+        correlationId,
+        initialSnapshot,
+        initialToken: authToken,
+        requestFactory,
+        getCurrentSnapshot: getCurrentSessionSnapshot,
+        refreshAccessToken,
+        onSessionExpired: (message, code) => handleSessionExpired(message, code),
+        log: (event, details) => console.info("[PARENT_SESSION]", event, details),
+      });
+    } catch {
       console.warn("[PARENT_SESSION] Protected request failed; session state was retained.");
       return null;
     }
@@ -979,6 +967,66 @@ export default function ParentPortal({
   const fetchAbsenceDeclarationsRef = useRef(fetchAbsenceDeclarations);
   fetchAbsenceDeclarationsRef.current = fetchAbsenceDeclarations;
 
+  const refreshAbsenceServerDate = async (): Promise<string | null> => {
+    const requestId = absenceServerDateRequestRef.current + 1;
+    absenceServerDateRequestRef.current = requestId;
+    setIsRefreshingAbsenceServerDate(true);
+    try {
+      const response = await fetch(withApiBase("/api/mobile/parent/server-date"), { cache: "no-store" });
+      const data = await parseJsonSafe<{ date?: unknown }>(response);
+      if (!response.ok || typeof data?.date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(data.date)) {
+        throw new Error(SERVER_DATE_UNAVAILABLE_MESSAGE);
+      }
+      if (requestId !== absenceServerDateRequestRef.current) return null;
+      const verifiedDate = data.date;
+      setAbsenceServerDate(verifiedDate);
+      setAbsenceDeclarationDate((current) => current || verifiedDate);
+      return verifiedDate;
+    } catch (error) {
+      if (requestId === absenceServerDateRequestRef.current) {
+        setAbsenceServerDate(null);
+      }
+      console.error("Failed to refresh the verified absence declaration date", error);
+      return null;
+    } finally {
+      if (requestId === absenceServerDateRequestRef.current) {
+        setIsRefreshingAbsenceServerDate(false);
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (!token) {
+      setAbsenceServerDate(null);
+      return;
+    }
+
+    const refresh = () => {
+      if (document.visibilityState === "visible") void refreshAbsenceServerDate();
+    };
+    void refreshAbsenceServerDate();
+    const intervalId = window.setInterval(refresh, 60_000);
+    document.addEventListener("visibilitychange", refresh);
+    window.addEventListener("pageshow", refresh);
+    window.addEventListener("focus", refresh);
+    window.addEventListener("online", refresh);
+    window.addEventListener("ecoletrack:app-resume", refresh);
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", refresh);
+      window.removeEventListener("pageshow", refresh);
+      window.removeEventListener("focus", refresh);
+      window.removeEventListener("online", refresh);
+      window.removeEventListener("ecoletrack:app-resume", refresh);
+    };
+  }, [token]);
+
+  useEffect(() => {
+    if (showAbsenceDeclarationForm && token) {
+      void refreshAbsenceServerDate();
+    }
+  }, [showAbsenceDeclarationForm, token]);
+
   const submitAbsenceDeclaration = async () => {
     if (!currentChild || !token) return;
     setAbsenceDeclarationError(null);
@@ -988,6 +1036,17 @@ export default function ParentPortal({
       return;
     }
     try {
+      const verifiedServerDate = absenceDeclarationDateNeedsVerification
+        ? await refreshAbsenceServerDate()
+        : absenceServerDate;
+      if (absenceDeclarationDateNeedsVerification && !verifiedServerDate) {
+        setAbsenceDeclarationError(SERVER_DATE_UNAVAILABLE_MESSAGE);
+        return;
+      }
+      if (absenceDeclarationDateNeedsVerification && verifiedServerDate && absenceDeclarationDate < verifiedServerDate) {
+        setAbsenceDeclarationError(ABSENCE_DATE_IN_PAST_MESSAGE);
+        return;
+      }
       const isEditing = editingAbsenceDeclarationId != null;
       const endpoint = isEditing
         ? `/api/mobile/parent/absence-declarations/${editingAbsenceDeclarationId}`
@@ -1008,7 +1067,14 @@ export default function ParentPortal({
       }));
       if (!response) throw new Error("Session invalide. Veuillez vous reconnecter.");
       const data = await parseJsonSafe(response);
-      if (!response.ok) throw new Error(getApiErrorMessage(data, "Impossible d’enregistrer la déclaration."));
+      if (!response.ok) {
+        const code = data && typeof data === "object" && "code" in data
+          ? (data as { code?: unknown }).code
+          : null;
+        throw new Error(code === "ABSENCE_DATE_IN_PAST"
+          ? ABSENCE_DATE_IN_PAST_MESSAGE
+          : getApiErrorMessage(data, "Impossible d’enregistrer la déclaration."));
+      }
       setShowAbsenceDeclarationForm(false);
       setEditingAbsenceDeclarationId(null);
       setAbsenceDeclarationReason("");
@@ -2337,7 +2403,8 @@ export default function ParentPortal({
                         type="button"
                         onClick={() => {
                           setEditingAbsenceDeclarationId(null);
-                          setAbsenceDeclarationDate(declarationToday);
+                          setAbsenceServerDate(null);
+                          setAbsenceDeclarationDate("");
                           setAbsenceDeclarationStartTime("08:00");
                           setAbsenceDeclarationEndTime("09:30");
                           setAbsenceDeclarationReason("");
@@ -2358,7 +2425,7 @@ export default function ParentPortal({
                     >
                       <label className="text-[10px] font-semibold text-slate-600 dark:text-slate-300">
                         Date
-                        <input required type="date" min={declarationToday} value={absenceDeclarationDate} onChange={(event) => setAbsenceDeclarationDate(event.target.value)} className="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white" />
+                        <input required type="date" min={absenceDeclarationDateNeedsVerification ? declarationToday || undefined : undefined} disabled={absenceDeclarationDateNeedsVerification && (!declarationToday || isRefreshingAbsenceServerDate)} value={absenceDeclarationDate} onChange={(event) => setAbsenceDeclarationDate(event.target.value)} className="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-xs text-slate-900 disabled:cursor-not-allowed disabled:bg-slate-100 dark:border-slate-700 dark:bg-slate-950 dark:text-white" />
                       </label>
                       <label className="text-[10px] font-semibold text-slate-600 dark:text-slate-300">
                         De
@@ -2372,10 +2439,15 @@ export default function ParentPortal({
                         Motif
                         <input required value={absenceDeclarationReason} onChange={(event) => setAbsenceDeclarationReason(event.target.value)} className="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white" />
                       </label>
+                      {absenceDeclarationDateNeedsVerification && !declarationToday && (
+                        <p role="alert" className="col-span-2 text-[10px] font-semibold text-rose-700 dark:text-rose-300">
+                          {isRefreshingAbsenceServerDate ? "Vérification de la date du serveur…" : SERVER_DATE_UNAVAILABLE_MESSAGE}
+                        </p>
+                      )}
                       {absenceDeclarationError && <p role="alert" className="col-span-2 text-[10px] font-semibold text-rose-700 dark:text-rose-300">{absenceDeclarationError}</p>}
                       <div className="col-span-2 flex justify-end gap-2">
                         <button type="button" onClick={() => { setShowAbsenceDeclarationForm(false); setEditingAbsenceDeclarationId(null); setAbsenceDeclarationError(null); }} className="rounded-lg border border-slate-300 px-3 py-2 text-[10px] font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200">Fermer</button>
-                        <button type="submit" className="rounded-lg bg-indigo-600 px-3 py-2 text-[10px] font-bold text-white hover:bg-indigo-700">{editingAbsenceDeclarationId ? "Enregistrer" : "Envoyer"}</button>
+                        <button type="submit" disabled={absenceDeclarationDateNeedsVerification && (!declarationToday || isRefreshingAbsenceServerDate)} className="rounded-lg bg-indigo-600 px-3 py-2 text-[10px] font-bold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-indigo-400">{editingAbsenceDeclarationId ? "Enregistrer" : "Envoyer"}</button>
                       </div>
                     </form>
                   )}
@@ -2389,7 +2461,8 @@ export default function ParentPortal({
                   ) : (
                     <div className="divide-y divide-slate-100 dark:divide-slate-800">
                       {childAbsenceDeclarations.map((declaration: AbsenceDeclaration) => {
-                        const canChange = ["RECEIVED", "ACCEPTED"].includes(declaration.status) && declaration.date >= declarationToday;
+                        const canCancel = ["RECEIVED", "ACCEPTED"].includes(declaration.status);
+                        const canEdit = ["RECEIVED", "ACCEPTED"].includes(declaration.status);
                         const declarationStatusLabel = {
                           RECEIVED: "Reçue",
                           ACCEPTED: "Acceptée",
@@ -2407,9 +2480,9 @@ export default function ParentPortal({
                               {declaration.reason && <p className="mt-0.5 text-[10px] text-slate-500 dark:text-slate-400">{declaration.reason}</p>}
                               {declaration.rejectionReason && <p className="mt-0.5 text-[10px] text-rose-700 dark:text-rose-300">Motif du refus : {declaration.rejectionReason}</p>}
                             </div>
-                            {canChange && (
+                            {(canEdit || canCancel) && (
                               <div className="flex shrink-0 gap-1.5">
-                                <button type="button" onClick={() => {
+                                {canEdit && <button type="button" onClick={() => {
                                   setEditingAbsenceDeclarationId(declaration.id);
                                   setAbsenceDeclarationDate(declaration.date);
                                   setAbsenceDeclarationStartTime(declaration.startTime);
@@ -2417,8 +2490,8 @@ export default function ParentPortal({
                                   setAbsenceDeclarationReason(declaration.reason || "");
                                   setAbsenceDeclarationError(null);
                                   setShowAbsenceDeclarationForm(true);
-                                }} className="rounded-md border border-slate-300 px-2 py-1 text-[9px] font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200">Modifier</button>
-                                <button type="button" onClick={() => void cancelAbsenceDeclaration(declaration.id)} className="rounded-md border border-slate-300 px-2 py-1 text-[9px] font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200">Annuler</button>
+                                }} className="rounded-md border border-slate-300 px-2 py-1 text-[9px] font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200">Modifier</button>}
+                                {canCancel && <button type="button" onClick={() => void cancelAbsenceDeclaration(declaration.id)} className="rounded-md border border-slate-300 px-2 py-1 text-[9px] font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200">Annuler</button>}
                               </div>
                             )}
                           </div>

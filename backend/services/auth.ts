@@ -514,19 +514,27 @@ export class AuthService {
     const recoveryExpiry = timestampMs(source.rotation_recovery_expires_at);
     const rotationTime = timestampMs(source.revoked_at);
     const sourceAbsoluteExpiry = timestampMs(source.absolute_expires_at);
-    if (
-      source.rotation_request_id !== operationId
-      || source.rotated_to_session_id == null
-      || !source.rotation_successor_ciphertext
-      || recoveryExpiry == null
-      || recoveryExpiry <= now
-      || rotationTime == null
-      || recoveryExpiry > rotationTime + IDEMPOTENCY_RECOVERY_MS
-      || (sourceAbsoluteExpiry != null && recoveryExpiry > sourceAbsoluteExpiry)
-      || source.family_revoked_at != null
-    ) {
+    const rejectRecovery = (reason: string): null => {
+      logger.warn("Mobile refresh idempotent recovery rejected.", {
+        reason,
+        correlationId: operationId,
+      });
       return null;
+    };
+
+    if (source.rotation_request_id !== operationId) return rejectRecovery("operation_id_mismatch");
+    if (source.rotated_to_session_id == null) return rejectRecovery("successor_reference_missing");
+    if (!source.rotation_successor_ciphertext) return rejectRecovery("recovery_material_missing");
+    if (recoveryExpiry == null) return rejectRecovery("recovery_expiry_missing");
+    if (recoveryExpiry <= now) return rejectRecovery("recovery_window_expired");
+    if (rotationTime == null) return rejectRecovery("rotation_timestamp_missing");
+    if (recoveryExpiry > rotationTime + IDEMPOTENCY_RECOVERY_MS) {
+      return rejectRecovery("recovery_window_invalid");
     }
+    if (sourceAbsoluteExpiry != null && recoveryExpiry > sourceAbsoluteExpiry) {
+      return rejectRecovery("source_absolute_expiry_before_recovery");
+    }
+    if (source.family_revoked_at != null) return rejectRecovery("session_family_revoked");
 
     const { rows } = await client.query<SessionRow>(`
       SELECT *
@@ -539,32 +547,43 @@ export class AuthService {
     const absoluteExpiry = timestampMs(successor?.absolute_expires_at ?? null);
     const sourceGeneration = parseGeneration(source.refresh_generation);
     const successorGeneration = parseGeneration(successor?.refresh_generation ?? null);
+    if (!successor) return rejectRecovery("successor_missing");
     if (
-      !successor
-      || successor.id === source.id
+      successor.id === source.id
       || successor.parent_id !== source.parent_id
       || successor.role !== source.role
-      || !successor.is_active
-      || successor.revoked_at != null
-      || successor.family_revoked_at != null
-      || successorExpiry == null
-      || successorExpiry <= now
-      || recoveryExpiry > successorExpiry
-      || (absoluteExpiry != null && absoluteExpiry <= now)
-      || (absoluteExpiry != null && recoveryExpiry > absoluteExpiry)
-      || successor.session_family_id !== source.session_family_id
-      || (
-        source.session_family_id != null
-        && (
-          sourceGeneration == null
-          || successorGeneration !== sourceGeneration + 1
-        )
-      )
-    ) {
-      return null;
+    ) return rejectRecovery("successor_identity_mismatch");
+    if (!successor.is_active) return rejectRecovery("successor_inactive");
+    if (successor.revoked_at != null) return rejectRecovery("successor_revoked");
+    if (successor.family_revoked_at != null) return rejectRecovery("successor_family_revoked");
+    if (successorExpiry == null) return rejectRecovery("successor_expiry_missing");
+    if (successorExpiry <= now) return rejectRecovery("successor_expired");
+    if (recoveryExpiry > successorExpiry) return rejectRecovery("recovery_after_successor_expiry");
+    if (absoluteExpiry != null && absoluteExpiry <= now) return rejectRecovery("successor_absolute_expired");
+    if (absoluteExpiry != null && recoveryExpiry > absoluteExpiry) {
+      return rejectRecovery("recovery_after_successor_absolute_expiry");
     }
+    if (successor.session_family_id !== source.session_family_id) {
+      return rejectRecovery("session_family_mismatch");
+    }
+    if (
+      source.session_family_id != null
+      && (
+        sourceGeneration == null
+        || successorGeneration !== sourceGeneration + 1
+      )
+    ) return rejectRecovery("refresh_generation_mismatch");
 
-    const refreshToken = decryptRefreshToken(source.rotation_successor_ciphertext);
+    let refreshToken: string;
+    try {
+      refreshToken = decryptRefreshToken(source.rotation_successor_ciphertext);
+    } catch {
+      logger.warn("Mobile refresh idempotent recovery unavailable.", {
+        reason: "recovery_data_unavailable",
+        correlationId: operationId,
+      });
+      throw new MobileSessionTemporaryError("Refresh recovery data is unavailable.");
+    }
     const refreshPayload = this.verifyJWT(refreshToken);
     if (
       !refreshPayload
@@ -581,6 +600,10 @@ export class AuthService {
         )
       )
     ) {
+      logger.warn("Mobile refresh idempotent recovery rejected.", {
+        reason: "successor_token_mismatch",
+        correlationId: operationId,
+      });
       throw new MobileSessionTemporaryError("Refresh recovery data did not match its successor.");
     }
 
@@ -605,6 +628,9 @@ export class AuthService {
       "UPDATE mobile_parent_sessions SET last_used_at = to_timestamp($1 / 1000.0) WHERE id = $2",
       [now, successor.id],
     );
+    logger.info("Mobile refresh idempotent recovery succeeded.", {
+      correlationId: operationId,
+    });
     return { accessToken, refreshToken };
   }
 
@@ -642,9 +668,7 @@ export class AuthService {
       if (accountRejection) {
         logger.warn("Mobile refresh rotation rejected by account revocation boundaries.", {
           reason: accountRejection,
-          parentId: payload.parentId,
-          sessionId: payload.sessionId ?? null,
-          authRevocationEventId: payload.authRevocationEventId ?? null,
+          correlationId: operationId ?? null,
         });
         return { kind: "invalid" };
       }
@@ -698,6 +722,11 @@ export class AuthService {
             latestRevocationEventId,
           );
           if (recovered) return { kind: "recovered", tokens: recovered };
+        } else {
+          logger.warn("Mobile refresh idempotent recovery rejected.", {
+            reason: "operation_id_missing",
+            correlationId: null,
+          });
         }
         return { kind: "invalid" };
       }
@@ -723,9 +752,7 @@ export class AuthService {
       if (rejection) {
         logger.warn("Mobile refresh rotation rejected after session validation.", {
           reason: rejection,
-          parentId: payload.parentId,
-          sessionId: payload.sessionId ?? session.id,
-          authRevocationEventId: payload.authRevocationEventId ?? null,
+          correlationId: operationId ?? null,
         });
         return { kind: "invalid" };
       }
