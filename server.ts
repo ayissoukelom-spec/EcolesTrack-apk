@@ -1382,25 +1382,44 @@ app.post("/api/mobile/parent/devices/register-push-token", requireAuth, requireP
 
   const { pushToken, platform, appVersion, deviceId } = validation.data;
 
-const device = await store.registerPushToken(
-  parentId,
-  deviceId,
-  pushToken,
-  platform,
-  appVersion
-);
+  let device: Awaited<ReturnType<typeof store.registerPushToken>>;
+  try {
+    device = await store.registerPushToken(
+      parentId,
+      deviceId,
+      pushToken,
+      platform,
+      appVersion
+    );
+  } catch (error) {
+    logger.error(
+      "Mobile parent push-token registration failed.",
+      error instanceof Error ? error.name : "UnknownError"
+    );
+    return res.status(500).json({
+      error: "Impossible d'enregistrer le token de notification.",
+      code: "PUSH_TOKEN_REGISTRATION_FAILED"
+    });
+  }
 
-logger.audit(
-  "REGISTER_PUSH_TOKEN",
-  parentId,
-  { platform, appVersion },
-  "SUCCESS"
-);
+  try {
+    logger.audit(
+      "REGISTER_PUSH_TOKEN",
+      parentId,
+      { platform, appVersion },
+      "SUCCESS"
+    );
+  } catch (error) {
+    logger.error(
+      "Mobile parent push-token audit logging failed.",
+      error instanceof Error ? error.name : "UnknownError"
+    );
+  }
 
-return res.json({
-  success: true,
-  message: "Token de notification enregistré.",
-  device
+  return res.json({
+    success: true,
+    message: "Token de notification enregistré.",
+    device
   });
 });
 

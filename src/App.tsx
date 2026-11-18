@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useCallback, useState, useEffect, useRef } from "react";
 import { 
   Terminal, ShieldCheck, Play, RefreshCw, Trash2, Smartphone, 
   BookOpen, HelpCircle, Code, HelpCircle as HelpIcon 
@@ -13,6 +13,13 @@ declare global {
   interface Window {
     setFcmToken?: (token: string) => void;
     setNotificationTarget?: (target: string, dispatchId: string | null) => void;
+    AndroidBridge?: {
+      getAppVersion?: () => string | null;
+      getPendingFcmToken?: () => string | null;
+      requestFcmTokenIfMissing?: () => void;
+      acknowledgeFcmTokenReceived?: (token: string) => void;
+      log?: (message: string) => void;
+    };
     AndroidNotificationBridge?: {
       onNotificationBridgeReady?: (bridgeSessionId: string) => void;
       onNotificationTargetReceived?: (dispatchId: string, bridgeSessionId: string) => void;
@@ -621,7 +628,10 @@ export default function App() {
     return currentSession.accessToken;
   };
 
-  const performProtectedRequest = async (requestFactory: (authToken: string) => Promise<Response>) => {
+  const performProtectedRequest = async (
+    requestFactory: (authToken: string) => Promise<Response>,
+    options: { propagateRequestErrors?: boolean } = {},
+  ) => {
     const correlationId = createParentSessionCorrelationId();
     const initialSnapshot = getCurrentSessionSnapshot();
     let authToken = await ensureValidAccessToken(correlationId);
@@ -638,12 +648,13 @@ export default function App() {
         onSessionExpired: (message, code) => handleLogout(message, "definitive", code),
         log: logParentSession,
       });
-    } catch {
+    } catch (error) {
       logParentSession("protected-request-failed", {
         reason: "network",
         sessionGeneration: initialSnapshot.sessionGeneration,
         credentialVersion: initialSnapshot.credentialVersion,
       });
+      if (options.propagateRequestErrors) throw error;
       return null;
     }
   };
@@ -753,6 +764,9 @@ export default function App() {
   const acknowledgedNotificationDispatchIdRef = useRef<string | null>(null);
   const lastRegisteredPushAssociationRef = useRef<string | null>(null);
   const registeringPushAssociationRef = useRef<string | null>(null);
+  const blockedPushRegistrationAttemptRef = useRef<string | null>(null);
+  const pushRegistrationRetryRequestedRef = useRef(false);
+  const lastPushRegistrationRetryEventAtRef = useRef(0);
   const pushSessionGenerationRef = useRef(0);
   const activePushAssociationRef = useRef<string | null>(null);
   const pushAssociationQueueRef = useRef<PushAssociationQueue | null>(null);
@@ -760,6 +774,57 @@ export default function App() {
     pushAssociationQueueRef.current = new PushAssociationQueue();
   }
   const deviceIdRef = useRef<string | null>(null);
+  const [pushRegistrationRetrySignal, setPushRegistrationRetrySignal] = useState(0);
+
+  const logPushRegistration = useCallback((level: "info" | "warn", message: string) => {
+    if (level === "warn") {
+      console.warn(message);
+    } else {
+      console.info(message);
+    }
+    window.AndroidBridge?.log?.(message);
+  }, []);
+
+  const recoverOrRequestNativeFcmToken = useCallback((knownToken: string | null): boolean => {
+    const storedToken = window.localStorage.getItem("fcm_token");
+    const nativeToken = window.AndroidBridge?.getPendingFcmToken?.();
+    const tokenAvailable = Boolean(knownToken || storedToken || nativeToken);
+    const tokenToAdopt = nativeToken || storedToken;
+
+    if (tokenToAdopt && tokenToAdopt !== knownToken) {
+      window.setFcmToken?.(tokenToAdopt);
+    }
+
+    if (!tokenAvailable) {
+      logPushRegistration("info", "[FCM] No token available; requesting native recovery.");
+      window.AndroidBridge?.requestFcmTokenIfMissing?.();
+    }
+
+    return tokenAvailable;
+  }, [logPushRegistration]);
+
+  useEffect(() => {
+    const requestRetry = () => {
+      const now = Date.now();
+      if (now - lastPushRegistrationRetryEventAtRef.current < 1000) return;
+      lastPushRegistrationRetryEventAtRef.current = now;
+
+      recoverOrRequestNativeFcmToken(window.localStorage.getItem("fcm_token"));
+      if (registeringPushAssociationRef.current !== null) {
+        pushRegistrationRetryRequestedRef.current = true;
+        return;
+      }
+
+      setPushRegistrationRetrySignal((current) => current + 1);
+    };
+
+    window.addEventListener("online", requestRetry);
+    window.addEventListener("ecoletrack:app-resume", requestRetry);
+    return () => {
+      window.removeEventListener("online", requestRetry);
+      window.removeEventListener("ecoletrack:app-resume", requestRetry);
+    };
+  }, [recoverOrRequestNativeFcmToken]);
 
   const getDeviceId = () => {
     if (deviceIdRef.current) {
@@ -793,7 +858,18 @@ export default function App() {
     runtime.setFcmToken = (token: string) => {
       setFcmToken(token);
       window.localStorage.setItem("fcm_token", token);
+      window.AndroidBridge?.acknowledgeFcmTokenReceived?.(token);
     };
+
+    const pendingFcmToken = window.AndroidBridge?.getPendingFcmToken?.();
+    if (pendingFcmToken) {
+      const storedFcmToken = window.localStorage.getItem("fcm_token");
+      if (storedFcmToken === pendingFcmToken) {
+        window.AndroidBridge?.acknowledgeFcmTokenReceived?.(pendingFcmToken);
+      } else {
+        runtime.setFcmToken(pendingFcmToken);
+      }
+    }
 
     runtime.setNotificationTarget = (target: string, dispatchId: string | null) => {
       latestNotificationDispatchIdRef.current = dispatchId;
@@ -895,6 +971,10 @@ export default function App() {
     const pushToken = fcmToken;
     if (!token || !parent?.id || !pushToken) {
       activePushAssociationRef.current = null;
+      logPushRegistration(
+        "info",
+        `[FCM] Association waiting (parentSessionReady=${Boolean(token && parent?.id)}, tokenAvailable=${Boolean(pushToken)}).`,
+      );
       return;
     }
 
@@ -907,11 +987,21 @@ export default function App() {
 
     activePushAssociationRef.current = associationKey;
     const sessionGeneration = pushSessionGenerationRef.current;
-    const registrationAttemptKey = JSON.stringify([sessionGeneration, associationKey]);
+    const credentialVersion = getCurrentSessionSnapshot().credentialVersion;
+    const registrationAttemptKey = JSON.stringify([
+      sessionGeneration,
+      credentialVersion,
+      associationKey,
+    ]);
+    if (blockedPushRegistrationAttemptRef.current === registrationAttemptKey) {
+      return;
+    }
+    const registeringAssociationKey =
+      registeringPushAssociationRef.current === registrationAttemptKey ? associationKey : null;
     if (!shouldRegisterPushAssociation(
       associationKey,
       lastRegisteredPushAssociationRef.current,
-      registeringPushAssociationRef.current,
+      registeringAssociationKey,
     )) {
       return;
     }
@@ -924,22 +1014,25 @@ export default function App() {
         return false;
       }
 
-      return tryRegisterPushTokenWithBackoff(pushToken, () =>
-        activePushAssociationRef.current === associationKey
-        && pushSessionGenerationRef.current === sessionGeneration
+      if (lastRegisteredPushAssociationRef.current === associationKey) return false;
+
+      const success = await tryRegisterPushTokenWithBackoff(
+        pushToken,
+        registrationAttemptKey,
+        () => activePushAssociationRef.current === associationKey
+          && pushSessionGenerationRef.current === sessionGeneration,
       );
+      const confirmedKey = getConfirmedPushAssociationKey(
+        success,
+        associationKey,
+        activePushAssociationRef.current,
+        pushSessionGenerationRef.current === sessionGeneration,
+      );
+      if (confirmedKey) lastRegisteredPushAssociationRef.current = confirmedKey;
+      return success;
     });
 
     void registration
-      .then((success) => {
-        const confirmedKey = getConfirmedPushAssociationKey(
-          success,
-          associationKey,
-          activePushAssociationRef.current,
-          pushSessionGenerationRef.current === sessionGeneration,
-        );
-        if (confirmedKey) lastRegisteredPushAssociationRef.current = confirmedKey;
-      })
       .catch(() => {
         console.error("[FCM] Push-token registration failed.");
       })
@@ -947,8 +1040,15 @@ export default function App() {
         if (registeringPushAssociationRef.current === registrationAttemptKey) {
           registeringPushAssociationRef.current = null;
         }
+        if (
+          pushRegistrationRetryRequestedRef.current
+          && registeringPushAssociationRef.current === null
+        ) {
+          pushRegistrationRetryRequestedRef.current = false;
+          setPushRegistrationRetrySignal((current) => current + 1);
+        }
       });
-  }, [token, fcmToken, parent?.id]);
+  }, [token, fcmToken, parent?.id, pushRegistrationRetrySignal, logPushRegistration]);
 
   const isMobileProductionMode = (() => {
     const envFlag = (import.meta as any)?.env?.VITE_MOBILE_PRODUCTION === "true";
@@ -966,29 +1066,37 @@ export default function App() {
   // Notifications loaded from Express
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
 
-  const registerPushToken = async (pushToken: string): Promise<{ success: boolean; status?: number; retryable: boolean }> => {
+  const registerPushToken = async (
+    pushToken: string,
+    attempt: number,
+  ): Promise<{ success: boolean; status?: number; retryable: boolean }> => {
     const deviceId = getDeviceId();
     if (!deviceId) {
       console.error("[FCM] Impossible de générer un deviceId");
       return { success: false, retryable: false };
     }
 
+    const appVersion = window.AndroidBridge?.getAppVersion?.()?.trim() || "unknown";
+
     try {
       const response = await withPushAssociationTimeout((signal) =>
-        performProtectedRequest((authToken) => fetch(withApiBase("/api/mobile/parent/devices/register-push-token"), {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${authToken}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({ pushToken, platform: "android", appVersion: "1.0.0", deviceId }),
-          signal
-        }))
+        performProtectedRequest((authToken) => {
+          logPushRegistration("info", `[FCM] Sending push-token registration request (attempt=${attempt}).`);
+          return fetch(withApiBase("/api/mobile/parent/devices/register-push-token"), {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${authToken}`,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ pushToken, platform: "android", appVersion, deviceId }),
+            signal
+          });
+        }, { propagateRequestErrors: true })
       );
 
       if (!response) {
-        // performProtectedRequest returned null (likely auth refresh failed)
-        return { success: false, retryable: false };
+        logPushRegistration("warn", "[FCM] Parent session is not ready for push-token registration.");
+        return { success: false, retryable: true };
       }
 
       if (response.status === 403) {
@@ -997,6 +1105,7 @@ export default function App() {
 
       // Retryable server errors
       if ([500, 502, 503, 504].includes(response.status)) {
+        logPushRegistration("warn", `[FCM] Temporary HTTP error during push-token registration (status=${response.status}).`);
         return { success: false, status: response.status, retryable: true };
       }
 
@@ -1006,29 +1115,48 @@ export default function App() {
       }
 
       // Otherwise success if ok
+      if (response.ok) {
+        logPushRegistration("info", "[FCM] Push-token registration confirmed.");
+      }
       return { success: response.ok, status: response.status, retryable: false };
     } catch {
-      console.error("[FCM] Push-token registration request failed.");
+      logPushRegistration("warn", "[FCM] Push-token registration request failed temporarily.");
       // network / fetch exception -> retryable
       return { success: false, retryable: true };
     }
   };
 
-  const tryRegisterPushTokenWithBackoff = async (pushToken: string, shouldContinue: () => boolean = () => true) => {
+  const tryRegisterPushTokenWithBackoff = async (
+    pushToken: string,
+    registrationAttemptKey: string,
+    shouldContinue: () => boolean = () => true,
+  ) => {
     const MAX_ATTEMPTS = 5;
     const BASE_DELAY_MS = 1000;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       if (!shouldContinue()) return false;
       try {
-        const result = await registerPushToken(pushToken);
+        const result = await registerPushToken(pushToken, attempt);
         if (result.success) return true;
-        if (!result.retryable) return false;
-      } catch (e) {
-        // defensive: treat unexpected throws as retryable
+        if (!result.retryable) {
+          blockedPushRegistrationAttemptRef.current = registrationAttemptKey;
+          logPushRegistration(
+            "warn",
+            `[FCM] Push-token registration stopped without retry (status=${result.status ?? "unknown"}).`,
+          );
+          return false;
+        }
+      } catch (error) {
+        const errorName = error instanceof Error ? error.name : "UnknownError";
+        logPushRegistration("warn", `[FCM] Unexpected push-token registration failure (${errorName}).`);
       }
 
       if (attempt === MAX_ATTEMPTS) break;
       const delay = BASE_DELAY_MS * Math.pow(2, attempt - 1);
+      logPushRegistration(
+        "info",
+        `[FCM] Retrying push-token registration (attempt=${attempt + 1}/${MAX_ATTEMPTS}, delayMs=${delay}).`,
+      );
       await new Promise(resolve => setTimeout(resolve, delay));
     }
     return false;
@@ -1159,6 +1287,11 @@ export default function App() {
     setAccessTokenReadResult(accessResult);
     localStorage.setItem("ecoletrack_parent", JSON.stringify(newParent));
     logoutHandledRef.current = false;
+    const pushTokenAvailable = recoverOrRequestNativeFcmToken(fcmToken);
+    logPushRegistration(
+      "info",
+      `[FCM] Parent login completed (sessionReady=true, tokenAvailable=${pushTokenAvailable}).`,
+    );
     setToken(newToken);
     setParent(newParent);
     if (!notificationTarget || notificationTargetSignal === 0) {

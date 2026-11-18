@@ -43,9 +43,6 @@ public class FcmTokenHelper {
         String script =
                 "if (window.setFcmToken) {" +
                 " window.setFcmToken(" + escapedToken + ");" +
-                " console.log('[FCM] window.setFcmToken called');" +
-                "} else {" +
-                " console.log('[FCM] window.setFcmToken not ready');" +
                 "}";
 
         android.util.Log.i("EcoleTrackAndroid", "[FCM] Dispatching registration token to the app");

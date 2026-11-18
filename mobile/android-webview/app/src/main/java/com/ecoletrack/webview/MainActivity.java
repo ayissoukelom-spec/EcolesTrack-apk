@@ -79,6 +79,7 @@ public class MainActivity extends AppCompatActivity {
     private static final int REQUEST_POST_NOTIFICATIONS = 1001;
     private static final int FILE_CHOOSER_REQUEST_CODE = 1002;
     private static final int REQUEST_CAMERA_PERMISSION = 1003;
+    private static final int MAX_FCM_TOKEN_REQUEST_ATTEMPTS = 5;
     private static final long TEMPORARY_FILE_RETENTION_MILLIS = 7L * 24 * 60 * 60 * 1000;
     private String apiServerUrl;
     private static final String APP_ASSET_BASE_URL = "https://appassets.androidplatform.net/";
@@ -141,7 +142,11 @@ public class MainActivity extends AppCompatActivity {
     private WebView webView;
     private boolean initialAppPageLoaded;
     private boolean fcmTokenReceiverRegistered;
-    private String pendingFcmToken;
+    private volatile String pendingFcmToken;
+    private int fcmTokenRequestAttempts;
+    private boolean fcmTokenRequestInFlight;
+    private boolean fcmTokenRecoveryRequestedAfterBatch;
+    private Runnable fcmTokenRetryRunnable;
     private String pendingTarget;
     private String pendingNotificationId;
     private String pendingAttachmentCount;
@@ -553,12 +558,89 @@ public class MainActivity extends AppCompatActivity {
 
     private void dispatchFcmTokenToWebView(String token) {
         pendingFcmToken = token;
-        if (webView == null) {
+        if (webView == null || !webViewPageReady) {
             return;
         }
 
         Log.i(TAG, "[FCM] Dispatching registration token to WebView");
         FcmTokenHelper.dispatchTokenToWebView(webView, token);
+    }
+
+    private void requestFcmToken() {
+        if (fcmTokenRequestInFlight
+                || fcmTokenRetryRunnable != null
+                || fcmTokenRequestAttempts >= MAX_FCM_TOKEN_REQUEST_ATTEMPTS) {
+            return;
+        }
+
+        fcmTokenRequestAttempts++;
+        final int attempt = fcmTokenRequestAttempts;
+        fcmTokenRequestInFlight = true;
+        Log.i(TAG, "[FCM] Requesting Firebase token; attempt="
+                + attempt + "/" + MAX_FCM_TOKEN_REQUEST_ATTEMPTS);
+        FirebaseMessaging.getInstance().getToken().addOnCompleteListener(this, task -> {
+            fcmTokenRequestInFlight = false;
+            String token = task.isSuccessful() ? task.getResult() : null;
+            if (token == null || token.trim().isEmpty()) {
+                Exception error = task.getException();
+                Log.w(TAG, "[FCM] Token retrieval failed; attempt "
+                        + attempt + "/" + MAX_FCM_TOKEN_REQUEST_ATTEMPTS
+                        + " error=" + (error == null ? "UnknownError" : error.getClass().getSimpleName()));
+                if (attempt < MAX_FCM_TOKEN_REQUEST_ATTEMPTS) {
+                    scheduleFcmTokenRetry(attempt);
+                } else if (fcmTokenRecoveryRequestedAfterBatch) {
+                    fcmTokenRecoveryRequestedAfterBatch = false;
+                    fcmTokenRequestAttempts = 0;
+                    Log.i(TAG, "[FCM] Starting one queued token recovery batch");
+                    requestFcmToken();
+                }
+                return;
+            }
+
+            fcmTokenRequestAttempts = 0;
+            fcmTokenRecoveryRequestedAfterBatch = false;
+            Log.i(TAG, "[FCM] Firebase registration token fetched");
+            FcmTokenHelper.savePendingToken(MainActivity.this, token);
+            dispatchFcmTokenToWebView(token);
+        });
+    }
+
+    private void requestFcmTokenIfMissing(boolean retryAfterCurrentBatch) {
+        String savedToken = FcmTokenHelper.getSavedToken(this);
+        if ((pendingFcmToken != null && !pendingFcmToken.isEmpty())
+                || (savedToken != null && !savedToken.isEmpty())) {
+            return;
+        }
+
+        if (fcmTokenRequestInFlight || fcmTokenRetryRunnable != null) {
+            if (retryAfterCurrentBatch && !fcmTokenRecoveryRequestedAfterBatch) {
+                fcmTokenRecoveryRequestedAfterBatch = true;
+                Log.i(TAG, "[FCM] Native token recovery queued after current attempts");
+            } else {
+                Log.i(TAG, "[FCM] Native token recovery already in progress");
+            }
+            return;
+        }
+
+        if (fcmTokenRequestAttempts >= MAX_FCM_TOKEN_REQUEST_ATTEMPTS) {
+            fcmTokenRequestAttempts = 0;
+        }
+        Log.i(TAG, "[FCM] Native token recovery requested");
+        requestFcmToken();
+    }
+
+    private void scheduleFcmTokenRetry(int failedAttempt) {
+        if (webView == null || fcmTokenRetryRunnable != null) {
+            return;
+        }
+
+        long delayMs = Math.min(30_000L, 1_000L << Math.min(failedAttempt - 1, 5));
+        fcmTokenRetryRunnable = () -> {
+            fcmTokenRetryRunnable = null;
+            requestFcmToken();
+        };
+        Log.w(TAG, "[FCM] Scheduling bounded token retrieval retry in " + delayMs + "ms");
+        webView.postDelayed(fcmTokenRetryRunnable, delayMs);
     }
 
     private void dispatchNotificationContextToWebView(
@@ -896,6 +978,55 @@ public class MainActivity extends AppCompatActivity {
             public void log(String message) {
                 Log.i(TAG, message);
             }
+
+            @JavascriptInterface
+            public String getPendingFcmToken() {
+                String token = pendingFcmToken;
+                if (token == null || token.isEmpty()) {
+                    token = FcmTokenHelper.getSavedToken(MainActivity.this);
+                }
+                return token;
+            }
+
+            @JavascriptInterface
+            public void requestFcmTokenIfMissing() {
+                MainActivity.this.runOnUiThread(() -> {
+                    if (!MainActivity.this.isFinishing() && !MainActivity.this.isDestroyed()) {
+                        MainActivity.this.requestFcmTokenIfMissing(true);
+                    }
+                });
+            }
+
+            @JavascriptInterface
+            public void acknowledgeFcmTokenReceived(String token) {
+                String expectedToken = pendingFcmToken;
+                if (expectedToken == null || expectedToken.isEmpty()) {
+                    expectedToken = FcmTokenHelper.getSavedToken(MainActivity.this);
+                }
+                if (token != null && token.equals(expectedToken)) {
+                    if (token.equals(pendingFcmToken)) {
+                        pendingFcmToken = null;
+                    }
+                    Log.i(TAG, "[FCM] Token receipt acknowledged by React");
+                }
+            }
+
+            @JavascriptInterface
+            public String getAppVersion() {
+                try {
+                    String versionName = MainActivity.this.getPackageManager()
+                            .getPackageInfo(MainActivity.this.getPackageName(), 0)
+                            .versionName;
+                    if (versionName == null || versionName.trim().isEmpty()) {
+                        Log.w(TAG, "Android package versionName is unavailable");
+                        return null;
+                    }
+                    return versionName;
+                } catch (PackageManager.NameNotFoundException e) {
+                    Log.e(TAG, "Unable to read Android package versionName", e);
+                    return null;
+                }
+            }
         }, "AndroidBridge");
 
         webView.addJavascriptInterface(new AndroidSessionBridge(), "AndroidSessionBridge");
@@ -1024,7 +1155,6 @@ public class MainActivity extends AppCompatActivity {
 
                 if (pendingFcmToken != null) {
                     dispatchFcmTokenToWebView(pendingFcmToken);
-                    pendingFcmToken = null;
                 }
 
                 dispatchPendingNotificationContext();
@@ -1085,18 +1215,7 @@ public class MainActivity extends AppCompatActivity {
         Log.i(TAG, "API base URL configured: " + apiServerUrl);
         webView.setWebChromeClient(new EcoleTrackWebChromeClient());
 
-        FirebaseMessaging.getInstance().getToken()
-            .addOnCompleteListener(this, task -> {
-                if (!task.isSuccessful()) {
-                    Log.w(TAG, "Impossible de récupérer le token Firebase", task.getException());
-                    return;
-                }
-
-                String token = task.getResult();
-                Log.i(TAG, "[FCM] Firebase registration token fetched");
-                FcmTokenHelper.savePendingToken(MainActivity.this, token);
-                dispatchFcmTokenToWebView(token);
-            });
+        requestFcmToken();
 
         webView.setBackgroundColor(Color.parseColor("#0f172a"));
         boolean restoredWebView = restoreWebViewState(savedInstanceState);
@@ -1839,6 +1958,9 @@ public class MainActivity extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
         activityResumed = true;
+        if (pendingFcmToken == null) {
+            requestFcmTokenIfMissing(false);
+        }
         if (webView != null) {
             webView.onResume();
             dispatchedDataInvalidationIds.clear();
@@ -1886,6 +2008,10 @@ public class MainActivity extends AppCompatActivity {
             fcmTokenReceiverRegistered = false;
         }
         if (webView != null) {
+            if (fcmTokenRetryRunnable != null) {
+                webView.removeCallbacks(fcmTokenRetryRunnable);
+                fcmTokenRetryRunnable = null;
+            }
             webView.removeCallbacks(initialPageLoadRunnable);
             resetFileChooserCallback();
             webView.stopLoading();
